@@ -1,0 +1,128 @@
+Copyright © 2026 Oleg Turzhanskii.
+
+# Rights and third-party terms
+
+Wordwinnow's own source code, tests, and documentation are licensed under the
+PolyForm Strict License 1.0.0, in `LICENSE`.
+
+It is a source-available license, not an open-source one: it permits use for
+any noncommercial purpose, personal study, and use by the noncommercial
+organizations it names, educational institutions among them, and it does not
+permit distributing the software, making changes or new works based on it, or
+commercial use.
+
+Storing this repository on GitHub grants GitHub the rights its terms require
+and, for a public repository, lets other GitHub users view and fork it within
+the service under GitHub's own terms; what they may do with a fork beyond that
+is governed by the license above.
+
+## What the license does not cover
+
+Wordwinnow depends on packages, data, and services it does not own; for each,
+this says what the dependency is, whose content it is, which terms apply, and
+what credit Wordwinnow gives.
+
+**Dependencies.** Every third-party package the project installs, and every
+container image the Compose stack pulls, keeps its own license, and none of
+them is changed by this notice.
+
+**Reference word lists.** The CEFR-J Vocabulary Profile and the Octanove
+Vocabulary Profile in `data/reference/` ship in this repository unchanged,
+keep their authors' terms, and are credited as those terms ask, all stated in
+`data/reference/ATTRIBUTION.md`; the level model learns its labels from them
+under those terms, and from no other labeled data.
+
+**Sample story.** Arthur Conan Doyle's "A Scandal in Bohemia" in
+`data/corpus/` is in the public domain, and the Standard Ebooks edition it was
+taken from dedicates its editors' work to the public domain under CC0 1.0, as
+`data/corpus/README.md` records with its source.
+
+**WordNet.** Princeton University's WordNet 3.0 is read at run time from the
+copy `make nltk-data` downloads from a fixed commit of the NLTK project's data
+repository, and it does not ship in this repository; the senses, glosses, and
+relations a report shows are WordNet's, under the WordNet 3.0 license, which a
+report names when WordNet serves as its dictionary.
+
+The tests quote a few WordNet glosses word for word, to check the adapters
+that read them; the WordNet license permits copying on condition that its
+notice accompanies the copies, and that notice closes this file.
+
+**Word frequencies.** The frequencies come from the `wordfreq` package, which
+the project installs rather than ships, and whose data is licensed CC BY-SA
+4.0.
+
+**The Free Dictionary API.** When the dictionary is chosen, Wordwinnow calls
+the Free Dictionary API, <https://dictionaryapi.dev>, a free service built and
+run by its developer, `meetDeveloper`
+(<https://github.com/meetDeveloper/freeDictionaryAPI>).
+
+Three different things apply to it, and only the second is an obligation:
+
+- The service itself: it publishes no terms of use and asks for no
+  attribution, and the GPL-3.0 license of its repository covers the service's
+  own code, which Wordwinnow neither contains nor distributes, so nothing
+  obliges Wordwinnow to credit the service.
+- The content it returns: the definitions and examples are Wiktionary's, under
+  the license the API reports with each entry, CC BY-SA 3.0, which requires
+  attribution wherever the content is reproduced, so a report names that
+  license under the words and gives the Wiktionary page of each definition
+  shown.
+- Courtesy: this credit to the service and its developer, and the one in
+  `docs/product.md`, is given because Wordwinnow relies on a free service, not
+  because any terms require it.
+
+An analysis stores what the API returned alongside its result, with that
+license and those pages, and none of it ships in this repository; the Free
+Dictionary definitions in the tests were written for the tests rather than
+copied.
+
+**New York Times content.** Headlines, abstracts, lead paragraphs, links, and
+feed items the `nyt-*` sources fetch are third-party content under The New
+York Times API Terms of Service and the NYTimes.com Terms of Service;
+Wordwinnow does not relicense them, shows them with the attribution the terms
+require, lets nobody read an analysis of them after one day and deletes it
+before any later read, and never trains, fits, or evaluates anything on them.
+
+**The engineering conventions standard.** Wordwinnow follows the engineering
+conventions standard, a separate project by the same copyright holder, and
+does not depend on it at run time; `tools/check_conventions.py`,
+`tools/check_commit_message.py`, and `.taplo.toml` are unchanged copies of its
+enforcement files, and the Ruff tables `pyproject.toml` marks as copied come
+from it, all under that project's Apache License 2.0, which the two checkers
+name in their own headers and which does not extend to the rest of Wordwinnow.
+
+This is a statement of what has and has not been granted, not legal advice.
+
+## WordNet's notice
+
+WordNet Release 3.0
+
+This software and database is being provided to you, the LICENSEE, by
+Princeton University under the following license.  By obtaining, using
+and/or copying this software and database, you agree that you have
+read, understood, and will comply with these terms and conditions.:
+
+Permission to use, copy, modify and distribute this software and
+database and its documentation for any purpose and without fee or
+royalty is hereby granted, provided that you agree to comply with
+the following copyright notice and statements, including the disclaimer,
+and that the same appear on ALL copies of the software, database and
+documentation, including modifications that you make for internal
+use or for distribution.
+
+WordNet 3.0 Copyright 2006 by Princeton University.  All rights reserved.
+
+THIS SOFTWARE AND DATABASE IS PROVIDED "AS IS" AND PRINCETON
+UNIVERSITY MAKES NO REPRESENTATIONS OR WARRANTIES, EXPRESS OR
+IMPLIED.  BY WAY OF EXAMPLE, BUT NOT LIMITATION, PRINCETON
+UNIVERSITY MAKES NO REPRESENTATIONS OR WARRANTIES OF MERCHANT-
+ABILITY OR FITNESS FOR ANY PARTICULAR PURPOSE OR THAT THE USE
+OF THE LICENSED SOFTWARE, DATABASE OR DOCUMENTATION WILL NOT
+INFRINGE ANY THIRD PARTY PATENTS, COPYRIGHTS, TRADEMARKS OR
+OTHER RIGHTS.
+
+The name of Princeton University or Princeton may not be used in
+advertising or publicity pertaining to distribution of the software
+and/or database.  Title to copyright in this software, database and
+any associated documentation shall at all times remain with
+Princeton University and LICENSEE agrees to preserve same.

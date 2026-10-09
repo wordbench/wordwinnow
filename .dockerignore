@@ -1,0 +1,75 @@
+# NOTE:
+# The build context.
+#
+# Everything is left out, and only what the Dockerfile copies is let back in: the manifest and the lock, the three
+# files the build backend reads for the package metadata, the package, the migrations, and the reference lists the
+# image trains its level model from.
+#
+# A file nobody listed therefore never reaches the build, which is the safe failure: a missing path breaks the build
+# at once, where a forgotten exclusion would carry a stray file into the image unnoticed.
+*
+
+!pyproject.toml
+
+!uv.lock
+
+!README.md
+
+!LICENSE
+
+!NOTICE
+
+!wordwinnow
+
+!alembic.ini
+
+!alembic
+
+!data/reference
+
+
+# NOTE:
+# From here on, the sections of `.gitignore`, in its order, applied inside the directories let back in above.
+#
+# Docker matches a pattern from the root of the context, where Git matches a bare name at any depth, so each pattern
+# Git applies everywhere is written here with a leading `**/`.
+#
+# The `.gitignore` entries that live only at the root, `.venv/`, `data/local/`, the model files, `dist/`, and
+# `.direnv/`, are already outside what the build receives and are not repeated.
+
+
+# NOTE:
+# Python bytecode.
+**/__pycache__
+
+**/*.pyc
+
+
+# NOTE:
+# Tool caches.
+**/.pytest_cache
+
+**/.ruff_cache
+
+**/.ty_cache
+
+**/.rumdl_cache
+
+**/.ipynb_checkpoints
+
+
+# NOTE:
+# Packaging artifacts.
+**/*.egg-info
+
+
+# NOTE:
+# Local secrets.
+#
+# `wordwinnow/` and `alembic/` are copied whole, so an env file left inside either would otherwise land in the image.
+**/*.env
+
+
+# NOTE:
+# macOS.
+**/.DS_Store

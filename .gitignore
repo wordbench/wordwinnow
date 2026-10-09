@@ -1,0 +1,74 @@
+# NOTE:
+# Python environment and bytecode.
+.venv/
+
+__pycache__/
+
+*.pyc
+
+
+# NOTE:
+# Tool caches.
+#
+# rumdl writes a self-ignoring .gitignore into its own cache, so the entry here is belt and braces rather than the
+# thing doing the work.
+.pytest_cache/
+
+.ruff_cache/
+
+.ty_cache/
+
+.rumdl_cache/
+
+.ipynb_checkpoints/
+
+
+# NOTE:
+# Generated data.
+#
+# Each entry is rebuilt by a command, so a committed copy would only go stale: `data/local/` holds the SQLite store
+# the local mode creates, and `models/` the level model `make model` trains, with its metadata beside it.
+#
+# The benchmark results and figures are deliberately not listed: they are the committed evidence `performance.md`
+# cites.
+data/local/
+
+models/*.joblib
+
+models/*.metadata.json
+
+
+# NOTE:
+# Packaging artifacts.
+#
+# `make build` writes the wheel and the source distribution into `dist/`.
+*.egg-info/
+
+dist/
+
+
+# NOTE:
+# Local secrets.
+#
+# Nothing in the project requires a .env file: every setting has a documented default, and operating.md lists them.
+#
+# The New York Times key belongs in `~/.config/wordwinnow/secrets.env`, outside the repository, and a `.env` beside
+# `.env.example` is the supported alternative; this rule keeps the alternative, and any other env file, out of Git.
+#
+# `*.env` rather than `.env`, and it covers `.env` itself: the pattern matches a leading dot, so a second entry would
+# be shadowed by this one rather than adding anything.
+#
+# `.env.example` and `.envrc` are deliberately not matched: both are committed, and neither holds a secret.
+*.env
+
+
+# NOTE:
+# direnv's own scratch directory, created only by its `layout` helpers.
+#
+# This project's `.envrc` uses none of them, so this entry is belt and braces rather than the thing doing the work.
+.direnv/
+
+
+# NOTE:
+# macOS.
+.DS_Store
