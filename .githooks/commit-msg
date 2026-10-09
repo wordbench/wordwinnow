@@ -1,0 +1,12 @@
+#!/bin/sh
+#
+# NOTE:
+# Checks the commit message against the Conventional Commits form the project's standard narrows (STANDARD.md §25).
+#
+# Git hands this hook the path of the message file; the vendored checker reads it and exits non-zero on a problem.
+#
+# Opt in once per clone with `make hooks`.
+
+set -eu
+
+exec uv run --frozen python3 tools/check_commit_message.py "$1"

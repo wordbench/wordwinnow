@@ -1,0 +1,13 @@
+#!/bin/sh
+#
+# NOTE:
+# Runs the secret scan over the history and what is about to be committed, every finding redacted, before a secret can
+# enter the history.
+#
+# The scan is `make secrets`, the same target `make verify` runs; the hook restates nothing.
+#
+# Opt in once per clone with `make hooks`.
+
+set -eu
+
+exec make secrets

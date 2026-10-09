@@ -1,0 +1,26 @@
+# NOTE:
+# Portable Taplo configuration.
+#
+# A project copies this to `.taplo.toml` at its root, the way it copies `ruff.toml`.
+#
+# Taplo finds it by searching upward from the working directory rather than from the file being formatted, so an
+# editor that formats TOML must run the formatter from the project root for this to apply.
+
+# WARN:
+# `array_auto_collapse` is the setting that holds the vertical form in place.
+#
+# Taplo's default rewrites a multi-line array back onto one line, so an exploded list does not survive a single save
+# without this, and every hand-written vertical array is silently undone.
+#
+# The pair matters: collapse is off so that the written form is kept, and expansion stays on so that an array which
+# outgrows the column width is broken up rather than left long.
+
+[formatting]
+align_entries = false
+allowed_blank_lines = 1
+array_auto_collapse = false
+array_auto_expand = true
+array_trailing_comma = true
+indent_string = "  "
+reorder_arrays = false
+reorder_keys = false

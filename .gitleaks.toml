@@ -1,0 +1,21 @@
+# NOTE:
+# gitleaks' default rules, extended by one rule for the one real credential this project handles.
+#
+# A New York Times key has no prefix of its own, so the default rules can find it only by the words around it and only
+# when it looks random enough; this rule anchors on the two places the key appears, the variable that names it and the
+# query parameter that carries it, and finds any value there of sixteen characters or more.
+#
+# A placeholder such as `<the key>`, an interpolation such as `${...}`, and the short fakes the tests use do not
+# match.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "wordwinnow-nyt-api-key"
+description = "A New York Times API key, assigned to its variable or carried in a request's query"
+regex = '''(?i)(?:wordwinnow_nyt_api_key|[?&]api-key)\s*[=:]\s*["']?([^\s"'<>$&#]{16,})'''
+secretGroup = 1
+keywords = [
+  "wordwinnow_nyt_api_key",
+  "api-key",
+]

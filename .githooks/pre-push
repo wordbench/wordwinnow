@@ -1,0 +1,12 @@
+#!/bin/sh
+#
+# NOTE:
+# Runs the project's one verification gate before anything leaves the machine.
+#
+# The gate is `make verify`, the same command a person and the pipeline run; the hook restates nothing.
+#
+# Opt in once per clone with `make hooks`.
+
+set -eu
+
+exec make verify
