@@ -1,0 +1,258 @@
+# NOTE:
+# Ordering principle: identity, then what the project needs, then the gates in the order `make verify` runs them, then
+# how the project is built.
+#
+# A reader following the Makefile finds each tool's configuration in the order the Makefile reaches it.
+
+[project]
+name = "wordwinnow"
+version = "1.0.0"
+description = "Winnow a text into the vocabulary worth a learner's attention: a distributed analysis prototype."
+readme = "README.md"
+# NOTE:
+# PolyForm Strict has no identifier on the SPDX License List, which names only the PolyForm Noncommercial and Small
+# Business licenses, so it is named as a license reference.
+license = "LicenseRef-PolyForm-Strict-1.0.0"
+license-files = [
+  "LICENSE",
+  "NOTICE",
+]
+authors = [
+  { name = "Oleg Turzhanskii" },
+]
+# NOTE:
+# 3.14 is the floor this project's own constructs need: unquoted forward references in annotations, which the code
+# needs wherever a method's signature names its own class, as `CefrLevel.steps_above` does.
+#
+# Every dependency below installs and imports on 3.14.
+requires-python = ">=3.14"
+# NOTE:
+# Runtime dependencies in pipeline order: the interface, the boundary models, the linguistic stack, the providers, the
+# stores, the messaging, and the observability stack.
+#
+# Nothing here is a gate tool; those live in the development group.
+#
+# Each entry is a floor, the version the gate is verified against, and not a pin: `uv.lock` pins every package
+# exactly, transitive ones included, with their hashes, and the gate refuses a lock that no longer describes this
+# list.
+#
+# The HTTP client is `httpx2`, Pydantic's continuation of HTTPX 0.28.1 under a name of its own and with the same API,
+# because the `httpx` name now leads to a redesigned 1.0.
+#
+# `httpx` itself stays in the lock only because JupyterLab, in the development group, requires it, and a fitness test
+# proves that no module of the package, its migrations, or its tests imports it.
+dependencies = [
+  "typer>=0.27.2",
+  "rich>=15.0.0",
+  "fastapi>=0.142.2",
+  "uvicorn>=0.54.0",
+  "pydantic>=2.13.5",
+  "pydantic-settings>=2.15.0",
+  "httpx2>=2.13.1",
+  "nltk>=3.10.3",
+  "wordfreq>=3.1.1",
+  "scikit-learn>=1.9.1",
+  "scipy>=1.18.1",
+  "numpy>=2.5.3",
+  "joblib>=1.6.0",
+  "sqlalchemy[asyncio]>=2.1.2",
+  "aiosqlite>=0.22.1",
+  "asyncpg>=0.31.0",
+  "alembic>=1.20.0",
+  "redis>=8.1.0",
+  "aiokafka>=0.14.0",
+  "clickhouse-connect>=1.9.0",
+  "prometheus-client>=0.26.0",
+  "opentelemetry-api>=1.45.0",
+  "opentelemetry-sdk>=1.45.0",
+  "opentelemetry-exporter-otlp-proto-http>=1.45.0",
+  "opentelemetry-instrumentation-fastapi>=0.66b0",
+  "opentelemetry-instrumentation-httpx>=0.66b0",
+]
+
+[project.scripts]
+wordwinnow = "wordwinnow.services.cli.main:main"
+
+# NOTE:
+# Every entry is a gate or an experiment tool, and nothing here ships to a user.
+#
+# The floors are the versions the gate is verified against, listed in the order `make verify` reaches them, then the
+# experiment tools.
+[dependency-groups]
+dev = [
+  "ruff>=0.16.10",
+  "ty>=0.0.84",
+  "pytest>=9.1.1",
+  "pytest-asyncio>=1.4.0",
+  "matplotlib>=3.11.2",
+  "jupyter>=1.1.1",
+  "pandas>=3.0.6",
+]
+
+# NOTE:
+# Everything from here to the ty table is Ruff's configuration: the tables of
+# `engineering-conventions/vendor/ruff/pyproject-fragment.toml` (v1.1.0), copied unchanged, beside this project's own
+# settings.
+#
+# Every project-local setting is marked where it is added, so a reviewer can diff the rest against the version this
+# project claims to follow.
+
+[tool.ruff]
+# NOTE:
+# Project-local: the fragment sets nothing in this table.
+#
+# Python code and comments stop strictly below column 119, so 118 is the last column that may hold a symbol.
+line-length = 118
+
+src = [
+  ".",
+  "tests",
+]
+
+# WARN:
+# Two exclusions, for two different reasons.
+#
+# `tools/` holds a vendored copy of the conventions checker.
+#
+# Formatting it here would rewrite it at this project's line length and destroy the diff against the version this
+# project follows.
+#
+# It is checked upstream, not here.
+#
+# `alembic/versions/` holds generated migration scripts whose shape Alembic owns.
+extend-exclude = [
+  "tools",
+  "alembic/versions",
+]
+
+[tool.ruff.lint]
+# NOTE:
+# Why each family is selected, and why TD, FIX, and COM812 are deliberately absent, is stated once in the standard's
+# `vendor/ruff/ruff.toml`.
+select = [
+  "A",
+  "B",
+  "C4",
+  "E",
+  "F",
+  "I",
+  "N",
+  "PTH",
+  "RUF",
+  "SIM",
+  "UP",
+]
+
+# NOTE:
+# Project-local.
+#
+# Pronunciations are written in IPA, whose open a, script g, stress mark, and length mark look like ASCII to the
+# confusables rule.
+#
+# They are data this project handles, not typing mistakes.
+allowed-confusables = [
+  "ɑ",
+  "ɡ",
+  "ˈ",
+  "ː",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# WARN:
+# Project-local.
+#
+# `id` is the ubiquitous-language name of an aggregate's identity, and the reconstitution parameter carries the same
+# name as the field it fills.
+#
+# Renaming it would make the domain speak a different language from its own tests and its persistence rows.
+"wordwinnow/domain/analysis.py" = [
+  "A002",
+]
+
+[tool.ruff.lint.isort]
+split-on-trailing-comma = true
+
+# NOTE:
+# Project-local: the package isort treats as this project's own.
+known-first-party = [
+  "wordwinnow",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+
+# NOTE:
+# `ty` resolves imports from the repository root, where the package lives, and from `tests`.
+[tool.ty.environment]
+root = [
+  ".",
+  "tests",
+]
+
+[tool.check-conventions]
+# NOTE:
+# Modules this project uses as a namespace, each traceable to one of the three semantic import exceptions the standard
+# names.
+#
+# `nltk` is designed as a namespace: its corpus readers are attributes resolved lazily on the package, and the project
+# reads them through the module so a rebinding is visible.
+#
+# `sys` is read through the module for the same reason: the command line's log handler writes to whatever `sys.stderr`
+# is when a record arrives, which a progress display rebinds while it runs.
+namespace-modules = [
+  "nltk",
+  "sys",
+]
+
+# WARN:
+# Paths excluded from the scan.
+#
+# An exclusion is a recorded exception, and the reason belongs beside it.
+#
+# `data/reference/ATTRIBUTION.md` reproduces licensors' own wording, which is data rather than prose.
+#
+# `wordwinnow/infrastructure/log_formatters.py` overrides `logging.Formatter.format`, whose parameter the standard
+# library declares positional-or-keyword: the type checker proves that a positional-only override breaks substitution,
+# and the checker cannot tell a framework-imposed signature from a project one.
+#
+# The module holds nothing but the two overrides, so the exclusion hides exactly that.
+#
+# `wordwinnow/infrastructure/messaging/handoff.py` implements aiokafka's `ConsumerRebalanceListener`, whose two hooks
+# aiokafka calls with one positional argument; a keyword-only hook would raise inside aiokafka, which logs it and
+# carries on without the listener.
+#
+# Scanned on its own, the module reports those two signatures and nothing else, so the exclusion hides exactly that.
+exclude = [
+  "data/reference/ATTRIBUTION.md",
+  "wordwinnow/infrastructure/log_formatters.py",
+  "wordwinnow/infrastructure/messaging/handoff.py",
+]
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers --strict-config"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+pythonpath = [
+  ".",
+]
+testpaths = [
+  "tests",
+]
+markers = [
+  "integration: needs the backing services `make up` starts",
+  "live: calls a real external provider over the network",
+]
+
+# NOTE:
+# The build backend is the one requirement the lock does not cover, so it is pinned exactly here: a range would let a
+# rebuild of the same commit use another backend, and this is the uv release the image and the pipeline pin.
+[build-system]
+requires = [
+  "uv_build==0.12.22",
+]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
