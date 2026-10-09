@@ -1,0 +1,30 @@
+# NOTE:
+# A single-binary Tempo that accepts OTLP over HTTP and keeps traces on a local volume.
+server:
+  http_listen_port: 3200
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        http:
+          endpoint: 0.0.0.0:4318
+
+storage:
+  trace:
+    backend: local
+    local:
+      path: /var/tempo/traces
+    wal:
+      path: /var/tempo/wal
+
+# NOTE:
+# The backend worker enforces retention; in a single binary it runs in the same process.
+backend_worker:
+  compaction:
+    block_retention: 24h
+
+# NOTE:
+# A local stack reports nothing about itself to Grafana Labs.
+usage_report:
+  reporting_enabled: false

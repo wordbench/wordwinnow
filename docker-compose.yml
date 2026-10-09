@@ -1,0 +1,279 @@
+# NOTE:
+# Ordering principle: lifecycle.
+#
+# The stores come first, then the one-shot migration, then the application services in pipeline order (intake,
+# enrichment, the analysis workers, the aggregation worker), then observability.
+#
+# The default profile starts only the stores, which is what the integration tests need, while the local mode needs
+# none of them; the `full` profile adds the application services and observability.
+
+# NOTE:
+# Every image the stack pulls is pinned by digest as well as by tag, so a fresh clone pulls the bytes this stack was
+# verified against; the application's own image is built from the Dockerfile, whose base images are pinned the same
+# way.
+#
+# An image reference has no point at which it can be broken, so the longest one runs past the line limit.
+
+x-application: &application
+  build:
+    context: .
+  image: wordwinnow:local
+  profiles:
+    - full
+  env_file:
+    - path: .env
+      required: false
+    # NOTE:
+    # The file outside the repository where the New York Times key belongs: Compose reads it itself, with no need for
+    # direnv, which loads the same file through `.envrc` for the command line; listed last, it wins over `.env` when
+    # both hold a variable.
+    - path: ${XDG_CONFIG_HOME:-${HOME}/.config}/wordwinnow/secrets.env
+      required: false
+  environment: &application-environment
+    WORDWINNOW_DATABASE_URL: postgresql+asyncpg://wordwinnow:wordwinnow@postgres:5432/wordwinnow
+    WORDWINNOW_KAFKA_BOOTSTRAP_SERVERS: kafka:19092
+    WORDWINNOW_REDIS_URL: redis://redis:6379/0
+    WORDWINNOW_CLICKHOUSE_HOST: clickhouse
+    WORDWINNOW_ENRICHMENT_URL: http://enrichment:8100
+    WORDWINNOW_INTAKE_URL: http://intake:8010
+    WORDWINNOW_LOG_FORMAT: json
+    WORDWINNOW_TRACING_ENABLED: "true"
+    OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4318
+
+services:
+  postgres:
+    image: postgres:18.6-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
+    environment:
+      POSTGRES_DB: wordwinnow
+      POSTGRES_USER: wordwinnow
+      POSTGRES_PASSWORD: wordwinnow
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      # NOTE:
+      # PostgreSQL 18's image keeps its cluster under a versioned directory inside this path, so the volume is mounted
+      # one level above the `data` directory earlier images used.
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U wordwinnow -d wordwinnow
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:8.10.2-alpine@sha256:3811787313eba226a2ef38658c6ccb91cd5e110edc89c37767de373120a0e5a0
+    # NOTE:
+    # Snapshots go to a named volume so the dictionary cache survives a recreate: without it, every word goes back to
+    # the provider, which at two requests a second costs minutes per text.
+    command:
+      - redis-server
+      - --save
+      - "60"
+      - "1"
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - ping
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  kafka:
+    image: apache/kafka:4.3.1@sha256:77e3df9054047a88b520d0cc46e16696d3b22022e1d580aeccd2632df6532837
+    environment:
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:19092,CONTROLLER://:9093,EXTERNAL://:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:19092,EXTERNAL://127.0.0.1:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      # NOTE:
+      # The image applies its single-broker defaults only when no `KAFKA_` variable is set, so Kafka's own default of
+      # three replicas would otherwise leave the consumer-offsets topic impossible to create on this one broker.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      # NOTE:
+      # A worker that joins starts consuming at once rather than after Kafka's default of three seconds, which would
+      # otherwise be counted in every run of the worker-scaling experiment.
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
+      # NOTE:
+      # Four partitions is the ceiling of the worker-scaling experiment: a fifth worker would sit idle.
+      KAFKA_NUM_PARTITIONS: "4"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      # NOTE:
+      # The ID the volume is formatted with, which the image checks at every start: a volume formatted under one ID
+      # refuses a broker configured with another, so the ID is fixed here rather than left to the image's default,
+      # which a later image could change.
+      CLUSTER_ID: wordwinnow-local-cluster-0001
+    ports:
+      - "127.0.0.1:9092:9092"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:19092 > /dev/null 2>&1
+      interval: 5s
+      timeout: 10s
+      retries: 30
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.8.15.10-alpine@sha256:e08c778ff91f382a15bd0ce9c0fa21e8edc9aa8acc30c4666160000d9a918454
+    # NOTE:
+    # The image refuses the built-in `default` user from outside the container, so a named user is created at start,
+    # and it is the account the settings, the services, and the tests default to.
+    environment:
+      CLICKHOUSE_DB: wordwinnow
+      CLICKHOUSE_USER: wordwinnow
+      CLICKHOUSE_PASSWORD: wordwinnow
+    ports:
+      - "127.0.0.1:8123:8123"
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -qO- http://127.0.0.1:8123/ping
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    !!merge <<: *application
+    command:
+      - wordwinnow
+      - db
+      - upgrade
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  intake:
+    !!merge <<: *application
+    restart: unless-stopped
+    command:
+      - wordwinnow
+      - serve
+      - intake
+    ports:
+      - "127.0.0.1:8010:8010"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      kafka:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -qO- http://127.0.0.1:8010/health
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  enrichment:
+    !!merge <<: *application
+    restart: unless-stopped
+    command:
+      - wordwinnow
+      - serve
+      - enrichment
+    ports:
+      - "127.0.0.1:8100:8100"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -qO- http://127.0.0.1:8100/health
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  analysis-worker:
+    !!merge <<: *application
+    restart: unless-stopped
+    command:
+      - wordwinnow
+      - work
+      - analysis
+    # NOTE:
+    # `docker compose --profile full up --scale analysis-worker=4` is the worker-scaling experiment; the metrics port
+    # is not published because every replica would claim it, and Prometheus finds the replicas by DNS.
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      kafka:
+        condition: service_healthy
+      enrichment:
+        condition: service_healthy
+
+  aggregation-worker:
+    !!merge <<: *application
+    restart: unless-stopped
+    command:
+      - wordwinnow
+      - work
+      - aggregation
+    depends_on:
+      kafka:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+
+  prometheus:
+    image: prom/prometheus:v3.13.4@sha256:87861b8cf91579109319ebc300f3f1060e6da9c05d6ae8ad15a20c879e84e32e
+    profiles:
+      - full
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  tempo:
+    image: grafana/tempo:3.1.0@sha256:3076b8dcdfb32fd6bc5ccef85e7b7313e6199b9cb84366257fc17ecb696db5fd
+    profiles:
+      - full
+    command:
+      - -config.file=/etc/tempo.yml
+    ports:
+      - "127.0.0.1:3200:3200"
+    volumes:
+      - ./observability/tempo.yml:/etc/tempo.yml:ro
+      - tempo-data:/var/tempo
+
+  grafana:
+    image: grafana/grafana:13.2.3@sha256:b28bae15e219c998fb0e0424ed724930cc61b1f61fb404d47c862f9a23f9e572
+    profiles:
+      - full
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-wordwinnow}
+      # NOTE:
+      # A local stack sends Grafana Labs no usage report and does not check grafana.com for updates.
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+      - tempo
+
+volumes:
+  postgres-data:
+  redis-data:
+  kafka-data:
+  clickhouse-data:
+  tempo-data:
