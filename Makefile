@@ -41,11 +41,11 @@ SUPPLY_CHAIN := SHA256SUMS Makefile Dockerfile docker-compose.yml .github/workfl
 CONVENTIONS ?= $(HOME)/Projects/engineering-conventions
 
 # NOTE:
-# The commit of the standard the vendored files were copied from, the one its v1.1.0 tag names.
+# The commit of the standard the vendored files were copied from, the one its v1.2.0 tag names.
 #
 # A commit rather than the tag, because a tag can be moved and a commit cannot: the drift check compares the vendored
 # files with exactly these bytes, whatever the checkout or its tags have moved on to.
-CONVENTIONS_REF := a37a6fed29e4f98f1a963db8ab769cde952a6c33
+CONVENTIONS_REF := 2ef4f1805ae9260bbe0a15dc354a4d00e68be8bb
 
 # WARN:
 # The secret scanner is the one gate tool the locked environment cannot hold: gitleaks is a Go program with no Python

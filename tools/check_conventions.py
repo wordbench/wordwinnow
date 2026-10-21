@@ -114,7 +114,7 @@ from typing import (
 #
 # A vendored copy states which standard it came from, so a project can report conformance and a reviewer can tell a
 # stale copy from a local change.
-STANDARD_VERSION: Final = "1.1.0"
+STANDARD_VERSION: Final = "1.2.0"
 
 # NOTE:
 # Column boundaries from the standard's width section.
@@ -131,7 +131,7 @@ PROSE_COLUMNS: Final = 78
 # Aliases are recognized rather than rejected, because the upstream specification permits them; preferring one
 # spelling within a project is a project decision and not something this program decides.
 MARKERS: Final = frozenset(
-    {
+    (
         "FIX",
         "HACK",
         "NOTE",
@@ -139,11 +139,11 @@ MARKERS: Final = frozenset(
         "TEST",
         "TODO",
         "WARN",
-    },
+    ),
 )
 
 ALIASES: Final = frozenset(
-    {
+    (
         "BUG",
         "FAILED",
         "FIXIT",
@@ -157,7 +157,7 @@ ALIASES: Final = frozenset(
         "TESTING",
         "WARNING",
         "XXX",
-    },
+    ),
 )
 
 # NOTE:
@@ -166,7 +166,7 @@ ALIASES: Final = frozenset(
 #
 # There is no caller to protect.
 FRAMEWORK_DECORATORS: Final = frozenset(
-    {
+    (
         "delete",
         "fixture",
         "get",
@@ -176,7 +176,7 @@ FRAMEWORK_DECORATORS: Final = frozenset(
         "post",
         "put",
         "websocket",
-    },
+    ),
 )
 
 # NOTE:
@@ -185,9 +185,7 @@ FRAMEWORK_DECORATORS: Final = frozenset(
 # A project adds its own in `[tool.check-conventions] namespace-modules`; editing this default is the wrong place,
 # because the vendored copy must stay diffable against what the standard publishes.
 DEFAULT_NAMESPACE_MODULES: Final = frozenset(
-    {
-        "pytest",
-    },
+    ("pytest",),
 )
 
 # NOTE:
@@ -217,13 +215,13 @@ PIPELINE_SUFFIXES: Final = (
 )
 
 PIPELINE_NAMES: Final = frozenset(
-    {
+    (
         "Containerfile",
         "Dockerfile",
         "GNUmakefile",
         "Makefile",
         "makefile",
-    },
+    ),
 )
 
 SUFFIXES: Final = (
@@ -240,7 +238,7 @@ SUFFIXES: Final = (
 #
 # A file named explicitly on the command line is never skipped.
 SKIPPED_DIRECTORIES: Final = frozenset(
-    {
+    (
         ".git",
         ".hg",
         ".ipynb_checkpoints",
@@ -256,7 +254,7 @@ SKIPPED_DIRECTORIES: Final = frozenset(
         "node_modules",
         "site-packages",
         "venv",
-    },
+    ),
 )
 
 # NOTE:
@@ -267,7 +265,7 @@ SKIPPED_DIRECTORIES: Final = frozenset(
 #
 # These entries and patterns surface suspects for a reader to judge.
 BRITISH_WORDS: Final = frozenset(
-    {
+    (
         "acknowledgement",
         "amongst",
         "analyse",
@@ -285,7 +283,7 @@ BRITISH_WORDS: Final = frozenset(
         "programme",
         "towards",
         "whilst",
-    },
+    ),
 )
 
 # NOTE:
@@ -303,7 +301,7 @@ BRITISH_WORDS: Final = frozenset(
 #
 # The list is incomplete by construction, which is why the pattern reports candidates rather than violations.
 NOT_BRITISH_ISE: Final = frozenset(
-    {
+    (
         "advertise",
         "arise",
         "chastise",
@@ -338,7 +336,7 @@ NOT_BRITISH_ISE: Final = frozenset(
         "televise",
         "treatise",
         "wise",
-    },
+    ),
 )
 
 BRITISH_PATTERNS: Final = (
@@ -496,10 +494,20 @@ CHECKSUM_VERIFICATION: Final = compile_pattern(
 # NOTE:
 # The cell metadata in which Jupyter and its extensions record when a cell ran.
 TIMING_KEYS: Final = frozenset(
-    {
+    (
         "ExecuteTime",
         "execution",
-    },
+    ),
+)
+
+# NOTE:
+# The two constructors that copy a display handed to them, which §15 asks to be given a tuple rather than a set or a
+# list built only to be copied.
+COPYING_CONSTRUCTORS: Final = frozenset(
+    (
+        "frozenset",
+        "tuple",
+    ),
 )
 
 VIOLATION: Final = "violation"
@@ -2395,6 +2403,79 @@ def _check_final(
     )
 
 
+def _check_containers(
+    path: Path,
+    tree: AST,
+    source: str,
+    /,
+) -> tuple[Finding, ...]:
+    """
+    Reports a set or list display handed to `frozenset` or `tuple`, which
+    builds a container only to copy it.
+
+    The finding is a candidate, because §15 states a default rather than a
+    requirement, and the display may be there for a reason recorded at the
+    site.
+    """
+
+    out: list[Finding] = []
+
+    for node in walk(
+        node=tree,
+    ):
+        if not isinstance(
+            node,
+            Call,
+        ):
+            continue
+
+        callee = getattr(
+            node.func,
+            "id",
+            None,
+        )
+
+        if (
+            callee not in COPYING_CONSTRUCTORS
+            or len(
+                node.args,
+            )
+            != 1
+            or node.keywords
+        ):
+            continue
+
+        argument = node.args[0]
+
+        if not isinstance(
+            argument,
+            Set | List,
+        ):
+            continue
+
+        shown = (
+            "set"
+            if isinstance(
+                argument,
+                Set,
+            )
+            else "list"
+        )
+
+        out.append(
+            _candidate(
+                path,
+                node.lineno,
+                "containers",
+                f"a {shown} display is handed to `{callee}`, which copies it; a tuple is one container less (§15)",
+            ),
+        )
+
+    return tuple(
+        out,
+    )
+
+
 def _check_markdown(
     path: Path,
     source: str,
@@ -3210,6 +3291,7 @@ CHECKS: Final = MappingProxyType(
         "prose": _check_prose,
         "kwargs": _check_kwargs,
         "final": _check_final,
+        "containers": _check_containers,
     },
 )
 
@@ -3246,13 +3328,13 @@ PIPELINE_CHECKS: Final = MappingProxyType(
 )
 
 ALL_CHECKS: Final = frozenset(
-    {
+    (
         *CHECKS,
         *MARKDOWN_CHECKS,
         *NOTEBOOK_CHECKS,
         *CHECKSUM_CHECKS,
         *PIPELINE_CHECKS,
-    },
+    ),
 )
 
 # NOTE:
@@ -3261,10 +3343,10 @@ ALL_CHECKS: Final = frozenset(
 # Every other check runs on this file normally: a checker that exempts itself from the syntax it polices hides exactly
 # the defects it exists to find.
 SELF_EXEMPT: Final = frozenset(
-    {
+    (
         "comments",
         "prose",
-    },
+    ),
 )
 
 # NOTE:
@@ -3636,6 +3718,10 @@ CONTROLS: Final = MappingProxyType(
             "final",
             "from typing import Final\n\nX: Final = 1\n\n\ndef f():\n    global X\n\n    X = 2\n",
         ),
+        "containers/set-display": (
+            "containers",
+            "x = frozenset(\n    {\n        1,\n    },\n)\n",
+        ),
         "markdown/width": (
             "markdown",
             f"# Title\n\n{'word ' * 20}\n",
@@ -3781,9 +3867,7 @@ def _self_test() -> int:
                 for item in _run(
                     (probe,),
                     frozenset(
-                        {
-                            name,
-                        },
+                        (name,),
                     ),
                 )
                 if item.check
@@ -3852,26 +3936,20 @@ def _exemption_controls() -> int:
             _run(
                 (probe,),
                 frozenset(
-                    {
-                        "imports",
-                    },
+                    ("imports",),
                 ),
             ),
         )
 
         NAMESPACE_MODULES = DEFAULT_NAMESPACE_MODULES | frozenset(
-            {
-                "socket",
-            },
+            ("socket",),
         )
 
         exempted = bool(
             _run(
                 (probe,),
                 frozenset(
-                    {
-                        "imports",
-                    },
+                    ("imports",),
                 ),
             ),
         )
@@ -3888,9 +3966,7 @@ def _exemption_controls() -> int:
             _run(
                 (probe,),
                 frozenset(
-                    {
-                        "imports",
-                    },
+                    ("imports",),
                 ),
             ),
         )
@@ -3938,10 +4014,10 @@ def _exemption_controls() -> int:
         measured = _run(
             (widths,),
             frozenset(
-                {
+                (
                     "comments",
                     "docstrings",
-                },
+                ),
             ),
         )
 
@@ -3981,9 +4057,7 @@ def _exemption_controls() -> int:
         quoted = _run(
             (quoting,),
             frozenset(
-                {
-                    "markdown",
-                },
+                ("markdown",),
             ),
         )
 
@@ -4024,9 +4098,7 @@ def _exemption_controls() -> int:
         annotated = _run(
             (typing,),
             frozenset(
-                {
-                    "calls",
-                },
+                ("calls",),
             ),
         )
 
@@ -4069,9 +4141,7 @@ def _exemption_controls() -> int:
         underscored = _run(
             (hooks,),
             frozenset(
-                {
-                    "signatures",
-                },
+                ("signatures",),
             ),
         )
 
@@ -4119,9 +4189,7 @@ def _exemption_controls() -> int:
         counted = _run(
             (counting,),
             frozenset(
-                {
-                    "markdown",
-                },
+                ("markdown",),
             ),
         )
 
@@ -4164,9 +4232,7 @@ def _exemption_controls() -> int:
         spanned = _run(
             (spans,),
             frozenset(
-                {
-                    "markdown",
-                },
+                ("markdown",),
             ),
         )
 
@@ -4212,9 +4278,7 @@ def _exemption_controls() -> int:
         surfaces = _run(
             (surface,),
             frozenset(
-                {
-                    "naming",
-                },
+                ("naming",),
             ),
         )
 
@@ -4299,9 +4363,7 @@ def _notebook_controls() -> int:
                 ],
             },
             frozenset(
-                {
-                    "calls",
-                },
+                ("calls",),
             ),
             True,
         ),
@@ -4315,9 +4377,7 @@ def _notebook_controls() -> int:
                 ],
             },
             frozenset(
-                {
-                    "markdown",
-                },
+                ("markdown",),
             ),
             True,
         ),
@@ -4445,9 +4505,7 @@ def _download_controls() -> int:
                 _run(
                     (probe,),
                     frozenset(
-                        {
-                            "downloads",
-                        },
+                        ("downloads",),
                     ),
                 ),
             )
@@ -4528,9 +4586,7 @@ def _markdown_width_controls() -> int:
                 for finding in _run(
                     (probe,),
                     frozenset(
-                        {
-                            "markdown",
-                        },
+                        ("markdown",),
                     ),
                 )
             )

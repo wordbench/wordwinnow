@@ -4,7 +4,7 @@ Winnow a text into the vocabulary worth a learner's attention.
 
 [![CI](https://github.com/wordbench/wordwinnow/actions/workflows/ci.yml/badge.svg)](https://github.com/wordbench/wordwinnow/actions/workflows/ci.yml)
 [![License: PolyForm Strict 1.0.0](https://img.shields.io/badge/license-PolyForm%20Strict%201.0.0-informational)](LICENSE)
-[![Engineering conventions v1.1.0](https://img.shields.io/badge/engineering%20conventions-v1.1.0-informational)](https://github.com/olegturzhanskii/engineering-conventions/blob/v1.1.0/STANDARD.md)
+[![Engineering conventions v1.2.0](https://img.shields.io/badge/engineering%20conventions-v1.2.0-informational)](https://github.com/olegturzhanskii/engineering-conventions/blob/v1.2.0/STANDARD.md)
 
 You have a text you want to read in English: an article, a chapter, the
 subtitles of an episode.
@@ -200,9 +200,9 @@ separate permission.
 The files that enforce the project's coding standard are a separate case:
 `tools/check_conventions.py`, `tools/check_commit_message.py`, `.taplo.toml`, and
 the Ruff tables `pyproject.toml` marks as copied are unchanged copies from the
-[engineering conventions standard](https://github.com/olegturzhanskii/engineering-conventions/blob/v1.1.0/STANDARD.md), a separate project whose rules Wordwinnow
+[engineering conventions standard](https://github.com/olegturzhanskii/engineering-conventions/blob/v1.2.0/STANDARD.md), a separate project whose rules Wordwinnow
 follows rather than a dependency, and they keep that project's
-[Apache License 2.0](https://github.com/olegturzhanskii/engineering-conventions/blob/v1.1.0/LICENSE), which does not extend to anything else here.
+[Apache License 2.0](https://github.com/olegturzhanskii/engineering-conventions/blob/v1.2.0/LICENSE), which does not extend to anything else here.
 
 The reference word lists, the sample story, the dictionary's definitions, the
 services Wordwinnow calls, and anything fetched from The New York Times keep

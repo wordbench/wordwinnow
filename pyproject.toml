@@ -91,7 +91,7 @@ dev = [
 
 # NOTE:
 # Everything from here to the ty table is Ruff's configuration: the tables of
-# `engineering-conventions/vendor/ruff/pyproject-fragment.toml` (v1.1.0), copied unchanged, beside this project's own
+# `engineering-conventions/vendor/ruff/pyproject-fragment.toml` (v1.2.0), copied unchanged, beside this project's own
 # settings.
 #
 # Every project-local setting is marked where it is added, so a reviewer can diff the rest against the version this

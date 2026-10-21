@@ -30,7 +30,7 @@ for sizing.
 
 ## Code conventions
 
-This project conforms to the [engineering conventions standard](https://github.com/olegturzhanskii/engineering-conventions/blob/v1.1.0/STANDARD.md), **v1.1.0**.
+This project conforms to the [engineering conventions standard](https://github.com/olegturzhanskii/engineering-conventions/blob/v1.2.0/STANDARD.md), **v1.2.0**.
 
 The standard is referenced rather than copied, so a difference between this
 project and the standard can be told apart as a violation or a version gap.
@@ -49,7 +49,7 @@ tool, positive control first, and `make verify` includes it.
 in with `make hooks`.
 
 `make drift` proves the vendored copies match, byte for byte, the commit of the
-standard this project pins, the one its v1.1.0 tag names, read from a checkout
+standard this project pins, the one its v1.2.0 tag names, read from a checkout
 of it (`CONVENTIONS=path`).
 
 It stays out of `make verify`, because the gate must keep working when the
