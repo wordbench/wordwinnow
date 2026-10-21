@@ -45,7 +45,36 @@ async def _opened(
 
     assert await breaker.permit() is Permit.CALL
 
-    breaker.record_failure()
+    breaker.record_failure(
+        trial=False,
+    )
+
+    return breaker
+
+
+async def _opened_with_a_call_in_flight(
+    clock: FakeMonotonicClock,
+    /,
+) -> CircuitBreaker:
+    """
+    A breaker that opened at the first failure while a second call it had
+    admitted is still in flight.
+    """
+
+    breaker = CircuitBreaker(
+        failure_threshold=1,
+        recovery_seconds=30.0,
+        clock=clock,
+    )
+
+    for _ in range(
+        2,
+    ):
+        assert await breaker.permit() is Permit.CALL
+
+    breaker.record_failure(
+        trial=False,
+    )
 
     return breaker
 
@@ -224,13 +253,17 @@ class TestCircuitBreaker:
         ):
             assert await breaker.permit() is Permit.CALL
 
-            breaker.record_failure()
+            breaker.record_failure(
+                trial=False,
+            )
 
         assert breaker.state is BreakerState.CLOSED
 
         assert await breaker.permit() is Permit.CALL
 
-        breaker.record_failure()
+        breaker.record_failure(
+            trial=False,
+        )
 
         assert (
             breaker.state,
@@ -265,11 +298,17 @@ class TestCircuitBreaker:
             clock=FakeMonotonicClock(),
         )
 
-        breaker.record_failure()
+        breaker.record_failure(
+            trial=False,
+        )
 
-        breaker.record_success()
+        breaker.record_success(
+            trial=False,
+        )
 
-        breaker.record_failure()
+        breaker.record_failure(
+            trial=False,
+        )
 
         assert breaker.state is BreakerState.CLOSED
 
@@ -313,7 +352,9 @@ class TestCircuitBreaker:
 
         assert breaker.state is BreakerState.HALF_OPEN
 
-        breaker.record_success()
+        breaker.record_success(
+            trial=True,
+        )
 
         assert breaker.state is BreakerState.CLOSED
 
@@ -344,7 +385,9 @@ class TestCircuitBreaker:
 
         assert not waiting.done()
 
-        breaker.record_success()
+        breaker.record_success(
+            trial=True,
+        )
 
         assert await waiting is Permit.CALL
 
@@ -371,7 +414,9 @@ class TestCircuitBreaker:
             delay=0,
         )
 
-        breaker.record_failure()
+        breaker.record_failure(
+            trial=True,
+        )
 
         assert await waiting is Permit.REFUSED
 
@@ -427,7 +472,9 @@ class TestCircuitBreaker:
 
         assert await breaker.permit() is Permit.TRIAL
 
-        breaker.record_failure()
+        breaker.record_failure(
+            trial=True,
+        )
 
         assert breaker.state is BreakerState.OPEN
 
@@ -438,6 +485,173 @@ class TestCircuitBreaker:
         )
 
         assert await breaker.permit() is Permit.TRIAL
+
+    async def test_a_call_admitted_before_the_circuit_opened_does_not_close_it_by_succeeding(
+        self,
+    ) -> None:
+        breaker = await _opened_with_a_call_in_flight(
+            FakeMonotonicClock(),
+        )
+
+        breaker.record_success(
+            trial=False,
+        )
+
+        assert (
+            breaker.state,
+            breaker.retry_in_seconds,
+        ) == (
+            BreakerState.OPEN,
+            30.0,
+        )
+
+        assert await breaker.permit() is Permit.REFUSED
+
+    async def test_a_late_success_once_the_recovery_period_is_over_leaves_the_next_call_the_trial(
+        self,
+    ) -> None:
+        clock = FakeMonotonicClock()
+
+        breaker = await _opened_with_a_call_in_flight(
+            clock,
+        )
+
+        clock.advance(
+            seconds=30.0,
+        )
+
+        breaker.record_success(
+            trial=False,
+        )
+
+        assert breaker.state is BreakerState.HALF_OPEN
+
+        assert await breaker.permit() is Permit.TRIAL
+
+    async def test_a_late_success_during_the_trial_neither_closes_the_circuit_nor_ends_the_trial(
+        self,
+    ) -> None:
+        clock = FakeMonotonicClock()
+
+        breaker = await _opened_with_a_call_in_flight(
+            clock,
+        )
+
+        clock.advance(
+            seconds=30.0,
+        )
+
+        assert await breaker.permit() is Permit.TRIAL
+
+        waiting = create_task(
+            coro=breaker.permit(),
+        )
+
+        await asyncio_sleep(
+            delay=0,
+        )
+
+        breaker.record_success(
+            trial=False,
+        )
+
+        await asyncio_sleep(
+            delay=0,
+        )
+
+        assert (
+            breaker.state,
+            waiting.done(),
+        ) == (
+            BreakerState.HALF_OPEN,
+            False,
+        )
+
+        breaker.record_failure(
+            trial=True,
+        )
+
+        assert await waiting is Permit.REFUSED
+
+        assert (
+            breaker.state,
+            breaker.retry_in_seconds,
+        ) == (
+            BreakerState.OPEN,
+            30.0,
+        )
+
+    async def test_a_late_failure_during_the_trial_leaves_the_calls_waiting_for_it_waiting(
+        self,
+    ) -> None:
+        clock = FakeMonotonicClock()
+
+        breaker = await _opened_with_a_call_in_flight(
+            clock,
+        )
+
+        clock.advance(
+            seconds=30.0,
+        )
+
+        assert await breaker.permit() is Permit.TRIAL
+
+        waiting = create_task(
+            coro=breaker.permit(),
+        )
+
+        await asyncio_sleep(
+            delay=0,
+        )
+
+        breaker.record_failure(
+            trial=False,
+        )
+
+        await asyncio_sleep(
+            delay=0,
+        )
+
+        assert (
+            breaker.state,
+            waiting.done(),
+        ) == (
+            BreakerState.HALF_OPEN,
+            False,
+        )
+
+        breaker.record_success(
+            trial=True,
+        )
+
+        assert await waiting is Permit.CALL
+
+        assert breaker.state is BreakerState.CLOSED
+
+    async def test_a_call_that_fails_while_the_circuit_is_open_starts_the_recovery_period_again(
+        self,
+    ) -> None:
+        clock = FakeMonotonicClock()
+
+        breaker = await _opened_with_a_call_in_flight(
+            clock,
+        )
+
+        clock.advance(
+            seconds=10.0,
+        )
+
+        breaker.record_failure(
+            trial=False,
+        )
+
+        assert (
+            breaker.state,
+            breaker.retry_in_seconds,
+        ) == (
+            BreakerState.OPEN,
+            30.0,
+        )
 
     def test_an_invalid_configuration_is_refused(
         self,

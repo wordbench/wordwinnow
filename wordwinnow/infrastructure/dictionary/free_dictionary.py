@@ -745,6 +745,7 @@ class FreeDictionaryClient:
             lookup = self._unexpected(
                 key,
                 exception,
+                False,
             )
 
         finally:
@@ -797,15 +798,15 @@ class FreeDictionaryClient:
 
         trial = permit is Permit.TRIAL
 
-        if trial:
-            _logger.debug(
-                msg="dictionary.circuit.trial",
-                extra={
-                    "lemma": key,
-                },
-            )
-
         try:
+            if trial:
+                _logger.debug(
+                    msg="dictionary.circuit.trial",
+                    extra={
+                        "lemma": key,
+                    },
+                )
+
             return await self._ask(
                 key,
                 trial,
@@ -819,6 +820,17 @@ class FreeDictionaryClient:
                 self._breaker.abandon()
 
             raise
+
+        except Exception as exception:
+            # WARN:
+            # Only the trial's own outcome ends the trial, so a defect on a permitted call's path is reported here,
+            # where it is known whether the call is the trial; reported by `look_up` instead, a failed trial would
+            # leave every later lookup waiting for it.
+            return self._unexpected(
+                key,
+                exception,
+                trial,
+            )
 
     async def _ask(
         self,
@@ -857,6 +869,7 @@ class FreeDictionaryClient:
                     key,
                     result,
                     attempt,
+                    trial,
                 )
 
             if attempt >= MAX_ATTEMPTS:
@@ -866,6 +879,7 @@ class FreeDictionaryClient:
                         reason=result.reason,
                     ),
                     attempt,
+                    trial,
                 )
 
             asked = result.retry_after_seconds
@@ -895,6 +909,7 @@ class FreeDictionaryClient:
                         reason=result.reason,
                     ),
                     attempt,
+                    trial,
                 )
 
             delay = _delay_before(
@@ -1015,11 +1030,13 @@ class FreeDictionaryClient:
         key: str,
         lookup: DictionaryLookup,
         attempts: int,
+        trial: bool,
         /,
     ) -> DictionaryLookup:
         self._record(
             lookup.outcome is not LookupOutcome.UNAVAILABLE,
             lookup.failure_reason,
+            trial,
         )
 
         _log(
@@ -1034,11 +1051,13 @@ class FreeDictionaryClient:
         self,
         key: str,
         exception: Exception,
+        trial: bool,
         /,
     ) -> DictionaryLookup:
         self._record(
             False,
             FailureReason.TRANSPORT_ERROR,
+            trial,
         )
 
         kind = type(
@@ -1062,22 +1081,30 @@ class FreeDictionaryClient:
         self,
         answered: bool,
         failure_reason: str | None,
+        trial: bool,
         /,
     ) -> None:
         before = self._breaker.state
 
         if answered:
-            self._breaker.record_success()
+            self._breaker.record_success(
+                trial=trial,
+            )
 
         else:
-            self._breaker.record_failure()
+            self._breaker.record_failure(
+                trial=trial,
+            )
 
         after = self._breaker.state
 
         # NOTE:
         # One warning per outage: the circuit opening from closed is the event an operator needs, while a failed trial
         # reopening it every recovery period and the circuit closing again are the outage's course, at INFO.
-        if after is BreakerState.OPEN and before is BreakerState.CLOSED:
+        #
+        # Only the trial's outcome is that course: a lookup that ends while the circuit is open changes at most when
+        # the next trial may start, and once the recovery period is over the state alone cannot tell it from a trial.
+        if not trial and after is BreakerState.OPEN and before is BreakerState.CLOSED:
             _logger.warning(
                 msg="dictionary.circuit.opened",
                 extra={
@@ -1086,7 +1113,7 @@ class FreeDictionaryClient:
                 },
             )
 
-        elif after is BreakerState.OPEN and before is BreakerState.HALF_OPEN:
+        elif trial and not answered:
             _logger.info(
                 msg="dictionary.circuit.reopened",
                 extra={
@@ -1095,7 +1122,7 @@ class FreeDictionaryClient:
                 },
             )
 
-        elif after is BreakerState.CLOSED and before is not BreakerState.CLOSED:
+        elif trial:
             _logger.info(
                 msg="dictionary.circuit.closed",
             )

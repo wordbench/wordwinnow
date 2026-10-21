@@ -214,6 +214,9 @@ class CircuitBreaker:
 
     A call that arrives while the trial is in flight waits for its outcome,
     and goes ahead or is refused by it.
+
+    Only the trial's own outcome ends the trial, and a call admitted before
+    the circuit opened never closes it.
     """
 
     def __init__(
@@ -308,30 +311,51 @@ class CircuitBreaker:
 
     def record_success(
         self,
+        *,
+        trial: bool,
     ) -> None:
         """
-        Note that a permitted call succeeded, which closes the circuit.
+        Note that a permitted call succeeded.
+
+        The trial's success closes the circuit; another call's success counts
+        only while the circuit is closed.
         """
 
-        self._state = BreakerState.CLOSED
+        # NOTE:
+        # A call admitted before the circuit opened can still answer after it opened, and only the trial's answer
+        # closes the circuit, so that the recovery period runs its whole length whatever such a call says.
+        if trial:
+            self._state = BreakerState.CLOSED
 
-        self._failures = 0
+            self._failures = 0
 
-        self._settle()
+            self._settle()
+
+        elif self._state is BreakerState.CLOSED:
+            self._failures = 0
 
     def record_failure(
         self,
+        *,
+        trial: bool,
     ) -> None:
         """
         Note that a permitted call failed.
 
-        The circuit opens at the threshold, and at once when the call was a
+        The circuit opens at the threshold, and at once when the call was the
         trial.
+
+        Another call that fails while the circuit is open starts the recovery
+        period again, and one that fails during the trial leaves the trial to
+        decide.
         """
+
+        if self._state is BreakerState.HALF_OPEN and not trial:
+            return
 
         self._failures += 1
 
-        if self._state is not BreakerState.CLOSED or self._failures >= self._failure_threshold:
+        if trial or self._state is not BreakerState.CLOSED or self._failures >= self._failure_threshold:
             self._state = BreakerState.OPEN
 
             self._opened_at = self._clock()

@@ -16,6 +16,7 @@ from asyncio import (
 )
 from collections.abc import (
     Callable,
+    Coroutine,
 )
 from logging import (
     DEBUG,
@@ -49,6 +50,10 @@ from wordwinnow.domain.dictionary import (
 )
 from wordwinnow.domain.language import (
     PartOfSpeech,
+)
+from wordwinnow.infrastructure.dictionary.cache import (
+    CachingDictionary,
+    InMemoryDictionaryCache,
 )
 from wordwinnow.infrastructure.dictionary.free_dictionary import (
     RETRYABLE_REASONS,
@@ -213,6 +218,52 @@ async def _until(
 
     raise AssertionError(
         f"{lemma!r} never waited for {waiting_for}",
+    )
+
+
+def _client_over(
+    handler: Callable[[Request], Coroutine[None, None, Response]],
+    clock: FakeMonotonicClock,
+    /,
+) -> FreeDictionaryClient:
+    """
+    A client whose every request `handler` answers, with time on `clock`.
+    """
+
+    return FreeDictionaryClient(
+        base_url=_BASE_URL,
+        timeout_seconds=5.0,
+        requests_per_second=1_000.0,
+        burst=100,
+        client=AsyncClient(
+            transport=MockTransport(
+                handler=handler,
+            ),
+        ),
+        sleep=RecordingSleep(
+            clock=clock,
+        ),
+        clock=clock,
+    )
+
+
+def _circuit_events(
+    caplog: LogCaptureFixture,
+    /,
+) -> tuple[tuple[str, str], ...]:
+    """
+    The level and the event of each change of the circuit that was logged.
+    """
+
+    return tuple(
+        (
+            record.levelname,
+            record.getMessage(),
+        )
+        for record in caplog.records
+        if record.getMessage().startswith(
+            "dictionary.circuit.",
+        )
     )
 
 
@@ -1452,6 +1503,534 @@ class TestFreeDictionaryClient:
             if record.getMessage().startswith(
                 "dictionary.circuit.",
             )
+        ) == (
+            (
+                "WARNING",
+                "dictionary.circuit.opened",
+            ),
+            (
+                "DEBUG",
+                "dictionary.circuit.trial",
+            ),
+            (
+                "INFO",
+                "dictionary.circuit.reopened",
+            ),
+            (
+                "DEBUG",
+                "dictionary.circuit.trial",
+            ),
+            (
+                "INFO",
+                "dictionary.circuit.closed",
+            ),
+        )
+
+    async def test_four_failed_lookups_in_a_row_leave_the_circuit_closed_and_the_fifth_opens_it(
+        self,
+    ) -> None:
+        harness = Harness(
+            handler=_answering(
+                [
+                    400,
+                ],
+            ),
+        )
+
+        for _ in range(
+            4,
+        ):
+            await harness.client.look_up(
+                lemma="egria",
+            )
+
+        assert harness.client.activity().circuit is BreakerState.CLOSED
+
+        await harness.client.look_up(
+            lemma="egria",
+        )
+
+        assert harness.client.activity().circuit is BreakerState.OPEN
+
+    async def test_the_unavailable_count_is_a_total_by_reason_and_not_the_circuits_run_of_failures(
+        self,
+    ) -> None:
+        def answer(
+            request: Request,
+            /,
+        ) -> Response:
+            if request.url.path.endswith(
+                "/photograph",
+            ):
+                return Response(
+                    status_code=200,
+                    json=_PAYLOAD,
+                )
+
+            return Response(
+                status_code=400,
+            )
+
+        harness = Harness(
+            handler=answer,
+        )
+
+        dictionary = CachingDictionary(
+            inner=harness.client,
+            found_ttl_seconds=60,
+            not_found_ttl_seconds=60,
+            cache=InMemoryDictionaryCache(
+                clock=harness.clock,
+            ),
+        )
+
+        for lemma in (
+            *("egria",) * 4,
+            "photograph",
+            *("egria",) * 4,
+        ):
+            await dictionary.look_up(
+                lemma=lemma,
+            )
+
+        closed = (
+            harness.client.activity().circuit,
+            dictionary.counts().unavailable,
+        )
+
+        for lemma in (
+            "egria",
+            "mask",
+        ):
+            await dictionary.look_up(
+                lemma=lemma,
+            )
+
+        assert closed == (
+            BreakerState.CLOSED,
+            {
+                "provider_error": 8,
+            },
+        )
+
+        assert (
+            harness.client.activity().circuit,
+            dictionary.counts().unavailable,
+        ) == (
+            BreakerState.OPEN,
+            {
+                "provider_error": 9,
+                "circuit_open": 1,
+            },
+        )
+
+    async def test_a_lookup_in_flight_when_the_circuit_opens_does_not_close_it_by_answering(
+        self,
+        *,
+        caplog: LogCaptureFixture,
+    ) -> None:
+        clock = FakeMonotonicClock()
+
+        release = Event()
+
+        asked: list[str] = []
+
+        async def handler(
+            request: Request,
+            /,
+        ) -> Response:
+            asked.append(
+                request.url.path.rsplit(
+                    "/",
+                    1,
+                )[-1],
+            )
+
+            # NOTE:
+            # The answer to the first word is held back until five others have failed, as a slow answer arrives after
+            # quick failures.
+            if request.url.path.endswith(
+                "/photograph",
+            ):
+                await release.wait()
+
+                return Response(
+                    status_code=200,
+                    json=_PAYLOAD,
+                )
+
+            return Response(
+                status_code=400,
+            )
+
+        client = _client_over(
+            handler,
+            clock,
+        )
+
+        with caplog.at_level(
+            level=DEBUG,
+            logger="wordwinnow.dictionary",
+        ):
+            late = create_task(
+                coro=client.look_up(
+                    lemma="photograph",
+                ),
+            )
+
+            await _until(
+                client,
+                "photograph",
+                WaitCause.PROVIDER,
+            )
+
+            for _ in range(
+                5,
+            ):
+                await client.look_up(
+                    lemma="egria",
+                )
+
+            release.set()
+
+            answered = await late
+
+            refused = await client.look_up(
+                lemma="mask",
+            )
+
+        activity = client.activity()
+
+        assert answered.outcome is LookupOutcome.FOUND
+
+        assert (
+            activity.circuit,
+            activity.retry_in_seconds,
+            refused.failure_reason,
+        ) == (
+            BreakerState.OPEN,
+            30.0,
+            "circuit_open",
+        )
+
+        assert asked == [
+            "photograph",
+            *("egria",) * 5,
+        ]
+
+        assert _circuit_events(
+            caplog,
+        ) == (
+            (
+                "WARNING",
+                "dictionary.circuit.opened",
+            ),
+        )
+
+    async def test_a_late_answer_during_the_trial_leaves_the_lookups_waiting_for_the_trial_waiting(
+        self,
+    ) -> None:
+        clock = FakeMonotonicClock()
+
+        late_answer = Event()
+
+        trial_answer = Event()
+
+        async def handler(
+            request: Request,
+            /,
+        ) -> Response:
+            if request.url.path.endswith(
+                "/photograph",
+            ):
+                await late_answer.wait()
+
+                return Response(
+                    status_code=200,
+                    json=_PAYLOAD,
+                )
+
+            if request.url.path.endswith(
+                "/mask",
+            ):
+                await trial_answer.wait()
+
+            return Response(
+                status_code=400,
+            )
+
+        client = _client_over(
+            handler,
+            clock,
+        )
+
+        late = create_task(
+            coro=client.look_up(
+                lemma="photograph",
+            ),
+        )
+
+        await _until(
+            client,
+            "photograph",
+            WaitCause.PROVIDER,
+        )
+
+        for _ in range(
+            5,
+        ):
+            await client.look_up(
+                lemma="egria",
+            )
+
+        clock.advance(
+            seconds=31.0,
+        )
+
+        trial = create_task(
+            coro=client.look_up(
+                lemma="mask",
+            ),
+        )
+
+        await _until(
+            client,
+            "mask",
+            WaitCause.PROVIDER,
+        )
+
+        waiting = create_task(
+            coro=client.look_up(
+                lemma="groom",
+            ),
+        )
+
+        await _until(
+            client,
+            "groom",
+            WaitCause.TRIAL,
+        )
+
+        late_answer.set()
+
+        answered = await late
+
+        during = client.activity()
+
+        trial_answer.set()
+
+        refused = await wait_for(
+            fut=waiting,
+            timeout=1.0,
+        )
+
+        failed = await trial
+
+        assert answered.outcome is LookupOutcome.FOUND
+
+        assert (
+            during.circuit,
+            tuple(
+                (
+                    lookup.lemma,
+                    lookup.waiting_for,
+                    lookup.trial,
+                )
+                for lookup in during.lookups
+            ),
+        ) == (
+            BreakerState.HALF_OPEN,
+            (
+                (
+                    "mask",
+                    WaitCause.PROVIDER,
+                    True,
+                ),
+                (
+                    "groom",
+                    WaitCause.TRIAL,
+                    False,
+                ),
+            ),
+        )
+
+        assert (
+            failed.failure_reason,
+            refused.failure_reason,
+            client.activity().circuit,
+        ) == (
+            "provider_error",
+            "circuit_open",
+            BreakerState.OPEN,
+        )
+
+    async def test_a_defect_during_the_trial_reopens_the_circuit_and_refuses_the_lookups_waiting_for_it(
+        self,
+    ) -> None:
+        clock = FakeMonotonicClock()
+
+        recovered = Event()
+
+        async def handler(
+            request: Request,
+            /,
+        ) -> Response:
+            if recovered.is_set():
+                raise RuntimeError(
+                    "an unexpected defect",
+                )
+
+            return Response(
+                status_code=400,
+            )
+
+        client = _client_over(
+            handler,
+            clock,
+        )
+
+        for _ in range(
+            5,
+        ):
+            await client.look_up(
+                lemma="egria",
+            )
+
+        clock.advance(
+            seconds=31.0,
+        )
+
+        recovered.set()
+
+        # TEST:
+        # A trial whose defect went unreported would leave the lookups waiting for it waiting for ever, so the bound
+        # turns that into a failure.
+        lookups = await wait_for(
+            fut=gather(
+                *(
+                    client.look_up(
+                        lemma=lemma,
+                    )
+                    for lemma in _HOLMES_WORDS
+                ),
+            ),
+            timeout=1.0,
+        )
+
+        assert tuple(lookup.failure_reason for lookup in lookups) == (
+            "transport_error",
+            "circuit_open",
+            "circuit_open",
+            "circuit_open",
+        )
+
+        assert (
+            client.activity().circuit,
+            client.activity().retry_in_seconds,
+        ) == (
+            BreakerState.OPEN,
+            30.0,
+        )
+
+    async def test_only_a_failed_trial_is_logged_as_reopening_the_circuit(
+        self,
+        *,
+        caplog: LogCaptureFixture,
+    ) -> None:
+        clock = FakeMonotonicClock()
+
+        release = Event()
+
+        answering = Event()
+
+        async def handler(
+            request: Request,
+            /,
+        ) -> Response:
+            if request.url.path.endswith(
+                "/photograph",
+            ):
+                await release.wait()
+
+            if answering.is_set():
+                return Response(
+                    status_code=200,
+                    json=_PAYLOAD,
+                )
+
+            return Response(
+                status_code=400,
+            )
+
+        client = _client_over(
+            handler,
+            clock,
+        )
+
+        with caplog.at_level(
+            level=DEBUG,
+            logger="wordwinnow.dictionary",
+        ):
+            late = create_task(
+                coro=client.look_up(
+                    lemma="photograph",
+                ),
+            )
+
+            await _until(
+                client,
+                "photograph",
+                WaitCause.PROVIDER,
+            )
+
+            for _ in range(
+                5,
+            ):
+                await client.look_up(
+                    lemma="egria",
+                )
+
+            clock.advance(
+                seconds=31.0,
+            )
+
+            # NOTE:
+            # The word admitted before the circuit opened fails once the recovery period is over, when the state alone
+            # would have taken its failure for a failed trial's.
+            release.set()
+
+            await late
+
+            after_the_late_failure = client.activity()
+
+            clock.advance(
+                seconds=31.0,
+            )
+
+            await client.look_up(
+                lemma="mask",
+            )
+
+            clock.advance(
+                seconds=31.0,
+            )
+
+            answering.set()
+
+            await client.look_up(
+                lemma="mask",
+            )
+
+        assert (
+            after_the_late_failure.circuit,
+            after_the_late_failure.retry_in_seconds,
+        ) == (
+            BreakerState.OPEN,
+            30.0,
+        )
+
+        assert _circuit_events(
+            caplog,
         ) == (
             (
                 "WARNING",

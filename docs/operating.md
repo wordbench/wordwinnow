@@ -330,6 +330,10 @@ attempts, and when they fail, the thirty seconds start again from then, so
 against a provider that answers nothing at all, the dictionary stage can end
 up to a minute after the client stopped asking.
 
+When such a word is answered instead, the client still waits out the thirty
+seconds, because only the word tried closes the circuit, and a word that ends
+while that one is being tried leaves the outcome to it.
+
 Each step is a log event:
 
 | Event | Level | When |
@@ -339,7 +343,7 @@ Each step is a log event:
 | `dictionary.circuit.opened` | `WARNING` | Five words in a row went unanswered, and the client stops asking |
 | `dictionary.circuit.trial` | `DEBUG` | The thirty seconds are over, and one word is tried |
 | `dictionary.circuit.reopened` | `INFO` | The word tried went unanswered too |
-| `dictionary.circuit.closed` | `INFO` | The dictionary answered, and the client asks as usual again |
+| `dictionary.circuit.closed` | `INFO` | The word tried was answered, and the client asks as usual again |
 
 A source that fails or does not answer in time is refused to the learner with
 its reason, and intake logs the same reason as `source.unavailable`, at `WARNING`,
