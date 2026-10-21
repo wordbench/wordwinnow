@@ -30,6 +30,9 @@ from pytest import (
 from rich.console import (
     Console,
 )
+from rich.text import (
+    Text,
+)
 from typer.testing import (
     CliRunner,
 )
@@ -366,7 +369,15 @@ class TestCli:
 
         assert result.exit_code == 2
 
-        assert "--level" in result.output
+        # NOTE:
+        # Typer styles its output as for a terminal wherever `GITHUB_ACTIONS` is set, and the highlighter then renders
+        # `--level` as two styled runs, so the assertion reads the plain text under the styling.
+        assert (
+            "--level"
+            in Text.from_ansi(
+                text=result.output,
+            ).plain
+        )
 
     def test_a_report_says_how_many_words_it_left_out(
         self,
