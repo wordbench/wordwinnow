@@ -6,6 +6,7 @@ from enum import (
     StrEnum,
 )
 from typing import (
+    final,
     override,
 )
 
@@ -20,6 +21,7 @@ class UnorderedStrEnum(
     """
 
     @override
+    @final
     def __lt__(
         self,
         other: object,
@@ -28,6 +30,7 @@ class UnorderedStrEnum(
         return NotImplemented
 
     @override
+    @final
     def __le__(
         self,
         other: object,
@@ -36,6 +39,7 @@ class UnorderedStrEnum(
         return NotImplemented
 
     @override
+    @final
     def __gt__(
         self,
         other: object,
@@ -44,6 +48,7 @@ class UnorderedStrEnum(
         return NotImplemented
 
     @override
+    @final
     def __ge__(
         self,
         other: object,
