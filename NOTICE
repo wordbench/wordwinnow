@@ -44,8 +44,18 @@ relations a report shows are WordNet's, under the WordNet 3.0 license, which a
 report names when WordNet serves as its dictionary.
 
 The tests quote a few WordNet glosses word for word, to check the adapters
-that read them; the WordNet license permits copying on condition that its
-notice accompanies the copies, and that notice closes this file.
+that read them, and the two recordings in the README show WordNet's glosses
+and relations, the definitions the stand-in for the dictionary provider serves
+in the operator's recording included; the WordNet license permits copying on
+condition that its notice accompanies the copies, and that notice closes this
+file.
+
+Princeton University's page on citing WordNet adds a condition the license
+text does not state, that proper reference be made to the project with an
+appropriate citation, and Wordwinnow cites George A. Miller, "WordNet: A
+Lexical Database for English," Communications of the ACM 38, no. 11 (1995):
+39–41, and Christiane Fellbaum, ed., WordNet: An Electronic Lexical Database
+(Cambridge, MA: MIT Press, 1998).
 
 **Word frequencies.** The frequencies come from the `wordfreq` package, which
 the project installs rather than ships, and whose data is licensed CC BY-SA

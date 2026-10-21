@@ -106,6 +106,10 @@ The recording asks a stand-in for the dictionary provider, which, when it is
 told to, refuses requests over a limit of its own, stops answering, and
 answers again, so that the limit, the outage, and the recovery come on cue.
 
+Every meaning and related word the two recordings show is WordNet's, the
+stand-in's definitions included, under Princeton University's WordNet 3.0
+license, which [`NOTICE`](NOTICE) reproduces with the citation Princeton calls for.
+
 [`docs/getting-started.md`](docs/getting-started.md) takes it from here.
 
 ## How the code is organized
