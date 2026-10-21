@@ -193,8 +193,11 @@ def meaning_of(
     study_item: StudyItem,
 ) -> str:
     """
-    The one line a learner reads as the meaning: the gloss with its source
-    marked, or why there is none.
+    The one line a learner reads where the meaning goes: the gloss with its
+    source marked, or, when there is no gloss, why there is none.
+
+    A definition the dictionary could not be asked for is unknown rather than
+    missing, and its reason is said in words, never as the meaning itself.
     """
 
     gloss = study_item.gloss
@@ -224,9 +227,34 @@ def meaning_of(
         return "-"
 
     if dictionary.outcome is LookupOutcome.UNAVAILABLE:
-        return f"dictionary unavailable: {dictionary.failure_reason}"
+        reason = (dictionary.failure_reason or "").replace(
+            "_",
+            " ",
+        )
+
+        return (
+            f"unknown: the dictionary was unavailable ({reason})"
+            if reason
+            else "unknown: the dictionary was unavailable"
+        )
 
     return "no definition found"
+
+
+def _meaning_markup(
+    study_item: StudyItem,
+    /,
+) -> str:
+    # NOTE:
+    # A meaning is lexical text and may hold square brackets, which markup would swallow, so it is escaped; a line
+    # that says why there is no meaning is set apart in dim italics, so it never reads as the word's meaning.
+    text = escape(
+        markup=meaning_of(
+            study_item=study_item,
+        ),
+    )
+
+    return text if study_item.gloss is not None else f"[dim italic]{text}[/]"
 
 
 def _related_of(
@@ -508,11 +536,13 @@ def render_items(
             str(
                 object=study_item.item.occurrence_count,
             ),
-            meaning_of(
-                study_item=study_item,
-            ),
-            _related_of(
+            _meaning_markup(
                 study_item,
+            ),
+            escape(
+                markup=_related_of(
+                    study_item,
+                ),
             ),
         )
 
@@ -593,10 +623,8 @@ def render_cards(
 
         console.print(
             f"  {
-                escape(
-                    markup=meaning_of(
-                        study_item=study_item,
-                    ),
+                _meaning_markup(
+                    study_item,
                 )
             }",
         )

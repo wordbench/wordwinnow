@@ -2,6 +2,9 @@
 The report a learner reads.
 """
 
+from csv import (
+    reader,
+)
 from datetime import (
     UTC,
     datetime,
@@ -60,7 +63,11 @@ from wordwinnow.domain.study import (
 from wordwinnow.domain.vocabulary import (
     VocabularyItem,
 )
+from wordwinnow.infrastructure.dictionary.wire import (
+    FailureReason,
+)
 from wordwinnow.services.cli.report import (
+    meaning_of,
     render_cards,
     render_items,
     render_summary,
@@ -295,7 +302,9 @@ class TestRendering:
 
         assert "= perfidy, perfidiousness" in text
 
-        assert "dictionary unavailable: timed_out" in text
+        assert "unknown: the dictionary was unavailable (timed out)" in text
+
+        assert "timed_out" not in text
 
         assert "focus 1, stretch 1, review 1, known 1" in text
 
@@ -353,6 +362,227 @@ class TestRendering:
         assert (
             "Definitions shown under WordNet 3.0 license (https://wordnet.princeton.edu/license-and-commercial-use)."
         ) in console.export_text()
+
+    def test_a_refused_lookup_of_a_word_wordnet_lacks_reads_as_unknown_and_never_as_its_meaning(
+        self,
+    ) -> None:
+        # NOTE:
+        # The row dogfooding found: a word WordNet does not hold, looked up while the dictionary's circuit was open,
+        # so neither the dictionary nor WordNet gives it a meaning.
+        refused = _item(
+            "extraordinaires",
+            StudyTier.FOCUS,
+            CefrLevel.C2,
+            example_sentence="The scientists were extraordinaires.",
+            dictionary=DictionaryInformation(
+                outcome=LookupOutcome.UNAVAILABLE,
+                failure_reason=FailureReason.CIRCUIT_OPEN,
+                phonetic=None,
+                definitions=(),
+            ),
+        )
+
+        for render in (
+            render_items,
+            render_cards,
+        ):
+            console = Console(
+                record=True,
+                width=200,
+            )
+
+            render(
+                items=(refused,),
+                console=console,
+            )
+
+            text = console.export_text(
+                clear=False,
+            )
+
+            assert "unknown: the dictionary was unavailable (circuit open)" in text
+
+            assert "circuit_open" not in text
+
+            assert "dictionary unavailable" not in text
+
+            # NOTE:
+            # Set apart from any meaning: the line is dim and italic, whatever the highlighter makes of its
+            # parentheses.
+            assert (
+                '<span style="color: #7f7f7f; text-decoration-color: #7f7f7f; font-style: italic">unknown: the '
+                "dictionary was unavailable"
+            ) in console.export_html(
+                inline_styles=True,
+            )
+
+    def test_every_reason_a_lookup_went_unanswered_is_said_in_words_as_an_unknown_meaning(
+        self,
+    ) -> None:
+        said = {
+            FailureReason.CIRCUIT_OPEN: "circuit open",
+            FailureReason.TIMED_OUT: "timed out",
+            FailureReason.TRANSPORT_ERROR: "transport error",
+            FailureReason.RATE_LIMITED: "rate limited",
+            FailureReason.PROVIDER_ERROR: "provider error",
+            FailureReason.INVALID_RESPONSE: "invalid response",
+        }
+
+        assert set(
+            said,
+        ) == set(
+            FailureReason,
+        )
+
+        for (
+            reason,
+            words,
+        ) in said.items():
+            assert (
+                meaning_of(
+                    study_item=_item(
+                        "window",
+                        StudyTier.REVIEW,
+                        CefrLevel.A1,
+                        example_sentence="Holmes glanced out of the window.",
+                        dictionary=DictionaryInformation(
+                            outcome=LookupOutcome.UNAVAILABLE,
+                            failure_reason=reason,
+                            phonetic=None,
+                            definitions=(),
+                        ),
+                    ),
+                )
+                == f"unknown: the dictionary was unavailable ({words})"
+            )
+
+    def test_a_missing_entry_an_unavailable_dictionary_and_no_dictionary_each_read_differently(
+        self,
+    ) -> None:
+        def meaning(
+            dictionary: DictionaryInformation | None,
+            /,
+        ) -> str:
+            return meaning_of(
+                study_item=_item(
+                    "window",
+                    StudyTier.REVIEW,
+                    CefrLevel.A1,
+                    example_sentence="Holmes glanced out of the window.",
+                    dictionary=dictionary,
+                ),
+            )
+
+        assert (
+            meaning(
+                DictionaryInformation(
+                    outcome=LookupOutcome.NOT_FOUND,
+                    failure_reason=None,
+                    phonetic=None,
+                    definitions=(),
+                ),
+            ),
+            meaning(
+                _UNAVAILABLE,
+            ),
+            meaning(
+                None,
+            ),
+        ) == (
+            "no definition found",
+            "unknown: the dictionary was unavailable (timed out)",
+            "-",
+        )
+
+    def test_a_definition_keeps_its_square_brackets_in_the_table_and_on_the_card(
+        self,
+    ) -> None:
+        bracketed = _item(
+            "mask",
+            StudyTier.FOCUS,
+            CefrLevel.B2,
+            example_sentence="The King wore a black mask.",
+            dictionary=DictionaryInformation(
+                outcome=LookupOutcome.FOUND,
+                failure_reason=None,
+                phonetic=None,
+                definitions=(
+                    SelectedDefinition(
+                        text="A covering [chiefly for the face] that hides who wears it.",
+                        example=None,
+                        part_of_speech_matched=True,
+                    ),
+                ),
+            ),
+        )
+
+        for render in (
+            render_items,
+            render_cards,
+        ):
+            console = Console(
+                record=True,
+                width=200,
+            )
+
+            render(
+                items=(bracketed,),
+                console=console,
+            )
+
+            assert "A covering [chiefly for the face] that hides who wears it." in console.export_text()
+
+    def test_an_unavailable_lookup_exports_an_empty_meaning_and_keeps_its_outcome_typed(
+        self,
+    ) -> None:
+        analysis = _completed()
+
+        window = loads(
+            s=to_json(
+                analysis=analysis,
+            ),
+        )["items"][2]
+
+        assert (
+            window["lemma"],
+            window["gloss"],
+            window["dictionary"]["outcome"],
+            window["dictionary"]["failure_reason"],
+        ) == (
+            "window",
+            None,
+            "unavailable",
+            "timed_out",
+        )
+
+        (
+            header,
+            *rows,
+        ) = reader(
+            to_csv(
+                items=analysis.items,
+            ).splitlines(),
+        )
+
+        row = dict(
+            zip(
+                header,
+                rows[2],
+                strict=True,
+            ),
+        )
+
+        assert (
+            row["lemma"],
+            row["meaning"],
+            row["meaning_source"],
+        ) == (
+            "window",
+            "",
+            "",
+        )
+
+        assert not any("timed" in cell or "unavailable" in cell for cell in rows[2])
 
     def test_the_cards_show_the_pronunciation_the_relations_and_the_sentence(
         self,

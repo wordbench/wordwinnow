@@ -160,6 +160,12 @@ WordNet is local and always answers; the Free Dictionary API is external and
 optional: an answer can take many seconds, and the service can be unavailable,
 so an analysis finishes without it.
 
+When neither has a meaning for a word, the report says why in its place, set
+apart from a meaning: `no definition found` when the dictionary has no entry for
+the word, and `unknown: the dictionary was unavailable`, with the reason, such
+as `circuit open`, when the dictionary could not be asked, which says nothing
+about the word.
+
 The Free Dictionary API serves Wiktionary's definitions with the license it
 reports for them, CC BY-SA 3.0, so the table names that license under the
 words, and a card and a CSV row carry the Wiktionary page of the definition
