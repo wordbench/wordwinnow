@@ -97,13 +97,14 @@ without `--local` sends the text there.
 While it works, `analyze` says on standard error what it is doing, and
 `--view operator` adds under that line what the dictionary is doing: the lookups
 in flight and what each waits for, the request budget, the answers that came
-from the cache, the retries, and the circuit.
+from the cache, the retries, the circuit, and the breaker's count of failures
+in a row.
 
-![The operator's view of an outage and a recovery in the distributed mode](docs/images/operator.gif)
+![The operator's view of a request limit, an outage, and a recovery](docs/images/operator.gif)
 
-The recording asks a stand-in for the dictionary provider, which stops and
-starts answering when it is told to, so that the outage and the recovery come
-on cue.
+The recording asks a stand-in for the dictionary provider, which, when it is
+told to, refuses requests over a limit of its own, stops answering, and
+answers again, so that the limit, the outage, and the recovery come on cue.
 
 [`docs/getting-started.md`](docs/getting-started.md) takes it from here.
 
