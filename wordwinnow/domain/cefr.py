@@ -99,6 +99,7 @@ class CefrLevel(
     def __lt__(
         self,
         other: object,
+        /,
     ) -> bool:
         if not isinstance(
             other,
@@ -112,6 +113,7 @@ class CefrLevel(
     def __le__(
         self,
         other: object,
+        /,
     ) -> bool:
         if not isinstance(
             other,
@@ -125,6 +127,7 @@ class CefrLevel(
     def __gt__(
         self,
         other: object,
+        /,
     ) -> bool:
         if not isinstance(
             other,
@@ -138,6 +141,7 @@ class CefrLevel(
     def __ge__(
         self,
         other: object,
+        /,
     ) -> bool:
         if not isinstance(
             other,

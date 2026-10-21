@@ -493,6 +493,7 @@ class Analysis:
     def __eq__(
         self,
         other: object,
+        /,
     ) -> bool:
         if not isinstance(
             other,
