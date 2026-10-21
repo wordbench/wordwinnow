@@ -653,6 +653,105 @@ class TestCircuitBreaker:
             30.0,
         )
 
+    async def test_the_failures_in_a_row_count_toward_the_threshold_and_start_again_at_an_answer(
+        self,
+    ) -> None:
+        breaker = CircuitBreaker(
+            failure_threshold=3,
+            recovery_seconds=30.0,
+            clock=FakeMonotonicClock(),
+        )
+
+        counts: list[int] = []
+
+        for answered in (
+            False,
+            False,
+            True,
+            False,
+            False,
+            False,
+        ):
+            assert await breaker.permit() is Permit.CALL
+
+            if answered:
+                breaker.record_success(
+                    trial=False,
+                )
+
+            else:
+                breaker.record_failure(
+                    trial=False,
+                )
+
+            counts.append(
+                breaker.consecutive_failures,
+            )
+
+        assert (
+            counts,
+            breaker.failure_threshold,
+            breaker.state,
+        ) == (
+            [
+                1,
+                2,
+                0,
+                1,
+                2,
+                0,
+            ],
+            3,
+            BreakerState.OPEN,
+        )
+
+    async def test_the_count_stays_nought_while_the_circuit_is_open_and_through_its_trial(
+        self,
+    ) -> None:
+        clock = FakeMonotonicClock()
+
+        breaker = await _opened_with_a_call_in_flight(
+            clock,
+        )
+
+        counts = [
+            breaker.consecutive_failures,
+        ]
+
+        clock.advance(
+            seconds=30.0,
+        )
+
+        assert await breaker.permit() is Permit.TRIAL
+
+        breaker.record_failure(
+            trial=False,
+        )
+
+        counts.append(
+            breaker.consecutive_failures,
+        )
+
+        breaker.record_success(
+            trial=True,
+        )
+
+        counts.append(
+            breaker.consecutive_failures,
+        )
+
+        assert (
+            counts,
+            breaker.state,
+        ) == (
+            [
+                0,
+                0,
+                0,
+            ],
+            BreakerState.CLOSED,
+        )
+
     def test_an_invalid_configuration_is_refused(
         self,
     ) -> None:

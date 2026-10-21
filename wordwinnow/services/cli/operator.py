@@ -2,11 +2,11 @@
 What the command line shows an operator while an analysis runs: the learner's
 line, and under it what the dictionary is doing.
 
-Under the line stand the circuit, the request budget, how the analysis's
-lookups have been answered so far, the ones left unanswered and the retries,
-and each lookup in flight with what it is waiting for: a request has a bar
-against its timeout, and a pause before a retry a bar against the pause's
-length.
+Under the line stand the circuit, the breaker's count of lookups that failed
+in a row, the request budget, how the analysis's lookups have been answered so
+far, the ones left unanswered and the retries, and each lookup in flight with
+what it is waiting for: a request has a bar against its timeout, and a pause
+before a retry a bar against the pause's length.
 
 Like the learner's line, the view is drawn on standard error, only at an
 interactive terminal, and disappears when the analysis ends.
@@ -318,6 +318,16 @@ class OperatorProgress:
             ),
         )
 
+        # NOTE:
+        # The breaker's own count stands apart from the unanswered words below, which add up every reason, the open
+        # circuit's refusals included, and never start again, so the two are never read as one number.
+        grid.add_row(
+            "in a row",
+            _in_a_row(
+                provider,
+            ),
+        )
+
         grid.add_row(
             "budget",
             _budget(
@@ -407,6 +417,23 @@ def _circuit(
             return Text.from_markup(
                 text="[yellow]half-open[/yellow]: the next lookup tries the provider",
             )
+
+
+def _in_a_row(
+    provider: ProviderActivity,
+    /,
+) -> str:
+    count = provider.consecutive_failures
+
+    threshold = provider.failure_threshold
+
+    if count is None or threshold is None:
+        return "not reported by this dictionary"
+
+    if provider.circuit is not BreakerState.CLOSED:
+        return "not counted while the circuit is open: the trial decides"
+
+    return f"{count} of {threshold} lookups failed since the last answer; at {threshold} the circuit opens"
 
 
 def _budget(

@@ -3,6 +3,9 @@ The operator's view the command line shows on standard error: the learner's
 line, and under it what the dictionary is doing.
 """
 
+from dataclasses import (
+    replace,
+)
 from io import (
     StringIO,
 )
@@ -64,6 +67,8 @@ _BEFORE: Final = DictionaryActivity(
     provider=ProviderActivity(
         circuit=BreakerState.CLOSED,
         retry_in_seconds=None,
+        consecutive_failures=1,
+        failure_threshold=5,
         tokens=4.0,
         burst=4,
         requests_per_second=2.0,
@@ -96,6 +101,8 @@ _DURING: Final = DictionaryActivity(
     provider=ProviderActivity(
         circuit=BreakerState.HALF_OPEN,
         retry_in_seconds=None,
+        consecutive_failures=0,
+        failure_threshold=5,
         tokens=1.4,
         burst=4,
         requests_per_second=2.0,
@@ -266,6 +273,8 @@ class TestOperatorProgress:
                     provider=ProviderActivity(
                         circuit=BreakerState.OPEN,
                         retry_in_seconds=23.4,
+                        consecutive_failures=0,
+                        failure_threshold=5,
                         tokens=4.0,
                         burst=4,
                         requests_per_second=2.0,
@@ -288,6 +297,102 @@ class TestOperatorProgress:
         assert "open: no new lookup asks the provider for 20 s more" in drawn
 
         assert "in flight    nothing" in drawn
+
+    def test_the_breakers_run_of_failures_stands_apart_from_the_unanswered_total(
+        self,
+    ) -> None:
+        stream = StringIO()
+
+        with OperatorProgress(
+            console=_terminal(
+                stream,
+            ),
+            refresh_per_second=1,
+        ) as progress:
+            progress.watched(
+                activity=_BEFORE,
+            )
+
+            progress.watched(
+                activity=DictionaryActivity(
+                    counts=replace(
+                        _BEFORE.counts,
+                        unavailable=MappingProxyType(
+                            mapping={
+                                "provider_error": 5,
+                                "circuit_open": 2,
+                            },
+                        ),
+                    ),
+                    provider=replace(
+                        _BEFORE.provider,
+                        consecutive_failures=3,
+                    ),
+                ),
+            )
+
+        drawn = _drawn(
+            stream,
+        )
+
+        for expected in (
+            "in a row     3 of 5 lookups failed since the last answer; at 5 the circuit opens",
+            "unavailable  6 (4 server error, 2 circuit open)",
+        ):
+            assert expected in drawn, expected
+
+    def test_while_the_circuit_is_open_the_trial_decides_rather_than_a_count(
+        self,
+    ) -> None:
+        stream = StringIO()
+
+        with OperatorProgress(
+            console=_terminal(
+                stream,
+            ),
+            refresh_per_second=1,
+        ) as progress:
+            progress.watched(
+                activity=replace(
+                    _BEFORE,
+                    provider=replace(
+                        _BEFORE.provider,
+                        circuit=BreakerState.OPEN,
+                        retry_in_seconds=12.0,
+                        consecutive_failures=0,
+                    ),
+                ),
+            )
+
+        assert "in a row     not counted while the circuit is open: the trial decides" in _drawn(
+            stream,
+        )
+
+    def test_a_dictionary_that_does_not_report_its_run_of_failures_says_so(
+        self,
+    ) -> None:
+        stream = StringIO()
+
+        with OperatorProgress(
+            console=_terminal(
+                stream,
+            ),
+            refresh_per_second=1,
+        ) as progress:
+            progress.watched(
+                activity=replace(
+                    _BEFORE,
+                    provider=replace(
+                        _BEFORE.provider,
+                        consecutive_failures=None,
+                        failure_threshold=None,
+                    ),
+                ),
+            )
+
+        assert "in a row     not reported by this dictionary" in _drawn(
+            stream,
+        )
 
     def test_a_dictionary_it_cannot_read_is_named_with_the_reason(
         self,

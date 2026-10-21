@@ -126,11 +126,18 @@ class ProviderActivityPayload(
     """
     The provider client's activity on the wire, with the circuit's state named
     as the metrics name it.
+
+    The breaker's failure count and threshold are absent from what a service
+    older than them sends, and are then read as not reported.
     """
 
     circuit: CircuitName
 
     retry_in_seconds: float | None = None
+
+    consecutive_failures: int | None = None
+
+    failure_threshold: int | None = None
 
     tokens: float
 
@@ -181,6 +188,8 @@ def to_payload(
         provider=ProviderActivityPayload(
             circuit=_CIRCUIT_NAMES[provider.circuit],
             retry_in_seconds=provider.retry_in_seconds,
+            consecutive_failures=provider.consecutive_failures,
+            failure_threshold=provider.failure_threshold,
             tokens=provider.tokens,
             burst=provider.burst,
             requests_per_second=provider.requests_per_second,
@@ -229,6 +238,8 @@ def from_payload(
         provider=ProviderActivity(
             circuit=_CIRCUITS[provider.circuit],
             retry_in_seconds=provider.retry_in_seconds,
+            consecutive_failures=provider.consecutive_failures,
+            failure_threshold=provider.failure_threshold,
             tokens=provider.tokens,
             burst=provider.burst,
             requests_per_second=provider.requests_per_second,

@@ -551,11 +551,19 @@ class ProviderActivity:
 
     `retry_in_seconds` is set while the circuit is open, and `timeout_seconds`
     is how long one request may take.
+
+    `consecutive_failures` is the breaker's own count of lookups that failed
+    in a row toward `failure_threshold`, unlike any count of unanswered words,
+    and both are `None` where the activity does not report them.
     """
 
     circuit: BreakerState
 
     retry_in_seconds: float | None
+
+    consecutive_failures: int | None
+
+    failure_threshold: int | None
 
     tokens: float
 
@@ -682,6 +690,8 @@ class FreeDictionaryClient:
         return ProviderActivity(
             circuit=self._breaker.state,
             retry_in_seconds=self._breaker.retry_in_seconds,
+            consecutive_failures=self._breaker.consecutive_failures,
+            failure_threshold=self._breaker.failure_threshold,
             tokens=self._bucket.tokens,
             burst=self._bucket.burst,
             requests_per_second=self._bucket.rate_per_second,

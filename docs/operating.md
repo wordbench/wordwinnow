@@ -44,10 +44,20 @@ the worker processing the analysis last wrote beside it, about once a second;
 until that first report, it says whether a worker has taken the analysis.
 
 With `--view operator`, the line stays, and under it the dictionary's mechanics
-appear while the analysis runs: the circuit, the request budget's tokens and
-the lookups waiting for one, how the lookups so far were answered, from the
-cache or by the provider, the ones left unanswered and the retries, each by
-reason, and every lookup in flight.
+appear while the analysis runs: the circuit and the breaker's own count of
+failures in a row, the request budget's tokens and the lookups waiting for
+one, how the lookups so far were answered, from the cache or by the provider,
+the ones left unanswered and the retries, each by reason, and every lookup in
+flight.
+
+The row `in a row` counts the lookups that failed in a row since the last
+answer, against the five that open the circuit; any answer starts it again,
+and while the circuit is open it is not counted, because the trial decides
+instead.
+
+The row `unavailable` is a different number, a total by reason since the
+analysis began, the words the open circuit refused without asking included, so
+it can pass five while `in a row` stays below it and the circuit stays closed.
 
 Each lookup in flight shows what it is waiting for: a token, the provider's
 answer, with a bar against the request's timeout, the pause before another

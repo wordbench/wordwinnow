@@ -280,6 +280,30 @@ class CircuitBreaker:
 
         return self._recovery_seconds - (self._clock() - self._opened_at)
 
+    @property
+    def consecutive_failures(
+        self,
+    ) -> int:
+        """
+        The permitted calls that failed in a row while the circuit was closed,
+        which open it once they reach the threshold.
+
+        The count starts again at any success, and it is nought while the
+        circuit is open, when the trial decides instead.
+        """
+
+        return self._failures
+
+    @property
+    def failure_threshold(
+        self,
+    ) -> int:
+        """
+        How many failures in a row open the circuit.
+        """
+
+        return self._failure_threshold
+
     async def permit(
         self,
     ) -> Permit:

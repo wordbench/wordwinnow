@@ -50,6 +50,8 @@ _ACTIVITY: Final = DictionaryActivity(
     provider=ProviderActivity(
         circuit=BreakerState.HALF_OPEN,
         retry_in_seconds=None,
+        consecutive_failures=0,
+        failure_threshold=5,
         tokens=1.5,
         burst=4,
         requests_per_second=2.0,
@@ -103,6 +105,54 @@ class TestActivityPayload:
                 ),
             )
             == _ACTIVITY
+        )
+
+    def test_the_breakers_count_and_threshold_travel_beside_the_circuit(
+        self,
+    ) -> None:
+        provider = to_payload(
+            activity=_ACTIVITY,
+        ).model_dump(
+            mode="json",
+        )["provider"]
+
+        assert (
+            provider["consecutive_failures"],
+            provider["failure_threshold"],
+        ) == (
+            0,
+            5,
+        )
+
+    def test_a_payload_without_the_breakers_count_reads_as_not_reported(
+        self,
+    ) -> None:
+        # NOTE:
+        # What an enrichment service older than the count sends.
+        written = to_payload(
+            activity=_ACTIVITY,
+        ).model_dump(
+            mode="json",
+        )
+
+        for field in (
+            "consecutive_failures",
+            "failure_threshold",
+        ):
+            del written["provider"][field]
+
+        provider = from_payload(
+            payload=ActivityPayload.model_validate(
+                obj=written,
+            ),
+        ).provider
+
+        assert (
+            provider.consecutive_failures,
+            provider.failure_threshold,
+        ) == (
+            None,
+            None,
         )
 
     def test_the_circuit_travels_by_the_name_the_metrics_give_it(

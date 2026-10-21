@@ -1552,6 +1552,58 @@ class TestFreeDictionaryClient:
 
         assert harness.client.activity().circuit is BreakerState.OPEN
 
+    async def test_the_activity_reports_the_breakers_own_run_of_failures_and_its_threshold(
+        self,
+    ) -> None:
+        def answer(
+            request: Request,
+            /,
+        ) -> Response:
+            if request.url.path.endswith(
+                "/photograph",
+            ):
+                return Response(
+                    status_code=200,
+                    json=_PAYLOAD,
+                )
+
+            return Response(
+                status_code=400,
+            )
+
+        harness = Harness(
+            handler=answer,
+        )
+
+        runs: list[int | None] = []
+
+        for lemma in (
+            "egria",
+            "egria",
+            "photograph",
+            "egria",
+        ):
+            await harness.client.look_up(
+                lemma=lemma,
+            )
+
+            runs.append(
+                harness.client.activity().consecutive_failures,
+            )
+
+        assert (
+            runs,
+            harness.client.activity().failure_threshold,
+        ) == (
+            [
+                1,
+                2,
+                0,
+                1,
+            ],
+            5,
+        )
+
     async def test_the_unavailable_count_is_a_total_by_reason_and_not_the_circuits_run_of_failures(
         self,
     ) -> None:
@@ -1641,8 +1693,8 @@ class TestFreeDictionaryClient:
         ) -> Response:
             asked.append(
                 request.url.path.rsplit(
-                    "/",
-                    1,
+                    sep="/",
+                    maxsplit=1,
                 )[-1],
             )
 
