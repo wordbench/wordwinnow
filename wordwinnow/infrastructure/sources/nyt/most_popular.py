@@ -23,19 +23,19 @@ from wordwinnow.infrastructure.sources.nyt.api import (
 )
 
 KINDS: Final = frozenset(
-    {
+    (
         "viewed",
         "emailed",
         "shared",
-    },
+    ),
 )
 
 PERIODS: Final = frozenset(
-    {
+    (
         "1",
         "7",
         "30",
-    },
+    ),
 )
 
 DEFAULT_PERIOD: Final = "7"

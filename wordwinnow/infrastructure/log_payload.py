@@ -53,10 +53,10 @@ _STANDARD_ATTRIBUTES: Final = frozenset(
         ),
     ),
 ) | frozenset(
-    {
+    (
         "message",
         "asctime",
-    },
+    ),
 )
 
 # NOTE:

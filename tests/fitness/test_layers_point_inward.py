@@ -88,9 +88,7 @@ class TestDependencyDirection:
             _violations(
                 PACKAGE_ROOT / "domain",
                 frozenset(
-                    {
-                        "domain",
-                    },
+                    ("domain",),
                 ),
             )
             == ()
@@ -103,10 +101,10 @@ class TestDependencyDirection:
             _violations(
                 PACKAGE_ROOT / "application",
                 frozenset(
-                    {
+                    (
                         "domain",
                         "application",
-                    },
+                    ),
                 ),
             )
             == ()
@@ -150,9 +148,7 @@ class TestDependencyDirection:
             _violations(
                 domain,
                 frozenset(
-                    {
-                        "domain",
-                    },
+                    ("domain",),
                 ),
             )
             != ()
@@ -176,10 +172,10 @@ class TestDependencyDirection:
             _violations(
                 application,
                 frozenset(
-                    {
+                    (
                         "domain",
                         "application",
-                    },
+                    ),
                 ),
             )
             != ()
@@ -203,10 +199,10 @@ class TestDependencyDirection:
             _violations(
                 application,
                 frozenset(
-                    {
+                    (
                         "domain",
                         "application",
-                    },
+                    ),
                 ),
             )
             != ()

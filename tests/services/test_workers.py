@@ -107,9 +107,7 @@ class WaitingConsumer:
         self,
     ) -> AbstractSet[TopicPartition]:
         return frozenset(
-            {
-                _PARTITION,
-            },
+            (_PARTITION,),
         )
 
     async def end_offsets(
@@ -165,9 +163,7 @@ class LaggingConsumer:
         self,
     ) -> AbstractSet[TopicPartition]:
         return frozenset(
-            {
-                _PARTITION,
-            },
+            (_PARTITION,),
         )
 
     async def end_offsets(

@@ -62,9 +62,7 @@ class TestLearnerProfile:
                 level=CefrLevel.B1,
                 target_level=CefrLevel.B2,
                 known_lemmas=frozenset(
-                    {
-                        "Treachery",
-                    },
+                    ("Treachery",),
                 ),
             )
 
@@ -82,8 +80,8 @@ class TestKnownLemmasFromLines:
                 "mask",
             ),
         ) == frozenset(
-            {
+            (
                 "photograph",
                 "mask",
-            },
+            ),
         )

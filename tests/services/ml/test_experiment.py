@@ -50,7 +50,7 @@ _COUNT: Final = 300
 _SEED: Final = 42
 
 _SECTIONS: Final = frozenset(
-    {
+    (
         "train_size",
         "test_size",
         "train_distribution",
@@ -65,7 +65,7 @@ _SECTIONS: Final = frozenset(
         "fidelity",
         "per_source_accuracy",
         "model_metadata",
-    },
+    ),
 )
 
 

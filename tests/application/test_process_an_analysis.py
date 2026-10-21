@@ -142,14 +142,10 @@ def _pipeline(
                 "sauntered": "saunter",
             },
             proper_nouns=frozenset(
-                {
-                    "Holmes",
-                },
+                ("Holmes",),
             ),
             function_words=frozenset(
-                {
-                    "the",
-                },
+                ("the",),
             ),
         ),
         frequency=FakeWordFrequency(
@@ -270,9 +266,7 @@ class TestRunPipeline:
                 level=CefrLevel.B1,
                 target_level=CefrLevel.B2,
                 known_lemmas=frozenset(
-                    {
-                        "become",
-                    },
+                    ("become",),
                 ),
             ),
             include_dictionary=True,

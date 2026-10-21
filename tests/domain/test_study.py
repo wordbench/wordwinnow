@@ -127,9 +127,7 @@ class TestStudyTier:
             level=CefrLevel.A1,
             target_level=CefrLevel.A2,
             known_lemmas=frozenset(
-                {
-                    "treachery",
-                },
+                ("treachery",),
             ),
         )
 
@@ -224,9 +222,7 @@ class TestWinnow:
             level=CefrLevel.B1,
             target_level=CefrLevel.B2,
             known_lemmas=frozenset(
-                {
-                    "photograph",
-                },
+                ("photograph",),
             ),
         )
 

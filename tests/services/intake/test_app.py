@@ -226,9 +226,7 @@ class TestCreateAnalysis:
         assert stored.profile.target_level is CefrLevel.B2
 
         assert stored.profile.known_lemmas == frozenset(
-            {
-                "catch",
-            },
+            ("catch",),
         )
 
         assert isinstance(

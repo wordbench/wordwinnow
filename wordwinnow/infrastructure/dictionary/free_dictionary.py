@@ -127,7 +127,7 @@ _BASE_BACKOFF_SECONDS: Final = 0.5
 #
 # A 404 is an answer, and any other 4xx is a request the provider will keep refusing.
 _RETRYABLE_STATUSES: Final = frozenset(
-    {
+    (
         # NOTE:
         # Too Many Requests.
         429,
@@ -146,7 +146,7 @@ _RETRYABLE_STATUSES: Final = frozenset(
         # NOTE:
         # Connection Timed Out.
         522,
-    },
+    ),
 )
 
 # NOTE:

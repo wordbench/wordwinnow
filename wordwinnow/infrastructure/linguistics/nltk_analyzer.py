@@ -58,29 +58,29 @@ _WORDNET_POS: Final = MappingProxyType(
 )
 
 _PROPER_NOUN_TAGS: Final = frozenset(
-    {
+    (
         "NNP",
         "NNPS",
-    },
+    ),
 )
 
 # NOTE:
 # The past tense and the past participle: a verb carrying either tag is not in its base form.
 _PAST_TAGS: Final = frozenset(
-    {
+    (
         "VBD",
         "VBN",
-    },
+    ),
 )
 
 # NOTE:
 # Adverb tags that are not adverbs a learner studies: `RP` is a particle (`up` in `give up`) and `WRB` a question word
 # (`where`).
 _NOT_ADVERB_TAGS: Final = frozenset(
-    {
+    (
         "RP",
         "WRB",
-    },
+    ),
 )
 
 

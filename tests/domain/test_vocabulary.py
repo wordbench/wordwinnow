@@ -24,10 +24,10 @@ from wordwinnow.domain.vocabulary import (
 )
 
 _FUNCTION_WORDS: Final = frozenset(
-    {
+    (
         "the",
         "very",
-    },
+    ),
 )
 
 

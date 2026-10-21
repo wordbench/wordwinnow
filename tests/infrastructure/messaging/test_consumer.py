@@ -222,9 +222,7 @@ class RevokingConsumer:
             return frozenset()
 
         return frozenset(
-            {
-                _PARTITION,
-            },
+            (_PARTITION,),
         )
 
     async def end_offsets(
@@ -746,9 +744,7 @@ class TestPartitionHandoff:
         async def revoke() -> None:
             await handoff.on_partitions_revoked(
                 frozenset(
-                    {
-                        _PARTITION,
-                    },
+                    (_PARTITION,),
                 ),
             )
 
@@ -788,9 +784,7 @@ class TestPartitionHandoff:
         revocation = create_task(
             coro=PartitionHandoff().on_partitions_revoked(
                 frozenset(
-                    {
-                        _PARTITION,
-                    },
+                    (_PARTITION,),
                 ),
             ),
         )
@@ -850,9 +844,7 @@ class TestPartitionHandoff:
         revocation = create_task(
             coro=handoff.on_partitions_revoked(
                 frozenset(
-                    {
-                        _PARTITION,
-                    },
+                    (_PARTITION,),
                 ),
             ),
         )

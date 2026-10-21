@@ -114,9 +114,7 @@ PROFILE: Final = LearnerProfile(
     level=CefrLevel.B1,
     target_level=CefrLevel.C1,
     known_lemmas=frozenset(
-        {
-            "resolute",
-        },
+        ("resolute",),
     ),
 )
 
