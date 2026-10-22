@@ -11,12 +11,16 @@ from typing import (
 )
 
 from sqlalchemy import (
+    ColumnElement,
     and_,
     delete,
     func,
     or_,
     select,
     update,
+)
+from sqlalchemy import (
+    inspect as inspect_mapping,
 )
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
@@ -142,6 +146,122 @@ class SqlAlchemyAnalysisRepository:
                 analysis=analysis,
             ),
         )
+
+    async def save_unless_completed(
+        self,
+        *,
+        analysis: Analysis,
+    ) -> bool:
+        """
+        Store the state a run starts or ends with, unless another run has
+        already completed the analysis, and replace the item rows only when it
+        is stored.
+        """
+
+        return await self._save_where(
+            analysis,
+            AnalysisRow.status != AnalysisStatus.COMPLETED,
+        )
+
+    async def save_while_processing(
+        self,
+        *,
+        analysis: Analysis,
+        started_at: datetime,
+    ) -> bool:
+        """
+        Store the state of an analysis only while the stored one is still
+        processing the run that started at `started_at`, and replace the item
+        rows only when it is stored.
+        """
+
+        # WARN:
+        # The start stands for the run and is compared exactly, which both stores allow because each keeps the
+        # microsecond the clock read; only a clock that reads again an instant read for an earlier run gives two runs
+        # one start, and then the earlier run's failure is stored over the later run.
+        return await self._save_where(
+            analysis,
+            and_(
+                AnalysisRow.status == AnalysisStatus.PROCESSING,
+                AnalysisRow.started_at
+                == utc_of(
+                    value=started_at,
+                ),
+            ),
+        )
+
+    async def _save_where(
+        self,
+        analysis: Analysis,
+        condition: ColumnElement[bool],
+        /,
+    ) -> bool:
+        row = analysis_to_row(
+            analysis=analysis,
+        )
+
+        # WARN:
+        # The condition is part of the update rather than read first, so a run cannot write over a change it has not
+        # seen: on PostgreSQL an update that meets another transaction's uncommitted change waits for it to commit and
+        # then tests the condition against the row that transaction left, and SQLite writes one transaction at a time.
+        stored = (
+            await self._session.execute(
+                statement=(
+                    update(
+                        table=AnalysisRow,
+                    )
+                    .where(
+                        AnalysisRow.id
+                        == str(
+                            object=analysis.id,
+                        ),
+                        condition,
+                    )
+                    .values(
+                        **{
+                            attribute.key: getattr(
+                                row,
+                                attribute.key,
+                            )
+                            for attribute in inspect_mapping(
+                                subject=AnalysisRow,
+                            ).column_attrs
+                            if attribute.key != "id"
+                        },
+                    )
+                    .returning(
+                        AnalysisRow.id,
+                    )
+                    .execution_options(
+                        synchronize_session=False,
+                    )
+                ),
+            )
+        ).scalar_one_or_none()
+
+        if stored is None:
+            return False
+
+        await self._session.execute(
+            statement=(
+                delete(
+                    table=VocabularyItemRow,
+                ).where(
+                    VocabularyItemRow.analysis_id
+                    == str(
+                        object=analysis.id,
+                    ),
+                )
+            ),
+        )
+
+        self._session.add_all(
+            instances=item_rows_of(
+                analysis=analysis,
+            ),
+        )
+
+        return True
 
     async def record_progress(
         self,

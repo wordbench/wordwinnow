@@ -403,16 +403,33 @@ one's commit is lost.
 A cold analysis against the Free Dictionary API can take longer than five
 minutes, so with more than one worker such an analysis can be handled twice.
 
-Handling a record again changes nothing a reader sees:
+Handling a record again never changes a completed result:
 
 - A completed analysis is returned as it is, and its completion is published
   again, because the worker that completed it may have stopped between storing
-  the result and publishing it; it is not counted twice in the metrics, except
-  when two workers handle it at the same time, as above, and both count it.
-- Two saves of one analysis at the same time are serialized by the store,
-  which keeps the later one's result.
+  the result and publishing it; it is not counted again in the metrics.
+- When two workers handle one analysis at the same time, the first to complete
+  it decides the result, because every write that can follow a completion is
+  conditional at the store: a run that finds the analysis completed only as it
+  stores its start is handled as a redelivery, a run that ends after the other
+  completed it stores and publishes nothing, and the requeue command hands
+  back only an analysis still held by the run it found stale.
+- A run that fails after another run has started the analysis again stores no
+  failure, so the analysis is not shown as failed while that run can still
+  complete it, although the worker still counts the failed run in the metrics.
 - ClickHouse merges repeated facts into one row per fact, and every read asks
   for the merged view, `FINAL`, so a repeat is never counted.
+
+None of this makes delivery exactly once: the store's commit and the broker's
+publish are separate operations, so two workers can both run the pipeline for
+one analysis, a completion can be published more than once, and a completion
+whose publish fails after its commit is published when its request is
+delivered again, which the uncommitted offset ensures.
+
+A run tells that the analysis is still its own by the instant it started,
+which both stores keep to the microsecond: a run that takes another over reads
+its clock after it has read the other's start, so the two starts differ unless
+the second worker's clock lags the first's by exactly the time between them.
 
 ### One event loop per process
 

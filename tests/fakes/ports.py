@@ -159,6 +159,43 @@ class InMemoryAnalysisRepository:
             None,
         )
 
+    async def save_unless_completed(
+        self,
+        *,
+        analysis: Analysis,
+    ) -> bool:
+        stored = self._storage.get(
+            analysis.id,
+        )
+
+        if stored is not None and stored.status is AnalysisStatus.COMPLETED:
+            return False
+
+        await self.save(
+            analysis=analysis,
+        )
+
+        return True
+
+    async def save_while_processing(
+        self,
+        *,
+        analysis: Analysis,
+        started_at: datetime,
+    ) -> bool:
+        stored = self._storage.get(
+            analysis.id,
+        )
+
+        if stored is None or stored.status is not AnalysisStatus.PROCESSING or stored.started_at != started_at:
+            return False
+
+        await self.save(
+            analysis=analysis,
+        )
+
+        return True
+
     async def record_progress(
         self,
         *,

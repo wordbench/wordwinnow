@@ -22,6 +22,7 @@ from wordwinnow.application.ports.uow import (
     UnitOfWorkFactory,
 )
 from wordwinnow.domain.analysis import (
+    Analysis,
     AnalysisRequested,
     AnalysisStatus,
 )
@@ -47,6 +48,10 @@ async def requeue_stale_analyses(
     A stale requested analysis is republished as it is; a stale processing one
     is failed and reopened, the domain's only way back to requested, which
     clears its start and its failure, and is then republished.
+
+    A processing analysis that its run completed or failed, or that another
+    run started again, after it was found stale is left as it is and not
+    republished.
     """
 
     now = clock.now()
@@ -55,13 +60,17 @@ async def requeue_stale_analyses(
         seconds=older_than_seconds,
     )
 
+    requeued: list[Analysis] = []
+
     async with new_unit_of_work() as uow:
         stale = await uow.analyses.list_stale(
             stale_before=threshold,
         )
 
         for analysis in stale:
-            if analysis.status is AnalysisStatus.PROCESSING:
+            started_at = analysis.started_at
+
+            if analysis.status is AnalysisStatus.PROCESSING and started_at is not None:
                 analysis.fail(
                     at=now,
                     reason="processing was interrupted",
@@ -71,18 +80,28 @@ async def requeue_stale_analyses(
                     at=now,
                 )
 
-                await uow.analyses.save(
+                # WARN:
+                # The analysis can change after the list above was read, and an unconditional save would turn a result
+                # back into a request or take an analysis from a run that has just started it, so only the run found
+                # stale is handed back.
+                if not await uow.analyses.save_while_processing(
                     analysis=analysis,
-                )
+                    started_at=started_at,
+                ):
+                    continue
 
             analysis.pull_events()
+
+            requeued.append(
+                analysis,
+            )
 
         await uow.commit()
 
     # NOTE:
     # The store is committed before anything is published, as when an analysis is first requested: a publish that
     # fails leaves a requested analysis the next run finds again, never a message about a change that was rolled back.
-    for analysis in stale:
+    for analysis in requeued:
         await publisher.publish(
             analysis=analysis,
             event=AnalysisRequested(
@@ -91,4 +110,4 @@ async def requeue_stale_analyses(
             ),
         )
 
-    return tuple(analysis.id for analysis in stale)
+    return tuple(analysis.id for analysis in requeued)

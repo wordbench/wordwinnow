@@ -391,6 +391,16 @@ async def process_an_analysis(
     Processing is idempotent under redelivery: a completed analysis is
     returned as it is and its completion published again, and an analysis left
     processing by a worker that died is failed, reopened, and processed again.
+
+    The first run to complete an analysis decides its result: a run that finds
+    it completed only as it stores its own start is a redelivery too, and a
+    run that ends after another run completed it stores and publishes nothing,
+    returning the stored analysis if it completed and raising its error if it
+    failed.
+
+    A run that fails after another run has started the analysis again stores
+    nothing either, so the analysis is not shown as failed while that run is
+    still working on it.
     """
 
     async with new_unit_of_work() as uow:
@@ -404,18 +414,9 @@ async def process_an_analysis(
             )
 
         if analysis.status is AnalysisStatus.COMPLETED:
-            # WARN:
-            # The result is committed before its completion is published, so a worker can stop, or the broker refuse,
-            # in between; the requested message then arrives again and finds a completed analysis, and publishing the
-            # completion once more is what keeps it from being lost, while the fact store keeps one row per fact.
-            await publisher.publish(
-                analysis=analysis,
-                event=analysis.completion(),
-            )
-
-            return ProcessedAnalysis(
-                analysis=analysis,
-                redelivered=True,
+            return await _published_again(
+                analysis,
+                publisher,
             )
 
         if analysis.status is AnalysisStatus.PROCESSING:
@@ -435,15 +436,37 @@ async def process_an_analysis(
 
         analysis.pull_events()
 
+        started_at = clock.now()
+
         analysis.start(
-            at=clock.now(),
+            at=started_at,
         )
 
-        await uow.analyses.save(
+        # WARN:
+        # Another run can complete the analysis after the read above, and an unconditional save would turn its result
+        # back into a run in progress, so the start is stored only while the analysis is not completed.
+        started = await uow.analyses.save_unless_completed(
             analysis=analysis,
         )
 
-        await uow.commit()
+        if started:
+            await uow.commit()
+
+    if not started:
+        async with new_unit_of_work() as uow:
+            completed = await uow.analyses.get(
+                analysis_id=analysis_id,
+            )
+
+        if completed is None:
+            raise AnalysisNotFoundError(
+                f"no analysis {analysis_id}",
+            )
+
+        return await _published_again(
+            completed,
+            publisher,
+        )
 
     try:
         result = await run_pipeline(
@@ -463,11 +486,15 @@ async def process_an_analysis(
             reason=f"{kind}: {exception}",
         )
 
-        await _save_and_publish(
-            analysis,
-            new_unit_of_work,
-            publisher,
-        )
+        # NOTE:
+        # The failure is stored only while the analysis is still this run's: a run whose analysis another run has
+        # started again, completed, or handed back since leaves it to that run, and a failure publishes no event.
+        async with new_unit_of_work() as uow:
+            if await uow.analyses.save_while_processing(
+                analysis=analysis,
+                started_at=started_at,
+            ):
+                await uow.commit()
 
         raise
 
@@ -477,15 +504,44 @@ async def process_an_analysis(
         stage_timings=result.stage_timings,
     )
 
-    await _save_and_publish(
+    if not await _save_and_publish(
         analysis,
         new_unit_of_work,
         publisher,
-    )
+    ):
+        async with new_unit_of_work() as uow:
+            stored = await uow.analyses.get(
+                analysis_id=analysis.id,
+            )
+
+        return ProcessedAnalysis(
+            analysis=stored if stored is not None else analysis,
+            redelivered=True,
+        )
 
     return ProcessedAnalysis(
         analysis=analysis,
         redelivered=False,
+    )
+
+
+async def _published_again(
+    analysis: Analysis,
+    publisher: AnalysisEventPublisher,
+    /,
+) -> ProcessedAnalysis:
+    # WARN:
+    # The result is committed before its completion is published, so a worker can stop, or the broker refuse, in
+    # between; the requested message then arrives again and finds a completed analysis, and publishing the completion
+    # once more is what keeps it from being lost, while the fact store keeps one row per fact.
+    await publisher.publish(
+        analysis=analysis,
+        event=analysis.completion(),
+    )
+
+    return ProcessedAnalysis(
+        analysis=analysis,
+        redelivered=True,
     )
 
 
@@ -494,11 +550,16 @@ async def _save_and_publish(
     new_unit_of_work: UnitOfWorkFactory,
     publisher: AnalysisEventPublisher,
     /,
-) -> None:
+) -> bool:
+    # NOTE:
+    # Two runs of one analysis can overlap when a second worker takes it while the first is still on it, and the store
+    # keeps whichever run completes first; a run that finds the analysis completed by the other leaves its result and
+    # its completion as they are, so a reader never sees a completed result change or turn into a failure.
     async with new_unit_of_work() as uow:
-        await uow.analyses.save(
+        if not await uow.analyses.save_unless_completed(
             analysis=analysis,
-        )
+        ):
+            return False
 
         await uow.commit()
 
@@ -507,6 +568,8 @@ async def _save_and_publish(
             analysis=analysis,
             event=event,
         )
+
+    return True
 
 
 def _record(

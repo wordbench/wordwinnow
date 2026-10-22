@@ -61,6 +61,32 @@ class AnalysisRepository(
 
         ...
 
+    async def save_unless_completed(
+        self,
+        *,
+        analysis: Analysis,
+    ) -> bool:
+        """
+        Store the state a run starts or ends with, unless another run has
+        already completed the analysis, and say whether it was stored.
+        """
+
+        ...
+
+    async def save_while_processing(
+        self,
+        *,
+        analysis: Analysis,
+        started_at: datetime,
+    ) -> bool:
+        """
+        Store the state of an analysis only while the stored one is still
+        processing the run that started at `started_at`, and say whether it
+        was stored.
+        """
+
+        ...
+
     async def record_progress(
         self,
         *,
