@@ -52,8 +52,8 @@ def synthetic_examples(
     seed: int,
 ) -> tuple[LabeledExample, ...]:
     """
-    `count` examples cycling through the six levels, one part of speech after
-    another, deterministic for a seed.
+    `count` examples, each a distinct word, cycling through the six levels,
+    one part of speech after another, deterministic for a seed.
     """
 
     generator = Random(
@@ -129,6 +129,9 @@ def synthetic_examples(
                             a=0,
                             b=1,
                         )
+                    )
+                    + _distinct(
+                        index,
                     ),
                     part_of_speech=part_of_speech,
                     zipf_frequency=7.0
@@ -146,4 +149,26 @@ def synthetic_examples(
 
     return tuple(
         examples,
+    )
+
+
+def _distinct(
+    index: int,
+    /,
+) -> str:
+    # NOTE:
+    # Three letters that differ for every example, so that no two examples share a lemma, which the split reads as one
+    # word; every example gets three, so the length still rises with the level.
+    return "".join(
+        chr(
+            ord(
+                "a",
+            )
+            + index // 26**place % 26,
+        )
+        for place in (
+            2,
+            1,
+            0,
+        )
     )

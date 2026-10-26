@@ -16,9 +16,6 @@ from collections.abc import (
 from dataclasses import (
     dataclass,
 )
-from random import (
-    Random,
-)
 from types import (
     MappingProxyType,
 )
@@ -49,6 +46,7 @@ from wordwinnow.infrastructure.lexicon.reference_lists import (
 )
 from wordwinnow.infrastructure.ml.model import (
     fingerprint,
+    group_folds,
 )
 
 
@@ -87,8 +85,8 @@ class ReferenceEntries(
 @final
 class LabeledExample:
     """
-    One word with its features, its external label, and the list the label
-    came from.
+    One word with its features, its external label, the list the label came
+    from, and the other spellings the list gives on the same line.
     """
 
     features: LexicalFeatures
@@ -96,6 +94,8 @@ class LabeledExample:
     level: CefrLevel
 
     source: str
+
+    variants: tuple[str, ...] = ()
 
 
 def build_dataset(
@@ -123,6 +123,7 @@ def build_dataset(
             ),
             level=entry.level,
             source=entry.source,
+            variants=entry.variants,
         )
         for entry in reference_lexicon.entries()
     )
@@ -164,6 +165,7 @@ def relabel_with_pseudo_labels(
                 thresholds=thresholds,
             ),
             source=example.source,
+            variants=example.variants,
         )
         for example in examples
     )
@@ -204,6 +206,59 @@ def class_distribution(
     )
 
 
+def words(
+    *,
+    examples: Sequence[LabeledExample],
+) -> tuple[str, ...]:
+    """
+    The word each example belongs to, named by the first of its lemmas in
+    alphabetical order.
+
+    Two examples belong to one word when they share a lemma, as a lemma listed
+    in two parts of speech does, or when a list gives their lemmas on one line
+    as spelling variants, and so on through any chain of the two.
+    """
+
+    parents: dict[str, str] = {}
+
+    for example in examples:
+        first = _root(
+            parents,
+            example.features.lemma,
+        )
+
+        for variant in example.variants:
+            other = _root(
+                parents,
+                variant,
+            )
+
+            if other == first:
+                continue
+
+            (
+                lower,
+                higher,
+            ) = sorted(
+                (
+                    first,
+                    other,
+                ),
+            )
+
+            parents[higher] = lower
+
+            first = lower
+
+    return tuple(
+        _root(
+            parents,
+            example.features.lemma,
+        )
+        for example in examples
+    )
+
+
 def split(
     *,
     examples: Sequence[LabeledExample],
@@ -211,54 +266,73 @@ def split(
     seed: int,
 ) -> tuple[tuple[LabeledExample, ...], tuple[LabeledExample, ...]]:
     """
-    Divide the examples into a training part and a test part, level by level.
+    Divide the examples into a training part and a test part, keeping every
+    word whole, as `words` defines one.
 
-    Each level contributes the same fraction of its examples to the test part,
-    so a rare level is neither missing from that part nor concentrated in it.
+    No word has examples on both sides, so a score on the test part says how a
+    method does on words it never saw, not on the other part of speech or the
+    other spelling of a word it learned.
+
+    Each level contributes as near the same fraction of its examples to the
+    test part as whole words allow, so a rare level is neither missing from
+    that part nor concentrated in it.
+
+    The test part is one of the folds `group_folds` makes, so the fraction is
+    one over a whole number of two or more.
 
     The same examples, fraction, and seed always produce the same split.
     """
 
-    if not 0.0 < test_fraction < 1.0:
-        raise DatasetError(
-            f"a split requires a test fraction strictly between 0 and 1, got {test_fraction}",
+    folds = (
+        round(
+            1 / test_fraction,
         )
-
-    generator = Random(
-        x=seed,
+        if 0.0 < test_fraction < 1.0
+        else 0
     )
 
-    train: list[LabeledExample] = []
-
-    test: list[LabeledExample] = []
-
-    for level in LEVELS_ASCENDING:
-        members = [example for example in examples if example.level is level]
-
-        generator.shuffle(
-            x=members,
+    if (
+        folds < 2
+        or abs(
+            folds * test_fraction - 1.0,
+        )
+        > 1e-9
+    ):
+        raise DatasetError(
+            f"a split holds out one fold, so the test fraction must be one over a whole number of two or more, "
+            f"got {test_fraction}",
         )
 
-        test_count = round(
-            number=len(
-                members,
-            )
-            * test_fraction,
-        )
-
-        test.extend(
-            members[:test_count],
-        )
-
-        train.extend(
-            members[test_count:],
-        )
+    (
+        training,
+        test,
+    ) = group_folds(
+        levels=[example.level for example in examples],
+        groups=words(
+            examples=examples,
+        ),
+        folds=folds,
+        seed=seed,
+    )[0]
 
     return (
-        tuple(
-            train,
-        ),
-        tuple(
-            test,
-        ),
+        tuple(examples[index] for index in training),
+        tuple(examples[index] for index in test),
     )
+
+
+def _root(
+    parents: dict[str, str],
+    lemma: str,
+    /,
+) -> str:
+    while (
+        parents.setdefault(
+            lemma,
+            lemma,
+        )
+        != lemma
+    ):
+        lemma = parents[lemma]
+
+    return lemma

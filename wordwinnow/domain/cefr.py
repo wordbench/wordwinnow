@@ -234,16 +234,21 @@ class FrequencyThresholds:
 
 
 # PERF:
-# These boundaries were fitted once on the training split of the reference lists, moving one boundary at a time in
-# steps of 0.05 to raise the macro-F1, from the academic prototype's 6.0, 5.2, 4.5, 3.8, and 3.0, and nothing fits
-# them again; the same search reaches them from other starting points too.
+# These boundaries were fitted once on the training split of the reference lists as it then stood, moving one boundary
+# at a time in steps of 0.05 to raise the macro-F1, from the academic prototype's 6.0, 5.2, 4.5, 3.8, and 3.0, and
+# nothing fits them again; on that split the same search reaches them from other starting points too, and on the split
+# that now keeps words whole it lands near them, at 5.1, 4.65, 4.1, 3.45, and 2.95.
 #
 # On the held-out split of the reference lists (`notebooks/cefr_level_classification.ipynb`) these boundaries have a
-# level error of 0.843, a within-one-level accuracy of 0.809, and a macro-F1 of 0.376, and they recall 0.455 of the C2
-# words; boundaries refitted for the level error lower it to 0.811 but recall only 0.116 of C2, so these stay.
+# level error of 0.825, a within-one-level accuracy of 0.817, and a macro-F1 of 0.385, and they recall 0.495 of the C2
+# words; boundaries refitted for the level error lower it to 0.805 but recall only 0.084 of C2, so these stay.
+#
+# These held-out figures are no independent test of the boundaries: they were fitted on a split that trained on 1,510
+# of those 1,905 entries, the other 395 informed the decision that they stay, and `docs/domain.md` says what an
+# independent evaluation would need.
 #
 # They answer for a word outside the lists only when no level model is installed: the model's level error is lower
-# still, 0.732, but it recalls 0.074 of C2, so a product with the model places fewer words at C2 than these would.
+# still, 0.726, but it recalls 0.058 of C2, so a product with the model places fewer words at C2 than these would.
 DEFAULT_FREQUENCY_THRESHOLDS: Final = FrequencyThresholds(
     boundaries=(
         5.10,

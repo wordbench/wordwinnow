@@ -44,6 +44,7 @@ from wordwinnow.infrastructure.ml.model import (
     TrainingError,
     cross_validate,
     fingerprint,
+    group_folds,
     load,
     metadata_path,
     save,
@@ -251,6 +252,7 @@ class TestCrossValidate:
         reports = cross_validate(
             features=[example.features for example in examples],
             levels=[example.level for example in examples],
+            groups=[example.features.lemma for example in examples],
             families=ALL_FAMILIES,
             model_kind=ModelKind.LOGISTIC_REGRESSION,
             folds=3,
@@ -279,11 +281,99 @@ class TestCrossValidate:
             cross_validate(
                 features=[example.features for example in examples],
                 levels=[example.level for example in examples],
+                groups=[example.features.lemma for example in examples],
                 families=ALL_FAMILIES,
                 model_kind=ModelKind.LOGISTIC_REGRESSION,
                 folds=1,
                 seed=_SEED,
             )
+
+
+@final
+class TestGroupFolds:
+    def test_every_group_lies_in_one_fold_and_every_example_in_one(
+        self,
+        *,
+        examples: tuple[LabeledExample, ...],
+    ) -> None:
+        groups = tuple(
+            f"foo{index // 3}"
+            for index in range(
+                len(
+                    examples,
+                ),
+            )
+        )
+
+        divisions = group_folds(
+            levels=[example.level for example in examples],
+            groups=groups,
+            folds=5,
+            seed=_SEED,
+        )
+
+        assert sorted(
+            index
+            for (
+                _,
+                fold,
+            ) in divisions
+            for index in fold
+        ) == list(
+            range(
+                len(
+                    examples,
+                ),
+            ),
+        )
+
+        for (
+            others,
+            fold,
+        ) in divisions:
+            assert frozenset(groups[index] for index in others).isdisjoint(groups[index] for index in fold)
+
+            assert len(
+                others,
+            ) + len(
+                fold,
+            ) == len(
+                examples,
+            )
+
+    def test_the_same_seed_gives_the_same_folds(
+        self,
+        *,
+        examples: tuple[LabeledExample, ...],
+    ) -> None:
+        levels = [example.level for example in examples]
+
+        groups = [example.features.lemma for example in examples]
+
+        first = group_folds(
+            levels=levels,
+            groups=groups,
+            folds=5,
+            seed=_SEED,
+        )
+
+        second = group_folds(
+            levels=levels,
+            groups=groups,
+            folds=5,
+            seed=_SEED,
+        )
+
+        other = group_folds(
+            levels=levels,
+            groups=groups,
+            folds=5,
+            seed=_SEED + 1,
+        )
+
+        assert first == second
+
+        assert first != other
 
 
 @final

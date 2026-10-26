@@ -52,7 +52,7 @@ from sklearn.linear_model import (
     LogisticRegression,
 )
 from sklearn.model_selection import (
-    StratifiedKFold,
+    StratifiedGroupKFold,
 )
 from sklearn.pipeline import (
     Pipeline,
@@ -432,26 +432,30 @@ def _pipeline(
             )
 
 
-def cross_validate(
+def group_folds(
     *,
-    features: Sequence[LexicalFeatures],
     levels: Sequence[CefrLevel],
-    families: Sequence[FeatureFamily],
-    model_kind: ModelKind,
+    groups: Sequence[str],
     folds: int,
     seed: int,
-) -> tuple[EvaluationReport, ...]:
+) -> tuple[tuple[tuple[int, ...], tuple[int, ...]], ...]:
     """
-    One report per stratified validation fold, each from a model trained on
-    the other folds.
+    Divide the examples `folds` ways and return, for each fold, the indices of
+    the other folds and of that fold.
+
+    Every group lies in one fold, and each fold's levels come as near the
+    whole's proportions as whole groups allow.
+
+    The same levels, groups, fold count, and seed always produce the same
+    folds.
     """
 
     if folds < 2:
         raise TrainingError(
-            f"cross-validation requires at least two folds, got {folds}",
+            f"a division into folds requires at least two, got {folds}",
         )
 
-    splitter = StratifiedKFold(
+    splitter = StratifiedGroupKFold(
         n_splits=folds,
         shuffle=True,
         random_state=seed,
@@ -459,33 +463,70 @@ def cross_validate(
 
     ranks = tuple(level.rank for level in levels)
 
+    return tuple(
+        (
+            tuple(
+                others.tolist(),
+            ),
+            tuple(
+                fold.tolist(),
+            ),
+        )
+        for (
+            others,
+            fold,
+        ) in splitter.split(
+            X=[
+                [
+                    rank,
+                ]
+                for rank in ranks
+            ],
+            y=ranks,
+            groups=groups,
+        )
+    )
+
+
+def cross_validate(
+    *,
+    features: Sequence[LexicalFeatures],
+    levels: Sequence[CefrLevel],
+    groups: Sequence[str],
+    families: Sequence[FeatureFamily],
+    model_kind: ModelKind,
+    folds: int,
+    seed: int,
+) -> tuple[EvaluationReport, ...]:
+    """
+    One report per validation fold, each from a model trained on the other
+    folds, the folds made by `group_folds` so that no group is on both sides.
+    """
+
     reports: list[EvaluationReport] = []
 
     for (
         train_indices,
         validation_indices,
-    ) in splitter.split(
-        X=encode(
-            features=features,
-            families=families,
-        ),
-        y=ranks,
+    ) in group_folds(
+        levels=levels,
+        groups=groups,
+        folds=folds,
+        seed=seed,
     ):
         model = train(
-            features=[features[index] for index in train_indices.tolist()],
-            levels=[levels[index] for index in train_indices.tolist()],
+            features=[features[index] for index in train_indices],
+            levels=[levels[index] for index in train_indices],
             families=families,
             model_kind=model_kind,
             seed=seed,
         )
 
-        validation = validation_indices.tolist()
-
         reports.append(
             evaluate(
-                expected=[levels[index] for index in validation],
+                expected=[levels[index] for index in validation_indices],
                 predicted=model.estimate_many(
-                    features=[features[index] for index in validation],
+                    features=[features[index] for index in validation_indices],
                 ),
             ),
         )

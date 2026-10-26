@@ -72,8 +72,8 @@ _WORD_CLASSES: Final = MappingProxyType(
 @final
 class ReferenceEntry:
     """
-    One line of a reference list: a lemma, its part of speech, its level, and
-    the list it came from.
+    One line of a reference list: a lemma, its part of speech, its level, the
+    list it came from, and the other spellings the same line gives.
     """
 
     lemma: str
@@ -83,6 +83,8 @@ class ReferenceEntry:
     level: CefrLevel
 
     source: str
+
+    variants: tuple[str, ...] = ()
 
 
 def parse_reference_rows(
@@ -94,9 +96,9 @@ def parse_reference_rows(
     Turn the rows of one list into entries, one per single-word variant.
 
     A headword such as `a.m./A.M./am/AM` lists spelling variants separated by
-    slashes, and each distinct lowercase variant becomes an entry; multi-word
-    headwords are skipped because the pipeline never produces a multi-word
-    lemma.
+    slashes, and each distinct lowercase variant becomes an entry that names
+    the others as its variants; multi-word headwords are skipped because the
+    pipeline never produces a multi-word lemma.
     """
 
     entries: list[ReferenceEntry] = []
@@ -113,26 +115,28 @@ def parse_reference_rows(
             value=row["CEFR"].strip().upper(),
         )
 
-        seen: set[str] = set()
+        lemmas: list[str] = []
 
         for variant in row["headword"].split(
             sep="/",
         ):
             lemma = variant.strip().lower()
 
-            if not lemma or " " in lemma or lemma in seen:
+            if not lemma or " " in lemma or lemma in lemmas:
                 continue
 
-            seen.add(
+            lemmas.append(
                 lemma,
             )
 
+        for lemma in lemmas:
             entries.append(
                 ReferenceEntry(
                     lemma=lemma,
                     part_of_speech=part_of_speech,
                     level=level,
                     source=source,
+                    variants=tuple(other for other in lemmas if other != lemma),
                 ),
             )
 

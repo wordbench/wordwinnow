@@ -3,6 +3,9 @@ The labeled dataset: how it is built from the ports, how it is relabeled with
 pseudo-labels, and how it is split.
 """
 
+from dataclasses import (
+    replace,
+)
 from typing import (
     Final,
     final,
@@ -40,6 +43,7 @@ from wordwinnow.services.ml.dataset import (
     pseudo_label,
     relabel_with_pseudo_labels,
     split,
+    words,
 )
 
 # NOTE:
@@ -259,6 +263,85 @@ class TestClassDistribution:
         assert distribution[CefrLevel.C2] == 1
 
 
+def _renamed(
+    examples: tuple[LabeledExample, ...],
+    names: tuple[tuple[str, tuple[str, ...]], ...],
+    /,
+) -> tuple[LabeledExample, ...]:
+    return tuple(
+        LabeledExample(
+            features=replace(
+                example.features,
+                lemma=lemma,
+            ),
+            level=example.level,
+            source=example.source,
+            variants=variants,
+        )
+        for (
+            example,
+            (
+                lemma,
+                variants,
+            ),
+        ) in zip(
+            examples,
+            names,
+            strict=True,
+        )
+    )
+
+
+@final
+class TestWords:
+    def test_parts_of_speech_and_spellings_of_one_lemma_are_one_word(
+        self,
+    ) -> None:
+        examples = _renamed(
+            synthetic_examples(
+                count=6,
+                seed=0,
+            ),
+            (
+                (
+                    "grey",
+                    ("gray",),
+                ),
+                (
+                    "gray",
+                    ("grey",),
+                ),
+                (
+                    "gray",
+                    (),
+                ),
+                (
+                    "light",
+                    (),
+                ),
+                (
+                    "light",
+                    (),
+                ),
+                (
+                    "timid",
+                    (),
+                ),
+            ),
+        )
+
+        assert words(
+            examples=examples,
+        ) == (
+            "gray",
+            "gray",
+            "gray",
+            "light",
+            "light",
+            "timid",
+        )
+
+
 @final
 class TestSplit:
     def test_the_split_is_stratified_complete_and_disjoint(
@@ -326,6 +409,69 @@ class TestSplit:
         assert first == second
 
         assert first != other
+
+    def test_no_word_has_examples_on_both_sides(
+        self,
+    ) -> None:
+        base = synthetic_examples(
+            count=60,
+            seed=0,
+        )
+
+        # NOTE:
+        # Every third example takes the lemma of the one before it, as a lemma listed in two parts of speech does.
+        examples = _renamed(
+            base,
+            tuple(
+                (
+                    base[index - 1 if index % 3 == 2 else index].features.lemma,
+                    (),
+                )
+                for index in range(
+                    len(
+                        base,
+                    ),
+                )
+            ),
+        )
+
+        word_of = dict(
+            zip(
+                examples,
+                words(
+                    examples=examples,
+                ),
+                strict=True,
+            ),
+        )
+
+        (
+            training,
+            test,
+        ) = split(
+            examples=examples,
+            test_fraction=0.2,
+            seed=42,
+        )
+
+        assert frozenset(word_of[example] for example in training).isdisjoint(word_of[example] for example in test)
+
+    def test_a_fraction_that_is_not_one_fold_is_refused(
+        self,
+    ) -> None:
+        examples = synthetic_examples(
+            count=60,
+            seed=0,
+        )
+
+        with raises(
+            expected_exception=DatasetError,
+        ):
+            split(
+                examples=examples,
+                test_fraction=0.3,
+                seed=42,
+            )
 
     def test_a_fraction_that_leaves_no_part_is_refused(
         self,

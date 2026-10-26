@@ -96,31 +96,38 @@ C2.
 
 The boundaries were not set by hand: they were fitted once to the reference
 lists, by a search that moved one boundary at a time in steps of 0.05 and kept
-a move only when it raised the macro-F1 on the experiment's 7,616 training
-entries, never its held-out ones, and they have been fixed since.
+a move only when it raised the macro-F1 on the 7,616 training entries of the
+experiment's split at the time, never its held-out ones, and they have been
+fixed since.
 
 The search started from the round-numbered boundaries of the academic
 prototype Wordwinnow continues, 6.0, 5.2, 4.5, 3.8, and 3.0, whose origin is
-not recorded, and it reaches the same five boundaries from four other starting
-points.
+not recorded, and on that split it reaches the same five boundaries from four
+other starting points.
 
 They sit close to the cuts that would give each level its share of the
-training entries, 5.01, 4.55, 3.98, 3.21, and 2.71, so the heuristic amounts
-to ranking words by how common they are and dealing out the levels in the
-lists' own proportions.
+training entries, 5.01, 4.55, 3.96, 3.19, and 2.72 on today's split, so the
+heuristic amounts to ranking words by how common they are and dealing out the
+levels in the lists' own proportions.
+
+That split did not keep a word whole, and the split the experiment uses now,
+which does, holds out 1,510 entries that it trained on; the same search run on
+today's training entries lands at 5.1, 4.65, 4.1, 3.45, and 2.95, close to the
+shipped boundaries but not on them, which are kept, so that nothing the
+product does changes with the split.
 
 Macro-F1 weighs the six levels equally, which keeps C2 in use: refitted for
 the mean level error instead, as the experiment's tuned heuristic is, the
-boundaries become 5.5, 4.8, 3.9, 3.15, and 1.5, which lowers that error from
-0.843 to 0.811 on the held-out entries but finds 0.116 of their C2 words
-instead of 0.455.
+boundaries become 5.5, 4.65, 4.0, 3.05, and 1.55, which lowers that error from
+0.825 to 0.805 on the held-out entries but finds 0.084 of their C2 words
+instead of 0.495.
 
 The heuristic answers only when no level model is installed, and then for
 every word the lists do not cover; with the model, it answers for none.
 
 Read a level from it as how rare the word is, placed on the lists' scale,
 rather than a judgment of how hard it is: it is within one level of the lists
-on 0.809 of the held-out entries, and the words it is used for, those outside
+on 0.817 of the held-out entries, and the words it is used for, those outside
 the lists, are the ones nothing here could measure it on.
 
 ### The level model
@@ -146,28 +153,30 @@ expects.
 | lexical | Character count; part of speech | Length is the classic readability feature; the lists label parts of speech differently |
 | wordnet | Sense count; SemCor usage count; hyponym count of the most used sense; its semantic category | Polysemy and corpus usage track how established a word is, generality tracks how basic it is, and a category such as `noun.food` is a coarse proxy for concreteness |
 
-Held out: 1,904 of the 9,520 list entries, a fifth, stratified by level with
-seed 42; every method in the table is scored on them.
+Held out: 1,905 of the 9,520 list entries, a fifth, stratified by level with
+seed 42 and holding whole words, so that a lemma listed in two parts of
+speech, and the spellings a list gives on one line, are never on both sides;
+every method in the table is scored on them.
 
 | Method | Mean level error | Within one level | Macro-F1 | Spearman |
 | --- | --- | --- | --- | --- |
 | Majority class (B2) | 1.157 | 0.655 | 0.076 | 0.000 |
-| Default heuristic, five Zipf boundaries | 0.843 | 0.809 | 0.376 | 0.652 |
-| Tuned heuristic, boundaries refitted for level error | 0.811 | 0.846 | 0.320 | 0.641 |
-| Ordinal gradient boosting on all three families | 0.732 | 0.888 | 0.348 | 0.697 |
+| Default heuristic, five Zipf boundaries | 0.825 | 0.817 | 0.385 | 0.660 |
+| Tuned heuristic, boundaries refitted for level error | 0.805 | 0.848 | 0.310 | 0.645 |
+| Ordinal gradient boosting on all three families | 0.726 | 0.879 | 0.354 | 0.698 |
 
 The WordNet family is what buys the difference, and treating the scale as
-ordinal matters as much: in five-fold cross-validation on the other 7,616
+ordinal matters as much: in five-fold cross-validation on the other 7,615
 entries, with all three families, a gradient-boosting classifier that treats
-the levels as unrelated classes is off by 0.832 of a level on average, and the
-ordinal regressor by 0.753.
+the levels as unrelated classes is off by 0.850 of a level on average, and the
+ordinal regressor by 0.752.
 
 The gain comes with a pull toward the middle of the scale: of the held-out
-words, 201 are A1 and 189 are C2, and the model answers A1 for 61 words and C2
-for 21, where the default heuristic answers C2 for 197.
+words, 201 are A1 and 190 are C2, and the model answers A1 for 60 words and C2
+for 15, where the default heuristic answers C2 for 207.
 
-It recalls 0.074 of those 189 C2 words, 14 of them, against the default
-heuristic's 0.455, which is why its macro-F1 is the lower of the two.
+It recalls 0.058 of those 190 C2 words, 11 of them, against the default
+heuristic's 0.495, which is why its macro-F1 is the lower of the two.
 
 On the sample story, the model levels the 402 of its 1,509 vocabulary items
 that the lists do not cover and gives C2 to 2 of them, where the heuristic
@@ -199,18 +208,37 @@ The baselines are comparison points, not ground truth: the majority class is
 what a model that has learned nothing scores, and the two heuristics are what
 frequency alone achieves.
 
-No baseline saw the held-out entries: the majority class is the commonest
-level of the training entries, and both heuristics' boundaries were fitted on
-those entries alone, the default ones once for macro-F1 and the tuned ones for
-the level error in every run of the experiment.
+No baseline fitted in the experiment saw the held-out entries: the majority
+class is the commonest level of the training entries, and the tuned
+heuristic's boundaries are fitted on those entries alone in every run.
 
-The model was selected by five-fold stratified cross-validation on the 7,616
-training entries, as the candidate with the lowest cross-validated level
-error, and no margin over the baselines was fixed before the experiment.
+The default heuristic's boundaries were fitted once, before the split kept
+words whole, on a training part that holds 1,510 of today's 1,905 held-out
+entries, so its row is not a held-out score.
 
-The 1,904 held-out entries took no part in that selection, and on them the
-model's mean absolute level error is 0.732, against 0.811 for the best
-baseline, the tuned heuristic, and its share within one level is 0.888, the
+Nor are the other 395 an independent check: they belong to the held-out part
+of the split at the time, whose scores decided that these boundaries stay
+rather than those refitted for the level error; on them the boundaries' level
+error is 0.795.
+
+Over ten splits, refitting the boundaries on each split's training entries
+lowers their macro-F1, on that split's held-out entries the shipped boundaries
+were not fitted on, 361 to 407 of them, by 0.001 on average, with a spread of
+0.005 from split to split: no reliable improvement, and no proof that the
+shipped boundaries are the best either.
+
+An independent score of these boundaries, or of any refit of them, needs
+CEFR-labeled words from outside the reference lists, fixed before any score is
+read.
+
+The model was selected by five-fold cross-validation, stratified by level and
+holding whole words, on the 7,615 training entries, as the candidate with the
+lowest cross-validated level error, and no margin over the baselines was fixed
+before the experiment.
+
+The 1,905 held-out entries took no part in that selection, and on them the
+model's mean absolute level error is 0.726, against 0.805 for the best
+baseline, the tuned heuristic, and its share within one level is 0.879, the
 highest in the table.
 
 The model file the product loads is the same configuration refitted on all

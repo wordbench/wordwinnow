@@ -94,6 +94,46 @@ class TestParseReferenceRows:
             ),
         )
 
+    def test_each_spelling_names_the_others_on_its_line(
+        self,
+    ) -> None:
+        entries = parse_reference_rows(
+            rows=[
+                {
+                    "headword": "a.m./A.M./am",
+                    "pos": "adverb",
+                    "CEFR": "A1",
+                },
+                {
+                    "headword": "Timid",
+                    "pos": "adjective",
+                    "CEFR": "c1",
+                },
+            ],
+            source="cefrj-vocabulary-profile-1.5",
+        )
+
+        assert tuple(
+            (
+                entry.lemma,
+                entry.variants,
+            )
+            for entry in entries
+        ) == (
+            (
+                "a.m.",
+                ("am",),
+            ),
+            (
+                "am",
+                ("a.m.",),
+            ),
+            (
+                "timid",
+                (),
+            ),
+        )
+
 
 @final
 class TestCsvReferenceLexicon:

@@ -69,6 +69,7 @@ from wordwinnow.services.ml.dataset import (
     pseudo_label,
     relabel_with_pseudo_labels,
     split,
+    words,
 )
 from wordwinnow.services.progress import (
     UNWATCHED,
@@ -76,7 +77,8 @@ from wordwinnow.services.progress import (
 )
 
 # NOTE:
-# The protocol every run follows: one fifth of the examples held out, five stratified folds over the rest.
+# The protocol every run follows: one fifth of the examples held out, five folds over the rest, each part stratified
+# by level and holding whole words, so no lemma and no spelling of one is on both sides of a split or a fold.
 TEST_FRACTION: Final = 0.2
 
 FOLDS: Final = 5
@@ -100,7 +102,7 @@ FAMILY_SETS: Final = (
 
 # PERF:
 # The configuration the product ships: the candidate with the lowest cross-validated level error in the executed
-# notebook, 0.753, and 0.732 on the held-out words, against 0.811 for the tuned heuristic, which is fitted rather than
+# notebook, 0.752, and 0.726 on the held-out words, against 0.805 for the tuned heuristic, which is fitted rather than
 # cross-validated; `train_shipped_model` fits it to every example.
 SHIPPED_FAMILIES: Final = (
     FeatureFamily.FREQUENCY,
@@ -442,6 +444,9 @@ def _candidate(
     reports = cross_validate(
         features=features,
         levels=levels,
+        groups=words(
+            examples=training,
+        ),
         families=families,
         model_kind=model_kind,
         folds=FOLDS,
