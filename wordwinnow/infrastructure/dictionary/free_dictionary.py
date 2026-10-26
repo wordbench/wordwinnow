@@ -1254,8 +1254,8 @@ class FreeDictionaryClient:
                     "reason": result.reason,
                     "status": result.status,
                     "delay_seconds": round(
-                        delay,
-                        3,
+                        number=delay,
+                        ndigits=3,
                     ),
                     "retry_after_seconds": asked,
                 },

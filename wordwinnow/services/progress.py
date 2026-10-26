@@ -20,7 +20,7 @@ from asyncio import (
     sleep as asyncio_sleep,
 )
 from collections.abc import (
-    AsyncIterator,
+    AsyncGenerator,
     Awaitable,
     Callable,
 )
@@ -209,7 +209,7 @@ async def watching(
     watch: DictionaryWatch,
     interval_seconds: float = ACTIVITY_INTERVAL_SECONDS,
     sleep: Callable[[float], Awaitable[None]] = asyncio_sleep,
-) -> AsyncIterator[None]:
+) -> AsyncGenerator[None]:
     """
     Tell `watch` what `read` finds every `interval_seconds` while the block
     runs.
@@ -253,9 +253,7 @@ async def watching(
         # Waiting rather than awaiting the task lets its cancellation end it without raising here, while a
         # cancellation of the work itself still propagates.
         await wait(
-            fs={
-                keeping,
-            },
+            fs=(keeping,),
         )
 
 
@@ -419,9 +417,7 @@ class StoredProgress:
         # Waiting rather than awaiting the task lets its cancellation end it without raising here, while a
         # cancellation of the processing itself still propagates.
         await wait(
-            fs={
-                self._keeping,
-            },
+            fs=(self._keeping,),
         )
 
     def stage_started(

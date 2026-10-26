@@ -95,7 +95,7 @@ class FakeConsumer:
         records: Sequence[Record],
         end_offset: int,
     ) -> None:
-        self.pending: Final[list[Record]] = list(
+        self.pending: Final = list(
             records,
         )
 
@@ -176,7 +176,7 @@ class RevokingConsumer:
         refusal: KafkaError,
         holds_partition: bool,
     ) -> None:
-        self.pending: Final[list[Record]] = list(
+        self.pending: Final = list(
             records,
         )
 

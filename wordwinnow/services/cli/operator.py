@@ -112,7 +112,8 @@ _LEMMA_WIDTH: Final = 10
 _BAR_WIDTH: Final = 10
 
 # NOTE:
-# What each reason a lookup went unanswered for, or was asked again for, is called in the view.
+# What each reason a lookup went unanswered for, or was asked again for, is called in the view; keyed by string, since
+# an analysis's counts of unanswered lookups name each reason by its value.
 _REASONS: Final[MappingProxyType[str, str]] = MappingProxyType(
     mapping={
         FailureReason.CIRCUIT_OPEN: "held back",

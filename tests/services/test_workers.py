@@ -74,7 +74,7 @@ class WaitingConsumer:
         *,
         records: Sequence[Record],
     ) -> None:
-        self.pending: Final[list[Record]] = list(
+        self.pending: Final = list(
             records,
         )
 

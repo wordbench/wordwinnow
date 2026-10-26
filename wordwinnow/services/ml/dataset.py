@@ -285,7 +285,7 @@ def split(
 
     folds = (
         round(
-            1 / test_fraction,
+            number=1 / test_fraction,
         )
         if 0.0 < test_fraction < 1.0
         else 0
@@ -299,8 +299,8 @@ def split(
         > 1e-9
     ):
         raise DatasetError(
-            f"a split holds out one fold, so the test fraction must be one over a whole number of two or more, "
-            f"got {test_fraction}",
+            "a split holds out one fold, so the test fraction must be one over a whole number of two or more, got "
+            f"{test_fraction}",
         )
 
     (

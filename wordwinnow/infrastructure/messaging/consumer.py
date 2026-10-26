@@ -82,6 +82,15 @@ _logger: Final = getLogger(
 # handled for longer than this during a rebalance is delivered again.
 _REBALANCE_TIMEOUT_MS: Final = 30_000
 
+# NOTE:
+# The create-topics outcomes that leave a topic in place: created now, or there already.
+_TOPIC_IN_PLACE: Final = frozenset(
+    (
+        0,
+        TopicAlreadyExistsError.errno,
+    ),
+)
+
 
 class _TopicErrors(
     Protocol,
@@ -450,10 +459,7 @@ async def ensure_topics(
 
         error_code = topic_error[1]
 
-        if error_code in {
-            0,
-            TopicAlreadyExistsError.errno,
-        }:
+        if error_code in _TOPIC_IN_PLACE:
             continue
 
         kind = for_code(

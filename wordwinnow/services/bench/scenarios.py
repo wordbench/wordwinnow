@@ -13,7 +13,7 @@ from asyncio import (
     sleep,
 )
 from collections.abc import (
-    AsyncIterator,
+    AsyncGenerator,
     Sequence,
 )
 from contextlib import (
@@ -147,7 +147,7 @@ async def replay_provider(
     *,
     latency_seconds: float,
     not_found_fraction: float,
-) -> AsyncIterator[str]:
+) -> AsyncGenerator[str]:
     """
     Run the replay provider in this process and yield its base URL.
     """

@@ -477,7 +477,7 @@ class TestCli:
         assert (
             " of "
             not in whole.output.split(
-                "out.csv",
+                sep="out.csv",
             )[0]
         )
 

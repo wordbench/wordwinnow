@@ -250,13 +250,13 @@ def plot_medians(
     )
 
     labels = sorted(
-        {
+        frozenset(
             label
             for (
                 label,
                 _,
             ) in medians
-        },
+        ),
     )
 
     figure = Figure(

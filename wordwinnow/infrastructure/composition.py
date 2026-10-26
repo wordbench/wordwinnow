@@ -17,7 +17,7 @@ from asyncio import (
     to_thread,
 )
 from collections.abc import (
-    AsyncIterator,
+    AsyncGenerator,
     Callable,
     Coroutine,
     Mapping,
@@ -565,7 +565,7 @@ class StorageProfile:
 async def storage_profile(
     *,
     settings: Settings,
-) -> AsyncIterator[StorageProfile]:
+) -> AsyncGenerator[StorageProfile]:
     """
     Open the local store for the duration of one command.
     """
@@ -632,7 +632,7 @@ async def local_profile(
     *,
     settings: Settings,
     include_dictionary: bool,
-) -> AsyncIterator[LocalProfile]:
+) -> AsyncGenerator[LocalProfile]:
     """
     Build the local mode's adapters for the duration of one command.
 
@@ -748,7 +748,7 @@ class IntakeProfile:
 async def intake_profile(
     *,
     settings: Settings,
-) -> AsyncIterator[IntakeProfile]:
+) -> AsyncGenerator[IntakeProfile]:
     """
     Build the intake service's adapters for the life of the process.
     """
@@ -832,7 +832,7 @@ async def enrichment_profile(
     on_lookup: LookupObserver | None = None,
     observer: ProviderObserver | None = None,
     provider_hooks: Mapping[str, list[Callable[..., Coroutine[Any, Any, None]]]] | None = None,
-) -> AsyncIterator[EnrichmentProfile]:
+) -> AsyncGenerator[EnrichmentProfile]:
     """
     Build the enrichment service's adapters for the life of the process.
 
@@ -923,7 +923,7 @@ class WorkerProfile:
 async def worker_profile(
     *,
     settings: Settings,
-) -> AsyncIterator[WorkerProfile]:
+) -> AsyncGenerator[WorkerProfile]:
     """
     Build the analysis worker's adapters for the life of the process.
 

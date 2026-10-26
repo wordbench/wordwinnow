@@ -25,6 +25,7 @@ from enum import (
     auto,
 )
 from typing import (
+    Final,
     final,
     override,
 )
@@ -81,6 +82,16 @@ class AnalysisStatus(
     COMPLETED = auto()
 
     FAILED = auto()
+
+
+# NOTE:
+# The two live states, from either of which an analysis may fail.
+_LIVE_STATUSES: Final = frozenset(
+    (
+        AnalysisStatus.REQUESTED,
+        AnalysisStatus.PROCESSING,
+    ),
+)
 
 
 class Stage(
@@ -418,10 +429,7 @@ class Analysis:
         processing can be interrupted before it starts.
         """
 
-        if self._status not in {
-            AnalysisStatus.REQUESTED,
-            AnalysisStatus.PROCESSING,
-        }:
+        if self._status not in _LIVE_STATUSES:
             raise AnalysisTransitionError(
                 f"analysis {self.id} is {self._status}; only a requested or processing analysis can fail",
             )

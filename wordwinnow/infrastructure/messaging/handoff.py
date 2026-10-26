@@ -15,7 +15,7 @@ from asyncio import (
     Event,
 )
 from collections.abc import (
-    Iterator,
+    Generator,
 )
 from collections.abc import (
     Set as AbstractSet,
@@ -75,7 +75,7 @@ class PartitionHandoff(
     @contextmanager
     def holding(
         self,
-    ) -> Iterator[None]:
+    ) -> Generator[None]:
         """
         Hold any revocation until the block ends.
         """

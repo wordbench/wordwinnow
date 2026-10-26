@@ -13,7 +13,7 @@ from asyncio import (
     to_thread,
 )
 from collections.abc import (
-    AsyncIterator,
+    AsyncGenerator,
 )
 from contextlib import (
     asynccontextmanager,
@@ -95,7 +95,7 @@ _TIMESTAMP_TYPES: Final = (
 
 
 @asynccontextmanager
-async def _fresh_database() -> AsyncIterator[str]:
+async def _fresh_database() -> AsyncGenerator[str]:
     url = make_url(
         name_or_url=_POSTGRES_URL,
     )
