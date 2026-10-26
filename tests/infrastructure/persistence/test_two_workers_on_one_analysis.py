@@ -516,7 +516,7 @@ class TestTwoWorkersOnOneAnalysis:
 
         assert after_first.status is AnalysisStatus.COMPLETED
 
-        assert set(
+        assert frozenset(
             _outcomes(
                 after_first,
             ),

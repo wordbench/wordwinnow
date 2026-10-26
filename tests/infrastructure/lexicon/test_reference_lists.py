@@ -207,11 +207,11 @@ class TestCsvReferenceLexicon:
             > 9000
         )
 
-        assert {entry.level for entry in entries} == set(
+        assert frozenset(entry.level for entry in entries) == frozenset(
             CefrLevel,
         )
 
-        assert {entry.source for entry in entries} == set(
+        assert frozenset(entry.source for entry in entries) == frozenset(
             REFERENCE_FILES,
         )
 

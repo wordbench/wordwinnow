@@ -138,20 +138,20 @@ class TestRunExperiment:
 
         assert result.fidelity.n == result.test_size
 
-        assert {
+        assert frozenset(
             (
                 candidate.families,
                 candidate.model_kind,
             )
             for candidate in result.candidates
-        } == {
+        ) == frozenset(
             (
                 families,
                 kind,
             )
             for families in FAMILY_SETS
             for kind in ModelKind
-        }
+        )
 
         assert all(
             len(
@@ -166,9 +166,7 @@ class TestRunExperiment:
             candidate.cross_validated_error for candidate in result.candidates
         )
 
-        assert frozenset(
-            result.per_source_accuracy,
-        ) == {
+        assert result.per_source_accuracy.keys() == {
             LOWER_SOURCE,
             UPPER_SOURCE,
         }
@@ -203,12 +201,7 @@ class TestRunExperiment:
             ),
         )
 
-        assert (
-            frozenset(
-                record,
-            )
-            == _SECTIONS
-        )
+        assert record.keys() == _SECTIONS
 
         assert record["chosen"] == result.chosen.name
 

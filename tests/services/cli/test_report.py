@@ -486,9 +486,7 @@ class TestRendering:
             FailureReason.INVALID_RESPONSE: "invalid response",
         }
 
-        assert set(
-            said,
-        ) == set(
+        assert said.keys() == frozenset(
             FailureReason,
         )
 
@@ -835,9 +833,9 @@ class TestRendering:
 
         assert payload["document"]["attribution"] == "Data provided by The New York Times"
 
-        assert {item["example_sentence"] for item in payload["items"]} == {
-            "",
-        }
+        assert frozenset(item["example_sentence"] for item in payload["items"]) == frozenset(
+            ("",),
+        )
 
         assert tuple(item["lemma"] for item in payload["items"]) == (
             "mask",

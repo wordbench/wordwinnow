@@ -180,7 +180,7 @@ class TestCli:
 
         assert payload["profile"]["target_level"] == "C1"
 
-        assert "drunken" in {entry["lemma"] for entry in payload["items"]}
+        assert "drunken" in (entry["lemma"] for entry in payload["items"])
 
         analysis_id = payload["analysis_id"]
 

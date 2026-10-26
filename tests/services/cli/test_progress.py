@@ -445,9 +445,7 @@ class TestTerminalProgress:
     def test_every_stage_has_a_description(
         self,
     ) -> None:
-        assert set(
-            STAGE_DESCRIPTIONS,
-        ) == set(
+        assert STAGE_DESCRIPTIONS.keys() == frozenset(
             Stage,
         )
 

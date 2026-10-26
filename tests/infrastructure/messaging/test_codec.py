@@ -247,7 +247,7 @@ class TestGoldenFiles:
             message.facts,
         )
 
-        assert {fact.analysis_id.value for fact in facts} == {
+        assert frozenset(fact.analysis_id.value for fact in facts) == {
             message.analysis_id,
         }
 

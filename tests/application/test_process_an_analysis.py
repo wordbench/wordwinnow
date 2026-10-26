@@ -656,9 +656,9 @@ class TestRunPipeline:
 
         assert all(features.sense_count == 0 for features in estimator.seen)
 
-        assert {features.category for features in estimator.seen} == {
-            None,
-        }
+        assert frozenset(features.category for features in estimator.seen) == frozenset(
+            (None,),
+        )
 
     async def test_without_the_dictionary_no_lookup_happens(
         self,

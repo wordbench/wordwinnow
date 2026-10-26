@@ -500,7 +500,7 @@ class TestListing:
                 ),
             )
 
-        assert {analysis.id for analysis in stale} == {
+        assert frozenset(analysis.id for analysis in stale) == {
             waiting.id,
             interrupted.id,
         }
