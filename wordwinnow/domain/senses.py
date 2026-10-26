@@ -52,6 +52,10 @@ class LexicalSense:
 
     `category` is the network's own semantic category of the sense, such as
     `noun.food`.
+
+    `is_instance` is `True` for a sense that names one particular person,
+    place, or work, such as the physicist Landau, rather than a kind of thing,
+    such as the carriage of the same name.
     """
 
     key: str
@@ -73,6 +77,8 @@ class LexicalSense:
     hyponym_count: int
 
     category: str
+
+    is_instance: bool = False
 
     def __post_init__(
         self,

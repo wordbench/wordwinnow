@@ -618,6 +618,7 @@ def _sense_to_json(
         "usage_count": sense.usage_count,
         "hyponym_count": sense.hyponym_count,
         "category": sense.category,
+        "is_instance": sense.is_instance,
     }
 
 
@@ -644,4 +645,10 @@ def _sense_from_json(
         usage_count=payload["usage_count"],
         hyponym_count=payload["hyponym_count"],
         category=payload["category"],
+        # NOTE:
+        # A sense stored before the flag was kept reads as a kind of thing, which is how it was shown then.
+        is_instance=payload.get(
+            "is_instance",
+            False,
+        ),
     )

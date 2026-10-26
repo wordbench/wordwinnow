@@ -103,6 +103,25 @@ class TestWordNetLexicalSemantics:
             "poison",
         )
 
+    def test_a_sense_that_names_one_person_place_or_work_is_marked(
+        self,
+        *,
+        wordnet: WordNetLexicalSemantics,
+    ) -> None:
+        (
+            physicist,
+            carriage,
+        ) = wordnet.senses_of(
+            lemma="landau",
+            part_of_speech=PartOfSpeech.NOUN,
+        )
+
+        assert physicist.is_instance
+
+        assert not carriage.is_instance
+
+        assert "carriage" in carriage.gloss
+
     def test_an_unknown_word_has_no_senses(
         self,
         *,
@@ -135,6 +154,41 @@ class TestWordNetLexicalSemantics:
         assert immense.gloss == "unusually great in size or amount or degree or especially extent or scope"
 
         assert immense.example is not None
+
+    def test_an_example_is_the_first_that_uses_the_word_or_none(
+        self,
+        *,
+        wordnet: WordNetLexicalSemantics,
+    ) -> None:
+        # NOTE:
+        # WordNet's examples belong to a sense: `observe` shares one sense with `detect`, whose examples say only
+        # `detected` and `found`, and another with `note`, whose first example says `observed`; `immense` shares its
+        # sense with `huge`, whose first four examples say only `huge`.
+        observe = {
+            sense.key: sense
+            for sense in wordnet.senses_of(
+                lemma="observe",
+                part_of_speech=PartOfSpeech.VERB,
+            )
+        }
+
+        (
+            immense,
+            *_,
+        ) = wordnet.senses_of(
+            lemma="immense",
+            part_of_speech=PartOfSpeech.ADJECTIVE,
+        )
+
+        assert (
+            observe["detect.v.01"].example,
+            observe["note.v.01"].example,
+            immense.example,
+        ) == (
+            None,
+            "She observed that his presentation took up too much time",
+            "the Los Angeles aqueduct winds like an immense snake along the base of the mountains",
+        )
 
     def test_half_a_quotation_is_dropped_and_a_stray_quote_trimmed(
         self,

@@ -160,6 +160,10 @@ WordNet is local and always answers; the Free Dictionary API is external and
 optional: an answer can take many seconds, and the service can be unavailable,
 so an analysis finishes without it.
 
+WordNet's examples belong to a sense rather than to one word, so an example of
+the sense `observe` shares with `detect` can say only `detected`; the report shows a
+WordNet example only when it uses the word, in any form WordNet reduces to it.
+
 When neither has a meaning for a word, the report says why in its place, set
 apart from a meaning: `no definition found` when the dictionary has no entry for
 the word, and `unknown: the dictionary was unavailable`, with the reason, such
@@ -224,17 +228,21 @@ A single CEFR label for a whole person is coarse: a learner who reads well but
 writes poorly, or knows one field's vocabulary deeply, is still one letter and
 one digit here.
 
-**Senses are listed, never chosen.**
+**Senses are listed, never matched to the text.**
 
-The report lists up to three WordNet senses of a word, most used first, and
-leaves the choice to the reader, so the sense a text means can be missing.
+The report shows one meaning per word, the dictionary's first definition or
+WordNet's most used sense, and the cards `--detail` prints list the others, up
+to three of each, after the word's sentence from the text, leaving the choice
+to the reader, so the sense a text means can be missing.
 
 In the story Watson tosses a smoke-rocket into the room at Holmes's signal,
 and the closest WordNet sense, a signal rocket, comes fourth, after a vehicle,
 an engine, and a salad plant, so none of the three the report lists fits.
 
-The first sense of *landau* is the physicist Lev Landau, so that is the gloss
-the report shows for the carriage.
+A sense that names one particular person, place, or work, such as the
+physicist Lev Landau, is never shown first while the word has a sense that
+names a kind of thing, so *landau* is glossed as the carriage the story means,
+and the physicist waits among the other meanings.
 
 **The tagger makes mistakes, and they travel.**
 

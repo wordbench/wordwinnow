@@ -9,6 +9,12 @@ was tagged in the SemCor corpus, which is the most-frequent-sense ordering and
 not disambiguation in context.
 """
 
+from itertools import (
+    chain,
+)
+from re import (
+    findall,
+)
 from types import (
     MappingProxyType,
 )
@@ -103,6 +109,55 @@ class WordNetLexicalSemantics:
         )
 
 
+def example_of(
+    *,
+    synset: Synset,
+    query: str,
+) -> str | None:
+    """
+    The sense's first example that uses the word `query`, in any form
+    WordNet's own morphology reduces to it, or `None`.
+    """
+
+    # NOTE:
+    # WordNet's examples belong to a sense, not to one of its words, so an example of `observe` can read "She detected
+    # high levels of lead in her drinking water"; a card shows an example only when it shows the word, and a form
+    # WordNet cannot reduce to it costs the example rather than showing one that misleads.
+    part_of_speech = "a" if synset.pos() == "s" else synset.pos()
+
+    parts = query.lower().split(
+        sep="_",
+    )
+
+    for example in synset.examples():
+        tokens = findall(
+            pattern=r"[a-z]+",
+            string=example.lower(),
+        )
+
+        forms = frozenset(
+            chain(
+                tokens,
+                (
+                    form
+                    for token in tokens
+                    if (
+                        form := wordnet.morphy(
+                            form=token,
+                            pos=part_of_speech,
+                        )
+                    )
+                    is not None
+                ),
+            ),
+        )
+
+        if all(part in forms for part in parts):
+            return example
+
+    return None
+
+
 def gloss_of(
     *,
     synset: Synset,
@@ -157,15 +212,16 @@ def _sense(
 ) -> LexicalSense:
     own = tuple(lemma for lemma in synset.lemmas() if lemma.name().lower() == query)
 
-    examples = synset.examples()
-
     return LexicalSense(
         key=synset.name(),
         part_of_speech=part_of_speech,
         gloss=gloss_of(
             synset=synset,
         ),
-        example=examples[0] if examples else None,
+        example=example_of(
+            synset=synset,
+            query=query,
+        ),
         synonyms=tuple(
             _word(
                 lemma,
@@ -196,6 +252,9 @@ def _sense(
             synset.hyponyms(),
         ),
         category=synset.lexname(),
+        is_instance=bool(
+            synset.instance_hypernyms(),
+        ),
     )
 
 

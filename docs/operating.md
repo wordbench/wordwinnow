@@ -22,7 +22,7 @@ without it, they talk to the intake service, which `stats` always reads from.
 | `--no-dictionary` | Skip the provider, which is the right choice offline and the quickest way to see the tool work |
 | `--limit N` | With `--source`, how many of the source's items to combine; with `list`, how many analyses to list |
 | `--tier`, `--rows` | Which tiers to show, `focus`, `stretch`, `review`, or `known`, and how many words |
-| `--detail` | One card per word with pronunciation, examples, and related words |
+| `--detail` | One card per word with pronunciation, examples, related words, and the other meanings the word can have |
 | `--json`, `--csv FILE` | The whole analysis for another program, or the shown words for a flashcard tool |
 | `--no-wait` | In the distributed mode, return the id at once |
 | `--timeout SECONDS` | In the distributed mode, how long to wait for the result, 900 by default |

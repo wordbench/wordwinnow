@@ -3,6 +3,9 @@ Winnowing: where a word's level meets the learner's, and what a learner is
 shown about a word.
 """
 
+from dataclasses import (
+    replace,
+)
 from typing import (
     Final,
     final,
@@ -55,6 +58,39 @@ _MASK_SENSE: Final = LexicalSense(
     antonyms=(),
     usage_count=1,
     hyponym_count=2,
+    category="noun.artifact",
+)
+
+# NOTE:
+# WordNet 3.0's two senses of `landau`, both never tagged in its corpus, so the physicist comes first by the order of
+# the synsets alone.
+_LANDAU_THE_PHYSICIST: Final = LexicalSense(
+    key="landau.n.01",
+    part_of_speech=PartOfSpeech.NOUN,
+    gloss="Soviet physicist who worked on low temperature physics (1908-1968)",
+    example=None,
+    synonyms=("Lev Davidovich Landau",),
+    hypernyms=(),
+    antonyms=(),
+    usage_count=0,
+    hyponym_count=0,
+    category="noun.person",
+    is_instance=True,
+)
+
+_LANDAU_THE_CARRIAGE: Final = LexicalSense(
+    key="landau.n.02",
+    part_of_speech=PartOfSpeech.NOUN,
+    gloss=(
+        "a four-wheel covered carriage with a roof divided into two parts (front and back) that can be let down "
+        "separately"
+    ),
+    example=None,
+    synonyms=(),
+    hypernyms=("carriage",),
+    antonyms=(),
+    usage_count=0,
+    hyponym_count=0,
     category="noun.artifact",
 )
 
@@ -383,3 +419,58 @@ class TestGloss:
             ).gloss
             is None
         )
+
+    def test_a_sense_that_names_someone_gives_way_to_the_first_that_names_a_kind_of_thing(
+        self,
+    ) -> None:
+        study_item = _study_item(
+            dictionary=None,
+            senses=(
+                _LANDAU_THE_PHYSICIST,
+                _LANDAU_THE_CARRIAGE,
+            ),
+        )
+
+        assert study_item.leading_sense == _LANDAU_THE_CARRIAGE
+
+        assert study_item.other_senses == (_LANDAU_THE_PHYSICIST,)
+
+        assert study_item.gloss == Gloss(
+            text=_LANDAU_THE_CARRIAGE.gloss,
+            source=GlossSource.LEXICAL_NETWORK,
+            part_of_speech_matched=True,
+        )
+
+    def test_a_word_whose_every_sense_names_someone_leads_with_the_most_used(
+        self,
+    ) -> None:
+        detective = replace(
+            _LANDAU_THE_PHYSICIST,
+            key="sherlock_holmes.n.01",
+            gloss="a fictitious detective in stories by A. Conan Doyle",
+            usage_count=19,
+        )
+
+        study_item = _study_item(
+            dictionary=None,
+            senses=(
+                detective,
+                _LANDAU_THE_PHYSICIST,
+            ),
+        )
+
+        assert study_item.leading_sense == detective
+
+        assert study_item.other_senses == (_LANDAU_THE_PHYSICIST,)
+
+    def test_without_senses_nothing_leads_and_nothing_else_is_listed(
+        self,
+    ) -> None:
+        study_item = _study_item(
+            dictionary=None,
+            senses=(),
+        )
+
+        assert study_item.leading_sense is None
+
+        assert study_item.other_senses == ()

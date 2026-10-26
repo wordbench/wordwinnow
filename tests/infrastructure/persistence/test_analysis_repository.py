@@ -33,6 +33,7 @@ from tests.infrastructure.persistence.conftest import (
     GROOM,
     PROFILE,
     RESOLUTE,
+    TIMINGS,
     NewUnitOfWork,
     assert_same_state,
     completed_analysis,
@@ -64,6 +65,9 @@ from wordwinnow.domain.identifiers import (
     AnalysisId,
 )
 from wordwinnow.infrastructure.persistence.mapping import (
+    analysis_from_rows,
+    analysis_to_row,
+    item_rows_of,
     progress_from_json,
     progress_to_json,
 )
@@ -126,6 +130,79 @@ class TestRoundTrip:
         assert loaded.items[0].senses == GROOM.senses
 
         assert loaded.items[1].senses == RESOLUTE.senses
+
+    async def test_a_sense_that_names_someone_keeps_its_mark_and_an_older_one_reads_as_a_kind_of_thing(
+        self,
+        *,
+        new_unit_of_work: NewUnitOfWork,
+    ) -> None:
+        named = replace(
+            GROOM.senses[0],
+            is_instance=True,
+        )
+
+        analysis = processing_analysis()
+
+        analysis.complete(
+            at=EPOCH
+            + timedelta(
+                seconds=2,
+            ),
+            items=(
+                replace(
+                    GROOM,
+                    senses=(named,),
+                ),
+                RESOLUTE,
+            ),
+            stage_timings=TIMINGS,
+        )
+
+        await store_analysis(
+            analysis=analysis,
+            new_unit_of_work=new_unit_of_work,
+        )
+
+        loaded = await load_analysis(
+            analysis_id=analysis.id,
+            new_unit_of_work=new_unit_of_work,
+        )
+
+        assert loaded is not None
+
+        assert loaded.items[0].senses == (named,)
+
+        # NOTE:
+        # A sense stored before the mark was kept has no key for it.
+        completed = completed_analysis()
+
+        older = item_rows_of(
+            analysis=completed,
+        )[0]
+
+        older.senses = [
+            {
+                key: value
+                for (
+                    key,
+                    value,
+                ) in payload.items()
+                if key != "is_instance"
+            }
+            for payload in older.senses
+        ]
+
+        assert (
+            analysis_from_rows(
+                row=analysis_to_row(
+                    analysis=completed,
+                ),
+                item_rows=(older,),
+            )
+            .items[0]
+            .senses
+            == GROOM.senses
+        )
 
     async def test_a_failed_analysis_comes_back_with_its_reason(
         self,

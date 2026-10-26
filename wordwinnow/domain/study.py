@@ -188,13 +188,42 @@ class StudyItem:
     senses: tuple[LexicalSense, ...]
 
     @property
+    def leading_sense(
+        self,
+    ) -> LexicalSense | None:
+        """
+        The sense a learner is shown first: the most used sense that names a
+        kind of thing, because a vocabulary item is never a name, or the most
+        used sense when every sense names a particular person, place, or work,
+        as every sense of `holmes` does.
+        """
+
+        return next(
+            (sense for sense in self.senses if not sense.is_instance),
+            self.senses[0] if self.senses else None,
+        )
+
+    @property
+    def other_senses(
+        self,
+    ) -> tuple[LexicalSense, ...]:
+        """
+        The other senses, most used first: the meanings the text may use
+        instead of the one shown first.
+        """
+
+        leading = self.leading_sense
+
+        return tuple(sense for sense in self.senses if sense is not leading)
+
+    @property
     def gloss(
         self,
     ) -> Gloss | None:
         """
         The meaning a learner is shown: the dictionary's definition when the
-        dictionary had one, otherwise the lexical network's gloss of the most
-        used sense, otherwise nothing.
+        dictionary had one, otherwise the lexical network's gloss of the sense
+        shown first, otherwise nothing.
         """
 
         if self.dictionary is not None and self.dictionary.definitions:
@@ -207,9 +236,11 @@ class StudyItem:
                 provenance=first.provenance,
             )
 
-        if self.senses:
+        leading = self.leading_sense
+
+        if leading is not None:
             return Gloss(
-                text=self.senses[0].gloss,
+                text=leading.gloss,
                 source=GlossSource.LEXICAL_NETWORK,
                 part_of_speech_matched=True,
             )

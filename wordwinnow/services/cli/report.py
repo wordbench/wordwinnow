@@ -51,6 +51,9 @@ from wordwinnow.domain.dictionary import (
 from wordwinnow.domain.document import (
     Document,
 )
+from wordwinnow.domain.senses import (
+    LexicalSense,
+)
 from wordwinnow.domain.study import (
     GlossSource,
     StudyItem,
@@ -258,13 +261,18 @@ def _meaning_markup(
 
 
 def _related_of(
-    study_item: StudyItem,
+    sense: LexicalSense | None,
     /,
+    *,
+    broader: bool = True,
 ) -> str:
-    if not study_item.senses:
-        return ""
+    """
+    The relations of one sense, as one line: synonyms, broader concepts when
+    `broader` asks for them, and opposites.
+    """
 
-    sense = study_item.senses[0]
+    if sense is None:
+        return ""
 
     parts: list[str] = []
 
@@ -276,7 +284,7 @@ def _related_of(
             ),
         )
 
-    if sense.hypernyms:
+    if broader and sense.hypernyms:
         parts.append(
             "< "
             + ", ".join(
@@ -294,6 +302,43 @@ def _related_of(
 
     return "; ".join(
         parts,
+    )
+
+
+def _other_meanings(
+    study_item: StudyItem,
+    /,
+) -> tuple[str, ...]:
+    """
+    The meanings a card lists after the one shown, one line each with its
+    source: the dictionary's further definitions, then WordNet's other senses,
+    most used first, each with its own synonyms and opposites, and a sense
+    that names a particular person, place, or work marked as a name.
+    """
+
+    dictionary = study_item.dictionary
+
+    definitions = dictionary.definitions if dictionary is not None else ()
+
+    lines = [
+        f"{definition.text}{'' if definition.part_of_speech_matched else ' (other part of speech)'} (dictionary)"
+        for definition in definitions[1:]
+    ]
+
+    for sense in study_item.other_senses:
+        source = "WordNet; a name" if sense.is_instance else "WordNet"
+
+        related = _related_of(
+            sense,
+            broader=False,
+        )
+
+        lines.append(
+            f"{sense.gloss} ({source}){f'  {related}' if related else ''}",
+        )
+
+    return tuple(
+        lines,
     )
 
 
@@ -541,7 +586,7 @@ def render_items(
             ),
             escape(
                 markup=_related_of(
-                    study_item,
+                    study_item.leading_sense,
                 ),
             ),
         )
@@ -549,6 +594,21 @@ def render_items(
     console.print(
         table,
     )
+
+    # NOTE:
+    # A table shows one meaning per word, so it says once that the others are on the cards, and only when some word
+    # has others.
+    if any(
+        _other_meanings(
+            study_item,
+        )
+        for study_item in items
+    ):
+        console.print(
+            "Each word shows one meaning, which may not be the one the text uses; --detail lists the others.",
+            style="dim",
+            highlight=False,
+        )
 
     provenances = tuple(
         provenance
@@ -589,8 +649,9 @@ def render_cards(
 ) -> None:
     """
     Print one card per study item, with everything the analysis learned: the
-    pronunciation and the dictionary's example when the dictionary had them,
-    the lexical network's relations, and the sentence from the text.
+    pronunciation when the dictionary had it, the meaning shown with an
+    example and its relations, the sentence from the text, and then, set back,
+    the other meanings the word can have.
     """
 
     for study_item in items:
@@ -629,6 +690,10 @@ def render_cards(
             }",
         )
 
+        gloss = study_item.gloss
+
+        leading = study_item.leading_sense
+
         if dictionary is not None and dictionary.definitions and dictionary.definitions[0].example:
             example = escape(
                 markup=dictionary.definitions[0].example,
@@ -638,7 +703,21 @@ def render_cards(
                 f"  [italic]{example}[/]",
             )
 
-        gloss = study_item.gloss
+        # NOTE:
+        # WordNet gives the meaning only when the dictionary gave none, so its example stands in the same place.
+        elif (
+            gloss is not None
+            and gloss.source is GlossSource.LEXICAL_NETWORK
+            and leading is not None
+            and leading.example
+        ):
+            example = escape(
+                markup=leading.example,
+            )
+
+            console.print(
+                f"  [italic]{example}[/]",
+            )
 
         if gloss is not None and gloss.provenance is not None:
             console.print(
@@ -656,7 +735,7 @@ def render_cards(
 
         related = escape(
             markup=_related_of(
-                study_item,
+                leading,
             ),
         )
 
@@ -672,6 +751,29 @@ def render_cards(
         console.print(
             f"  [dim]in the text: {sentence}[/]",
         )
+
+        others = _other_meanings(
+            study_item,
+        )
+
+        if others:
+            console.print(
+                "  other meanings, which the text may use instead:",
+                style="dim",
+                highlight=False,
+            )
+
+            for line in others:
+                console.print(
+                    f"    {
+                        escape(
+                            markup=line,
+                        )
+                    }",
+                    style="dim",
+                    highlight=False,
+                    soft_wrap=True,
+                )
 
         console.print()
 
@@ -906,9 +1008,9 @@ def to_csv(
                 else "",
                 value if dictionary is not None and (value := dictionary.phonetic) else "",
                 "; ".join(
-                    value_objects[0].synonyms,
+                    value_object.synonyms,
                 )
-                if (value_objects := study_item.senses)
+                if (value_object := study_item.leading_sense) is not None
                 else "",
             ),
         )

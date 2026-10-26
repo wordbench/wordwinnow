@@ -363,6 +363,8 @@ class SenseOut(
 
     category: str
 
+    is_instance: bool = False
+
 
 class GlossOut(
     BaseModel,
@@ -787,6 +789,7 @@ def _item_out(
                 usage_count=sense.usage_count,
                 hyponym_count=sense.hyponym_count,
                 category=sense.category,
+                is_instance=sense.is_instance,
             )
             for sense in study_item.senses
         ],
@@ -850,6 +853,7 @@ def _item_in(
                 usage_count=sense.usage_count,
                 hyponym_count=sense.hyponym_count,
                 category=sense.category,
+                is_instance=sense.is_instance,
             )
             for sense in item.senses
         ),

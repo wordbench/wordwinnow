@@ -33,6 +33,7 @@ from wordwinnow.domain.language import (
     PartOfSpeech,
 )
 from wordwinnow.infrastructure.lexicon.wordnet_semantics import (
+    example_of,
     gloss_of,
 )
 from wordwinnow.infrastructure.linguistics.nltk_resources import (
@@ -122,11 +123,12 @@ def _meaning_of(
             text=gloss_of(
                 synset=synset,
             ),
-            example=next(
-                iter(
-                    synset.examples(),
+            example=example_of(
+                synset=synset,
+                query=headword.lower().replace(
+                    " ",
+                    "_",
                 ),
-                None,
             ),
         )
         for synset in wordnet.synsets(

@@ -5,6 +5,9 @@ The report a learner reads.
 from csv import (
     reader,
 )
+from dataclasses import (
+    replace,
+)
 from datetime import (
     UTC,
     datetime,
@@ -170,10 +173,62 @@ _PERFIDY: Final = LexicalSense(
 )
 
 # NOTE:
+# WordNet 3.0's two senses of `landau`, in its own order: the physicist first, though the story means the carriage.
+_LANDAU_THE_PHYSICIST: Final = LexicalSense(
+    key="landau.n.01",
+    part_of_speech=PartOfSpeech.NOUN,
+    gloss="Soviet physicist who worked on low temperature physics (1908-1968)",
+    example=None,
+    synonyms=("Lev Davidovich Landau",),
+    hypernyms=(),
+    antonyms=(),
+    usage_count=0,
+    hyponym_count=0,
+    category="noun.person",
+    is_instance=True,
+)
+
+_LANDAU_THE_CARRIAGE: Final = LexicalSense(
+    key="landau.n.02",
+    part_of_speech=PartOfSpeech.NOUN,
+    gloss=(
+        "a four-wheel covered carriage with a roof divided into two parts (front and back) that can be let down "
+        "separately"
+    ),
+    example=None,
+    synonyms=(),
+    hypernyms=("carriage",),
+    antonyms=(),
+    usage_count=0,
+    hyponym_count=0,
+    category="noun.artifact",
+)
+
+# NOTE:
 # Watson's own sentence from the story, the one place it uses the word.
 _TREACHERY_SENTENCE: Final = (
     "And yet it would be the blackest treachery to Holmes to draw back now from the part which he had entrusted to "
     "me."
+)
+
+_LANDAU: Final = StudyItem(
+    item=VocabularyItem(
+        lemma="landau",
+        part_of_speech=PartOfSpeech.NOUN,
+        occurrence_count=4,
+        example_sentence="Holmes saw a neat little landau, the coachman with his coat only half-buttoned.",
+    ),
+    zipf_frequency=2.1,
+    level=LevelAssessment(
+        level=CefrLevel.C2,
+        source=LevelSource.MODEL,
+    ),
+    tier=StudyTier.STRETCH,
+    dictionary=_UNAVAILABLE,
+    senses=(
+        _LANDAU_THE_PHYSICIST,
+        _LANDAU_THE_CARRIAGE,
+    ),
 )
 
 _ITEMS: Final = (
@@ -208,7 +263,10 @@ _ITEMS: Final = (
 )
 
 
-def _completed() -> Analysis:
+def _completed(
+    *,
+    items: tuple[StudyItem, ...] = _ITEMS,
+) -> Analysis:
     analysis = request_an_analysis(
         document=Document(
             title="a-scandal-in-bohemia",
@@ -227,7 +285,7 @@ def _completed() -> Analysis:
 
     analysis.complete(
         at=_EPOCH,
-        items=_ITEMS,
+        items=items,
         stage_timings=(
             StageTiming(
                 stage=Stage.WINNOWING,
@@ -609,6 +667,120 @@ class TestRendering:
 
         assert f"in the text: {_TREACHERY_SENTENCE}" in text
 
+    def test_a_card_leads_with_a_kind_of_thing_and_lists_the_other_meanings_after_the_sentence(
+        self,
+    ) -> None:
+        console = Console(
+            record=True,
+            width=300,
+        )
+
+        render_cards(
+            items=(_LANDAU,),
+            console=console,
+        )
+
+        text = console.export_text()
+
+        assert (
+            text.index(
+                "a four-wheel covered carriage",
+            )
+            < text.index(
+                "in the text: Holmes saw a neat little landau",
+            )
+            < text.index(
+                "other meanings, which the text may use instead:",
+            )
+            < text.index(
+                "Soviet physicist",
+            )
+        )
+
+        assert "< carriage" in text
+
+        assert (
+            "Soviet physicist who worked on low temperature physics (1908-1968) (WordNet; a name)  "
+            "= Lev Davidovich Landau"
+        ) in text
+
+    def test_the_dictionary_s_further_definitions_are_listed_with_their_source_and_part_of_speech(
+        self,
+    ) -> None:
+        console = Console(
+            record=True,
+            width=200,
+        )
+
+        render_cards(
+            items=(
+                _item(
+                    "mask",
+                    StudyTier.FOCUS,
+                    CefrLevel.B2,
+                    example_sentence="The King wore a black mask.",
+                    dictionary=replace(
+                        _FOUND,
+                        definitions=(
+                            *_FOUND.definitions,
+                            SelectedDefinition(
+                                text="To hide the face with a covering.",
+                                example=None,
+                                part_of_speech_matched=False,
+                            ),
+                        ),
+                    ),
+                    senses=(_PERFIDY,),
+                ),
+            ),
+            console=console,
+        )
+
+        text = console.export_text()
+
+        assert "A covering that hides the face." in text
+
+        assert "    To hide the face with a covering. (other part of speech) (dictionary)" in text
+
+        assert "betrayal of a trust" not in text
+
+    def test_the_table_says_once_that_the_cards_hold_the_other_meanings(
+        self,
+    ) -> None:
+        hint = "Each word shows one meaning, which may not be the one the text uses; --detail lists the others."
+
+        with_others = Console(
+            record=True,
+            width=200,
+        )
+
+        render_items(
+            items=(
+                _LANDAU,
+                _LANDAU,
+            ),
+            console=with_others,
+        )
+
+        without_others = Console(
+            record=True,
+            width=200,
+        )
+
+        render_items(
+            items=_ITEMS,
+            console=without_others,
+        )
+
+        assert (
+            with_others.export_text().count(
+                hint,
+            )
+            == 1
+        )
+
+        assert hint not in without_others.export_text()
+
     def test_a_borrowed_text_is_attributed_linked_and_exported_without_its_sentences(
         self,
     ) -> None:
@@ -712,6 +884,28 @@ class TestRendering:
         assert payload["items"][1]["gloss"]["source"] == "lexical_network"
 
         assert payload["profile"]["target_level"] == "B2"
+
+        landau = _completed(
+            items=(_LANDAU,),
+        )
+
+        landau_payload = loads(
+            s=to_json(
+                analysis=landau,
+            ),
+        )
+
+        assert tuple(sense["is_instance"] for sense in landau_payload["items"][0]["senses"]) == (
+            True,
+            False,
+        )
+
+        assert (
+            AnalysisOut.model_validate(
+                obj=landau_payload,
+            ).to_domain()
+            == landau
+        )
 
         assert (
             AnalysisOut.model_validate(

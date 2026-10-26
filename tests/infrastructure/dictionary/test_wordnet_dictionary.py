@@ -83,6 +83,30 @@ class TestWordNetDictionary:
 
         assert verb.definitions[0].example == "I photographed the scene of the accident"
 
+    async def test_a_definition_brings_no_example_that_leaves_the_word_out(
+        self,
+        *,
+        dictionary: WordNetDictionary,
+    ) -> None:
+        # NOTE:
+        # The first sense of the verb `call` is the one it shares with `name`, whose examples say only `named`; its
+        # third, telephoning, says `call` in its first.
+        lookup = await dictionary.look_up(
+            lemma="call",
+        )
+
+        (entry,) = lookup.entries
+
+        verb = next(meaning for meaning in entry.meanings if meaning.part_of_speech is PartOfSpeech.VERB)
+
+        assert (
+            verb.definitions[0].example,
+            verb.definitions[2].example,
+        ) == (
+            None,
+            "I tried to call you all night",
+        )
+
     async def test_a_word_wordnet_lacks_is_not_found(
         self,
         *,
