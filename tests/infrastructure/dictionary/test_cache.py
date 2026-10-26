@@ -1,7 +1,17 @@
 """
-The caching dictionary over an in-memory store and over a Redis double.
+The caching dictionary over an in-memory store and over a Redis double, and
+the local mode's store in a SQLite file.
 """
 
+from contextlib import (
+    closing,
+)
+from pathlib import (
+    Path,
+)
+from sqlite3 import (
+    connect,
+)
 from types import (
     MappingProxyType,
 )
@@ -38,6 +48,7 @@ from wordwinnow.infrastructure.dictionary.cache import (
     LookupCounts,
     RedisDictionaryCache,
     cache_key,
+    open_sqlite_dictionary_cache,
 )
 from wordwinnow.infrastructure.dictionary.wire import (
     FailureReason,
@@ -558,3 +569,233 @@ class TestInMemoryDictionaryCache:
                 key="nonexistent",
             )
         ) is None
+
+
+def _stored_keys(
+    path: Path,
+    /,
+) -> tuple[str, ...]:
+    """
+    The keys the cache file at `path` holds, read past the cache, expired or
+    not.
+    """
+
+    with closing(
+        thing=connect(
+            database=path,
+        ),
+    ) as connection:
+        return tuple(
+            key
+            for (key,) in connection.execute(
+                "SELECT key FROM dictionary_cache ORDER BY key",
+            )
+        )
+
+
+@final
+class TestSqliteDictionaryCache:
+    async def test_what_one_command_stores_the_next_one_reads(
+        self,
+        *,
+        tmp_path: Path,
+    ) -> None:
+        path = tmp_path / "local" / "dictionary-cache.db"
+
+        async with open_sqlite_dictionary_cache(
+            path=path,
+        ) as cache:
+            await cache.set(
+                key="foo",
+                value="bar",
+                ttl_seconds=10,
+            )
+
+        async with open_sqlite_dictionary_cache(
+            path=path,
+        ) as cache:
+            assert (
+                await cache.get(
+                    key="foo",
+                )
+            ) == "bar"
+
+            assert (
+                await cache.get(
+                    key="nonexistent",
+                )
+            ) is None
+
+    async def test_a_value_expires_when_its_ttl_has_passed_and_the_next_open_deletes_it(
+        self,
+        *,
+        tmp_path: Path,
+    ) -> None:
+        path = tmp_path / "dictionary-cache.db"
+
+        # NOTE:
+        # Any clock in seconds that only the test moves stands in for the wall clock.
+        clock = FakeMonotonicClock()
+
+        async with open_sqlite_dictionary_cache(
+            path=path,
+            clock=clock,
+        ) as cache:
+            await cache.set(
+                key="foo",
+                value="bar",
+                ttl_seconds=10,
+            )
+
+            await cache.set(
+                key="baz",
+                value="qux",
+                ttl_seconds=20,
+            )
+
+            clock.advance(
+                seconds=9.5,
+            )
+
+            assert (
+                await cache.get(
+                    key="foo",
+                )
+            ) == "bar"
+
+            clock.advance(
+                seconds=0.5,
+            )
+
+            assert (
+                await cache.get(
+                    key="foo",
+                )
+            ) is None
+
+        assert _stored_keys(
+            path,
+        ) == (
+            "baz",
+            "foo",
+        )
+
+        async with open_sqlite_dictionary_cache(
+            path=path,
+            clock=clock,
+        ) as cache:
+            assert _stored_keys(
+                path,
+            ) == ("baz",)
+
+            assert (
+                await cache.get(
+                    key="baz",
+                )
+            ) == "qux"
+
+    async def test_a_value_stored_again_replaces_the_old_one_and_its_ttl(
+        self,
+        *,
+        tmp_path: Path,
+    ) -> None:
+        clock = FakeMonotonicClock()
+
+        async with open_sqlite_dictionary_cache(
+            path=tmp_path / "dictionary-cache.db",
+            clock=clock,
+        ) as cache:
+            await cache.set(
+                key="foo",
+                value="bar",
+                ttl_seconds=10,
+            )
+
+            await cache.set(
+                key="foo",
+                value="qux",
+                ttl_seconds=20,
+            )
+
+            clock.advance(
+                seconds=15,
+            )
+
+            assert (
+                await cache.get(
+                    key="foo",
+                )
+            ) == "qux"
+
+    async def test_a_damaged_file_leaves_a_cache_in_memory_and_the_file_as_it_was(
+        self,
+        *,
+        tmp_path: Path,
+    ) -> None:
+        path = tmp_path / "dictionary-cache.db"
+
+        damaged = b"not a database " * 100
+
+        path.write_bytes(
+            data=damaged,
+        )
+
+        async with open_sqlite_dictionary_cache(
+            path=path,
+        ) as cache:
+            await cache.set(
+                key="foo",
+                value="bar",
+                ttl_seconds=10,
+            )
+
+            assert (
+                await cache.get(
+                    key="foo",
+                )
+            ) == "bar"
+
+        assert isinstance(
+            cache,
+            InMemoryDictionaryCache,
+        )
+
+        assert path.read_bytes() == damaged
+
+    async def test_a_file_that_fails_once_open_degrades_to_a_miss(
+        self,
+        *,
+        tmp_path: Path,
+    ) -> None:
+        path = tmp_path / "dictionary-cache.db"
+
+        async with open_sqlite_dictionary_cache(
+            path=path,
+        ) as cache:
+            await cache.set(
+                key="foo",
+                value="bar",
+                ttl_seconds=10,
+            )
+
+            with closing(
+                thing=connect(
+                    database=path,
+                    isolation_level=None,
+                ),
+            ) as other:
+                other.execute(
+                    "DROP TABLE dictionary_cache",
+                )
+
+            assert (
+                await cache.get(
+                    key="foo",
+                )
+            ) is None
+
+            await cache.set(
+                key="foo",
+                value="bar",
+                ttl_seconds=10,
+            )

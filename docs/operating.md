@@ -67,7 +67,7 @@ timeout, the pause before another attempt, with a bar against the pause, or
 the outcome of the trial after an outage.
 
 In the local mode the view reads the dictionary in its own process, whose
-cache lasts only as long as the command; in the distributed mode it reads
+cache is a file the next command reads too; in the distributed mode it reads
 `GET /activity` on the enrichment service at `WORDWINNOW_ENRICHMENT_URL`,
 `http://127.0.0.1:8100` unless set, the port the Compose stack publishes, and
 counts what the service did since the analysis began, which an analysis
@@ -192,7 +192,7 @@ and the model.
 | `WORDWINNOW_DATABASE_URL` | `sqlite+aiosqlite:///data/local/wordwinnow.db` | The analysis store |
 | `WORDWINNOW_KAFKA_BOOTSTRAP_SERVERS` | `127.0.0.1:9092` | The broker |
 | `WORDWINNOW_KAFKA_CONSUMER_GROUP` | `wordwinnow-analysis-workers` | The analysis workers' consumer group |
-| `WORDWINNOW_REDIS_URL` | unset | The enrichment service's dictionary cache, in its own process when unset; the command line and a worker without an enrichment URL always cache in their own process |
+| `WORDWINNOW_REDIS_URL` | unset | The enrichment service's dictionary cache, in its own process when unset; the command line caches in its own file, and a worker without an enrichment URL in its own process |
 | `WORDWINNOW_CLICKHOUSE_HOST`, `_PORT`, `_DATABASE` | `127.0.0.1`, `8123`, `wordwinnow` | The fact store |
 | `WORDWINNOW_CLICKHOUSE_USER`, `_PASSWORD` | `wordwinnow`, `wordwinnow` | The fact store's account, the one the Compose stack creates |
 | `WORDWINNOW_INTAKE_URL` | `http://127.0.0.1:8010` | Where the CLI finds intake |
@@ -210,6 +210,7 @@ and the model.
 | `WORDWINNOW_DICTIONARY_PATIENCE_SECONDS` | 180 | How long an analysis waits, in all, for a provider that stopped answering, before WordNet stands in for the words still waiting; 0 fails fast |
 | `WORDWINNOW_ENRICHMENT_TIMEOUT_SECONDS` | 180 | How long a worker waits for one lookup from the enrichment service |
 | `WORDWINNOW_DICTIONARY_FOUND_TTL_SECONDS`, `WORDWINNOW_DICTIONARY_NOT_FOUND_TTL_SECONDS` | 30 days, 7 days | How long the cache keeps a found and a not-found answer |
+| `WORDWINNOW_DICTIONARY_CACHE_PATH` | `data/local/dictionary-cache.db` | The local mode's dictionary cache, kept from one command to the next; a file that cannot be opened leaves the command a cache in its own process and is left as it was, and deleting it only makes the next analysis ask the provider again |
 | `WORDWINNOW_STALE_AFTER_SECONDS` | 600 | How long an analysis may wait since it was requested, or process since it started, before `wordwinnow admin requeue` hands it back |
 | `WORDWINNOW_LOG_FORMAT`, `WORDWINNOW_LOG_LEVEL` | `console`, unset | `json` for the services; unset, the command line logs warnings and worse and a service logs from `INFO` up |
 | `WORDWINNOW_TRACING_ENABLED` | false | Export traces to `OTEL_EXPORTER_OTLP_ENDPOINT` |

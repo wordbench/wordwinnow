@@ -106,9 +106,9 @@ Here each port is a `Protocol` in a module named after it, a use case is a
 function that takes ports as arguments, and the composition root decides which
 adapters to pass.
 
-So the same use cases run in one process against SQLite, an in-memory cache,
-and no broker, and as services against PostgreSQL, Redis, and Kafka, and every
-test of a use case passes fakes instead.
+So the same use cases run in one process against SQLite, a cache in a SQLite
+file, and no broker, and as services against PostgreSQL, Redis, and Kafka, and
+every test of a use case passes fakes instead.
 
 Two dictionaries, the Free Dictionary API and WordNet, answer one port, and
 five New York Times sources answer another, and nothing in the use cases tells
@@ -255,7 +255,7 @@ Times is the only provider implemented.
 | `LexicalSemantics` | WordNet 3.0 through NLTK | same | same |
 | `ReferenceLexicon` | The CSV reference lists | same | same |
 | `LevelEstimator` | scikit-learn, or a no-op without a model file | same | same |
-| `Dictionary` | The Free Dictionary API behind a cache, or WordNet | in-memory cache | the enrichment service, which holds the Redis cache |
+| `Dictionary` | The Free Dictionary API behind a cache, or WordNet | a cache in a SQLite file | the enrichment service, which holds the Redis cache |
 | `DocumentSource` | The New York Times feeds and APIs, by name | same | same, inside intake |
 | `AnalysisRepository`, `UnitOfWork` | SQLAlchemy over one session | SQLite | PostgreSQL |
 | `AnalysisEventPublisher` | Kafka | a null publisher; the pipeline runs in-process | Kafka |

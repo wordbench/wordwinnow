@@ -10,8 +10,12 @@ lookup.
 """
 
 from collections.abc import (
+    AsyncGenerator,
     Awaitable,
     Callable,
+)
+from contextlib import (
+    asynccontextmanager,
 )
 from dataclasses import (
     dataclass,
@@ -19,8 +23,15 @@ from dataclasses import (
 from logging import (
     getLogger,
 )
+from pathlib import (
+    Path,
+)
+from sqlite3 import (
+    Error as SqliteError,
+)
 from time import (
     monotonic,
+    time,
 )
 from types import (
     MappingProxyType,
@@ -32,6 +43,10 @@ from typing import (
     final,
 )
 
+from aiosqlite import (
+    Connection,
+    connect,
+)
 from redis.exceptions import (
     RedisError,
 )
@@ -54,6 +69,8 @@ from wordwinnow.infrastructure.dictionary.wire import (
 
 type LookupObserver = Callable[[DictionaryLookup, bool], None]
 
+type WallClock = Callable[[], float]
+
 # WARN:
 # The version in the key names the shape of the cached payload, and it changes whenever that shape does: provenance is
 # optional in the payload, so an entry written in a shape without it would still validate and would show Wiktionary's
@@ -64,6 +81,24 @@ KEY_PREFIX: Final = "wordwinnow:dictionary:v2:"
 
 _logger: Final = getLogger(
     name="wordwinnow.dictionary",
+)
+
+# NOTE:
+# The table is the cache's own and is created when it is missing; the key names the payload's shape, as in Redis, so a
+# new shape needs no migration: the old entries are never read again, and the open that follows their expiry deletes
+# them.
+_SCHEMA: Final = (
+    "CREATE TABLE IF NOT EXISTS dictionary_cache "
+    "(key TEXT PRIMARY KEY, value TEXT NOT NULL, expires_at REAL NOT NULL)"
+)
+
+_PURGE: Final = "DELETE FROM dictionary_cache WHERE expires_at <= ?"
+
+_READ: Final = "SELECT value FROM dictionary_cache WHERE key = ? AND expires_at > ?"
+
+_WRITE: Final = (
+    "INSERT INTO dictionary_cache (key, value, expires_at) VALUES (?, ?, ?) "
+    "ON CONFLICT (key) DO UPDATE SET value = excluded.value, expires_at = excluded.expires_at"
 )
 
 
@@ -284,6 +319,168 @@ class RedisDictionaryCache:
 
 
 @final
+class SqliteDictionaryCache:
+    """
+    A cache in a SQLite file, for the local mode: what one command learns from
+    the provider, the next command finds, until the entry expires.
+
+    Expiry is by the wall clock, because a monotonic clock starts again with
+    every process, and an entry has to outlive the process that wrote it.
+    """
+
+    def __init__(
+        self,
+        *,
+        connection: Connection,
+        clock: WallClock = time,
+    ) -> None:
+        self._connection: Final = connection
+
+        self._clock: Final = clock
+
+    async def get(
+        self,
+        *,
+        key: str,
+    ) -> str | None:
+        try:
+            async with self._connection.execute(
+                sql=_READ,
+                parameters=(
+                    key,
+                    self._clock(),
+                ),
+            ) as cursor:
+                row = await cursor.fetchone()
+
+        except SqliteError as exception:
+            _warn(
+                "get",
+                exception,
+            )
+
+            return None
+
+        if row is None:
+            return None
+
+        return str(
+            object=row[0],
+        )
+
+    async def set(
+        self,
+        *,
+        key: str,
+        value: str,
+        ttl_seconds: int,
+    ) -> None:
+        try:
+            await self._connection.execute(
+                sql=_WRITE,
+                parameters=(
+                    key,
+                    value,
+                    self._clock() + ttl_seconds,
+                ),
+            )
+
+        except SqliteError as exception:
+            _warn(
+                "set",
+                exception,
+            )
+
+
+@asynccontextmanager
+async def open_sqlite_dictionary_cache(
+    *,
+    path: Path,
+    clock: WallClock = time,
+) -> AsyncGenerator[DictionaryCache]:
+    """
+    Open the cache file at `path`, creating it and its folder when missing,
+    and delete the entries that have expired, for the duration of one command.
+
+    A file that cannot be opened, such as one another program has damaged,
+    leaves the command with a cache in process memory, as the local mode had
+    before, rather than failing it; the file is left as it was, for whoever
+    wants to look at it.
+    """
+
+    connection = await _open(
+        path,
+        clock(),
+    )
+
+    if connection is None:
+        yield InMemoryDictionaryCache()
+
+        return
+
+    try:
+        yield SqliteDictionaryCache(
+            connection=connection,
+            clock=clock,
+        )
+
+    finally:
+        await connection.close()
+
+
+async def _open(
+    path: Path,
+    now: float,
+    /,
+) -> Connection | None:
+    try:
+        path.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        # NOTE:
+        # Every statement commits on its own, so a command stopped part way keeps every answer it has written.
+        connection = await connect(
+            database=path,
+            isolation_level=None,
+        )
+
+    except (
+        OSError,
+        SqliteError,
+    ) as exception:
+        _warn(
+            "open",
+            exception,
+        )
+
+        return None
+
+    try:
+        await connection.execute(
+            sql=_SCHEMA,
+        )
+
+        await connection.execute(
+            sql=_PURGE,
+            parameters=(now,),
+        )
+
+    except SqliteError as exception:
+        await connection.close()
+
+        _warn(
+            "open",
+            exception,
+        )
+
+        return None
+
+    return connection
+
+
+@final
 class CachingDictionary:
     """
     Answers from the cache when it can, and asks `inner` otherwise.
@@ -466,7 +663,7 @@ def _decode(
 
 def _warn(
     operation: str,
-    exception: RedisError,
+    exception: RedisError | SqliteError | OSError,
     /,
 ) -> None:
     kind = type(

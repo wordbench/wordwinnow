@@ -90,6 +90,7 @@ from wordwinnow.infrastructure.dictionary.cache import (
     InMemoryDictionaryCache,
     LookupObserver,
     RedisDictionaryCache,
+    open_sqlite_dictionary_cache,
 )
 from wordwinnow.infrastructure.dictionary.disabled import (
     DisabledDictionary,
@@ -628,6 +629,10 @@ async def local_profile(
 
     Without the dictionary, the provider is never asked, and the analysis says
     so in its options.
+
+    With it, the provider's answers outlive the command in the cache file the
+    settings name, so the next command asks only for the words the provider
+    has not answered lately.
     """
 
     # NOTE:
@@ -673,7 +678,11 @@ async def local_profile(
             build_provider_dictionary(
                 settings=settings,
                 client=client,
-                cache=InMemoryDictionaryCache(),
+                cache=await stack.enter_async_context(
+                    cm=open_sqlite_dictionary_cache(
+                        path=settings.dictionary_cache_path,
+                    ),
+                ),
                 on_lookup=None,
                 observer=None,
             )

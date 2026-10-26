@@ -158,6 +158,13 @@ class Settings(
     dictionary_not_found_ttl_seconds: int = 7 * 24 * 60 * 60
 
     # NOTE:
+    # Where the local mode keeps the dictionary's answers from one command to the next; the distributed mode keeps
+    # them in Redis.
+    dictionary_cache_path: Path = Path(
+        "data/local/dictionary-cache.db",
+    )
+
+    # NOTE:
     # The secondary source, optional; an unset key disables the source rather than the process.
     nyt_api_key: SecretStr | None = None
 
