@@ -38,6 +38,9 @@ from rich.console import (
 from rich.text import (
     Text,
 )
+from typer import (
+    rich_utils,
+)
 from typer.testing import (
     CliRunner,
 )
@@ -104,6 +107,33 @@ _EPOCH: Final = datetime(
     day=1,
     tzinfo=UTC,
 )
+
+
+# NOTE:
+# Typer styles its output as for a terminal wherever `GITHUB_ACTIONS` is set, and its highlighter splits an option's
+# name such as `--wait` into styled runs, so an assertion that reads a usage error as plain text passes locally and
+# fails only in CI.
+#
+# Every test here styles Typer's output as CI does, in the standard colors whatever the local `TERM` says, so such an
+# assertion fails locally too, and the assertions read the plain text under the styling.
+@fixture(
+    autouse=True,
+)
+def styled_as_in_ci(
+    *,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        target=rich_utils,
+        name="FORCE_TERMINAL",
+        value=True,
+    )
+
+    monkeypatch.setattr(
+        target=rich_utils,
+        name="COLOR_SYSTEM",
+        value="standard",
+    )
 
 
 @fixture
@@ -385,9 +415,6 @@ class TestCli:
 
         assert result.exit_code == 2
 
-        # NOTE:
-        # Typer styles its output as for a terminal wherever `GITHUB_ACTIONS` is set, and the highlighter then renders
-        # `--level` as two styled runs, so the assertion reads the plain text under the styling.
         assert (
             "--level"
             in Text.from_ansi(
@@ -1115,7 +1142,12 @@ class TestShowingAnAnalysisInProgress:
 
         assert result.exit_code == 2
 
-        assert "--wait waits for the services" in result.output
+        assert (
+            "--wait waits for the services"
+            in Text.from_ansi(
+                text=result.output,
+            ).plain
+        )
 
     def test_an_interrupted_wait_says_the_analysis_goes_on_and_ends_as_an_interrupt_does(
         self,
