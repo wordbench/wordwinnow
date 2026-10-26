@@ -97,7 +97,7 @@ without `--local` sends the text there.
 While it works, `analyze` says on standard error what it is doing, and
 `--view operator` adds under that line what the dictionary is doing: whether the
 provider is answering, rate-limited, or failing, and why, the last minute of
-the client's requests, and the lookups in flight; [the operating guide](docs/operating.md) names
+the client's requests, and the lookups in flight; [the operating guide](docs/operating.md#the-operator-view) names
 every row.
 
 ![The operator's view of failures, a request limit, an outage, and a recovery](docs/images/operator.gif)

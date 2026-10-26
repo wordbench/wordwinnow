@@ -71,64 +71,8 @@ In the distributed mode the line shows the same stages and counts, from what
 the worker processing the analysis last wrote beside it, about once a second;
 until that first report, it says whether a worker has taken the analysis.
 
-With `--view operator`, the line stays, and under it a panel shows the
-dictionary's mechanics while the analysis runs; its border and title say how
-the provider has been answering the client: answering, in green; rate-limited,
-in yellow, while a pause the provider asked for holds; and failing, in yellow
-while requests fail in a row and in red while the circuit is not closed.
-
-In the panel stand the circuit, with what opened it; the next try, while the
-circuit or a pause holds the requests back; the last minute of the client's
-own requests, and how long ago one was last answered once that is longer than
-a minute; how the dictionary's lookups were answered since the view began,
-from the cache or by the provider; the ones it turned away and the retries,
-each by reason; the request budget; and the lookups in flight.
-
-The row `last minute` has a mark for each second of the last minute, the newest
-on the right: `✓` when a request the client sent was answered in that second,
-found or not, `!` when the provider refused one with a 429, `✗` when one failed,
-by a server error, a timeout, a connection that failed, or an answer the
-client could not read, and `·` when none came back; in a second that held
-several, a failure outweighs a refusal, and a refusal an answer.
-
-Every row is what the client saw of its own requests or what it decided, and
-none says what the provider did otherwise, which the client cannot see: a
-provider that has recovered shows as recovered only once a trial is answered.
-
-While the circuit is open, its row says what opened it, five failed requests
-or the trial that failed last, with the reason, and the next try names the
-trial that comes next and in how many seconds, or the end of the provider's
-pause when that comes later, because the pause holds the trial too; while it
-is half-open, its row says which trial is in flight and how many lookups wait
-for its outcome.
-
-While the circuit is closed, its row counts the requests that failed in a row
-since the last answer, against the five that open the circuit; any answer
-starts the count again, a request to slow down included.
-
-The row `turned away` is a different number, a total by reason since the view
-began, the words the open circuit refused without asking included, as
-`held back`, so it can pass five while the count in a row stays below it and the
-circuit stays closed; a word turned away may be asked again and answered, so
-the report's count of unavailable words is the one that says what the learner
-gets.
-
-The lookups in flight are counted by what they wait for: asking the provider,
-retrying after a pause, behind the trial, paused while the provider's pause
-lasts, or queued for a token; each one asking or retrying has a row of its
-own, with a bar against the request's timeout or against the pause before its
-next attempt.
-
-In the local mode the view reads the dictionary in its own process, whose
-cache is a file the next command reads too; in the distributed mode it reads
-`GET /activity` on the enrichment service at `WORDWINNOW_ENRICHMENT_URL`,
-`http://127.0.0.1:8100` unless set, the port the Compose stack publishes, and
-counts what the service did since the view began, for every analysis it served
-meanwhile, so a second analysis running beside it shows in the counts.
-
-The activity names the words in flight, as each lookup a worker sends does,
-and like every port the stack publishes, the enrichment service's listens on
-127.0.0.1 alone.
+`--view operator` adds a panel under the line with what the dictionary is doing,
+which [the operator view](#the-operator-view) describes.
 
 ## Sources
 
@@ -382,7 +326,84 @@ whether the dictionary is paused, and, while words wait for it to answer
 again, the seconds from the report until the next try and until the stage
 stops waiting.
 
+## The operator view
+
+With `--view operator`, the line stays, and under it a panel shows the
+dictionary's mechanics while the analysis runs; its border and title say how
+the provider has been answering the client: answering, in green; rate-limited,
+in yellow, while a pause the provider asked for holds; and failing, in yellow
+while requests fail in a row and in red while the circuit is not closed.
+
+In the panel stand the circuit, with what opened it; the next try, while the
+circuit or a pause holds the requests back; the last minute of the client's
+own requests, and how long ago one was last answered once that is longer than
+a minute; how the dictionary's lookups were answered since the view began,
+from the cache or by the provider; the ones it turned away and the retries,
+each by reason; the request budget; and the lookups in flight.
+
+The row `last minute` has a mark for each second of the last minute, the newest
+on the right: `✓` when a request the client sent was answered in that second,
+found or not, `!` when the provider refused one with a 429, `✗` when one failed,
+by a server error, a timeout, a connection that failed, or an answer the
+client could not read, and `·` when none came back; in a second that held
+several, a failure outweighs a refusal, and a refusal an answer.
+
+Every row is what the client saw of its own requests or what it decided, and
+none says what the provider did otherwise, which the client cannot see: a
+provider that has recovered shows as recovered only once a trial is answered.
+
+While the circuit is open, its row says what opened it, five failed requests
+or the trial that failed last, with the reason, and the next try names the
+trial that comes next and in how many seconds, or the end of the provider's
+pause when that comes later, because the pause holds the trial too; while it
+is half-open, its row says which trial is in flight and how many lookups wait
+for its outcome.
+
+While the circuit is closed, its row counts the requests that failed in a row
+since the last answer, against the five that open the circuit; any answer
+starts the count again, a request to slow down included.
+
+The row `turned away` is a different number, a total by reason since the view
+began, the words the open circuit refused without asking included, as
+`held back`, so it can pass five while the count in a row stays below it and the
+circuit stays closed; a word turned away may be asked again and answered, so
+the report's count of unavailable words is the one that says what the learner
+gets.
+
+The lookups in flight are counted by what they wait for: asking the provider,
+retrying after a pause, behind the trial, paused while the provider's pause
+lasts, or queued for a token; each one asking or retrying has a row of its
+own, with a bar against the request's timeout or against the pause before its
+next attempt.
+
+In the local mode the view reads the dictionary in its own process, whose
+cache is a file the next command reads too; in the distributed mode it reads
+`GET /activity` on the enrichment service at `WORDWINNOW_ENRICHMENT_URL`,
+`http://127.0.0.1:8100` unless set, the port the Compose stack publishes, and
+counts what the service did since the view began, for every analysis it served
+meanwhile, so a second analysis running beside it shows in the counts.
+
+The activity names the words in flight, as each lookup a worker sends does,
+and like every port the stack publishes, the enrichment service's listens on
+127.0.0.1 alone.
+
 ## Recovering
+
+When the dictionary provider fails, an analysis still completes: the client
+asks again or pauses as the provider asks, stops asking after five failed
+requests in a row and tries one word every ten seconds or so, or once a wait
+the provider named has passed, and the analysis waits for it three minutes in
+all.
+
+A word the provider has not answered by then, or whose next try would come
+later than the time left, gets WordNet's gloss, and the report counts it as
+unavailable.
+
+`WORDWINNOW_DICTIONARY_PATIENCE_SECONDS` sets that waiting time, and 0 makes an
+analysis fail fast, giving every word turned away WordNet's gloss at once; the
+[operator view](#the-operator-view), the dashboard, and the log events below show each step.
+
+### The dictionary client in detail
 
 The dictionary client asks again after a timeout, a failed connection, or a
 server error a retry can change, at most twice per word, after a wait that
@@ -491,9 +512,6 @@ more frequent in the text first, so a provider that stops answering part way,
 or waiting time that runs out, costs the words that matter least; the report
 keeps its own order.
 
-A setting of nought makes an analysis fail fast: every word turned away gets
-WordNet's gloss at once.
-
 In the distributed mode the worker waits, not the enrichment service: the
 service answers a lookup the open circuit refuses at once, with the time to
 ask again, so no request to it is held open while the circuit is open; during
@@ -518,6 +536,8 @@ Each step is a log event:
 | `dictionary.circuit.trial` | `DEBUG` | The wait is over, and one word is tried with a single request |
 | `dictionary.circuit.reopened` | `INFO` | The word tried went unanswered too |
 | `dictionary.circuit.closed` | `INFO` | The word tried was answered, and the client asks as usual again |
+
+### Workers, sources, and stale analyses
 
 A source that fails or does not answer in time is refused to the learner with
 its reason, and intake logs the same reason as `source.unavailable`, at `WARNING`,
