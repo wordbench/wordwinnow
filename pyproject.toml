@@ -6,7 +6,7 @@
 
 [project]
 name = "wordwinnow"
-version = "1.0.0"
+version = "1.1.0"
 description = "Winnow a text into the vocabulary worth a learner's attention: a distributed analysis prototype."
 readme = "README.md"
 # NOTE:
