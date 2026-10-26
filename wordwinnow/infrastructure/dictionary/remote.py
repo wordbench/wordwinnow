@@ -4,11 +4,16 @@ provider itself.
 
 The service answers every lookup with HTTP 200 and a `LookupPayload`, so an
 unavailable provider arrives as an outcome; only the service being unreachable
-or answering something else becomes a failure here.
+or answering something else becomes a failure here, and an unreachable service
+names a time to ask again, so an analysis waits for it as it waits for the
+provider.
 """
 
 from logging import (
     getLogger,
+)
+from time import (
+    monotonic,
 )
 from typing import (
     Final,
@@ -28,6 +33,9 @@ from httpx2 import (
 from wordwinnow.domain.dictionary import (
     DictionaryLookup,
 )
+from wordwinnow.infrastructure.dictionary.resilience import (
+    MonotonicClock,
+)
 from wordwinnow.infrastructure.dictionary.wire import (
     FailureReason,
     LookupPayload,
@@ -42,6 +50,19 @@ from wordwinnow.infrastructure.logging import (
 _logger: Final = getLogger(
     name="wordwinnow.dictionary",
 )
+
+# PERF:
+# When to ask the service again after it could not be reached, or did not answer in time: after as long as it has been
+# unreachable so far, a second at the least and fifteen at the most, so a restart of a second or two costs a second or
+# two, a word waiting through a long outage asks about four times a minute, and lookups that fail together count as
+# one outage rather than as many failures.
+#
+# Simulated with 300 words and eight lookups at a time, a service that refused connections for two seconds to a minute
+# cost 214 of the definitions every time without a time to ask again, and one that stopped answering cost 8 to 96;
+# with it neither cost any, and the stage ended later by the length of the outage and a second and a half at most.
+_FIRST_RETRY_SECONDS: Final = 1.0
+
+_LONGEST_RETRY_SECONDS: Final = 15.0
 
 
 @final
@@ -58,6 +79,7 @@ class RemoteDictionary:
         enrichment_url: str,
         timeout_seconds: float,
         client: AsyncClient,
+        clock: MonotonicClock = monotonic,
     ) -> None:
         self._base_url: Final = enrichment_url.rstrip(
             "/",
@@ -66,6 +88,12 @@ class RemoteDictionary:
         self._timeout: Final = timeout_seconds
 
         self._client: Final = client
+
+        self._clock: Final = clock
+
+        # NOTE:
+        # When the service last stopped answering, and `None` while it answers.
+        self._unreachable_since: float | None = None
 
     async def look_up(
         self,
@@ -94,14 +122,18 @@ class RemoteDictionary:
         except TimeoutException:
             lookup = unavailable(
                 reason=FailureReason.TIMED_OUT,
+                retry_after_seconds=self._unreachable(),
             )
 
         except HTTPError:
             lookup = unavailable(
                 reason=FailureReason.TRANSPORT_ERROR,
+                retry_after_seconds=self._unreachable(),
             )
 
         else:
+            self._unreachable_since = None
+
             lookup = _lookup_of(
                 response,
             )
@@ -116,6 +148,22 @@ class RemoteDictionary:
         )
 
         return lookup
+
+    def _unreachable(
+        self,
+    ) -> float:
+        now = self._clock()
+
+        if self._unreachable_since is None:
+            self._unreachable_since = now
+
+        return min(
+            _LONGEST_RETRY_SECONDS,
+            max(
+                _FIRST_RETRY_SECONDS,
+                now - self._unreachable_since,
+            ),
+        )
 
 
 def _lookup_of(

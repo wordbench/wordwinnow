@@ -469,8 +469,13 @@ service answers a lookup the open circuit refuses at once, with the time to
 ask again, so no request to it is held open while the circuit is open; during
 a pause the provider asked for, or a word's retries, it holds the request as
 the client does, and a lookup it holds longer than
-`WORDWINNOW_ENRICHMENT_TIMEOUT_SECONDS` reaches the worker as timed out, with no
-time to ask again.
+`WORDWINNOW_ENRICHMENT_TIMEOUT_SECONDS` reaches the worker as timed out.
+
+A worker that cannot reach the enrichment service, or waited that long for it,
+asks again after as long as the service has been unreachable so far, a second
+at the least and fifteen at the most, within the analysis's waiting time, so a
+restart of the service costs an analysis a few seconds rather than its
+definitions.
 
 Each step is a log event:
 

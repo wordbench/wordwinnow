@@ -34,6 +34,7 @@ from typing import (
 
 from httpx2 import (
     AsyncClient,
+    ConnectError,
     MockTransport,
     ReadTimeout,
     Request,
@@ -116,6 +117,12 @@ from wordwinnow.domain.study import (
 )
 from wordwinnow.infrastructure.dictionary.free_dictionary import (
     FreeDictionaryClient,
+)
+from wordwinnow.infrastructure.dictionary.remote import (
+    RemoteDictionary,
+)
+from wordwinnow.infrastructure.dictionary.wire import (
+    to_wire,
 )
 
 _TEXT: Final = "Holmes became the drunken groom. The groom sauntered slowly."
@@ -1285,6 +1292,109 @@ class TestWaitingForTheDictionary:
         ) == (
             LookupOutcome.UNAVAILABLE,
             3,
+        )
+
+    def test_a_restart_of_the_enrichment_service_costs_no_definition(
+        self,
+    ) -> None:
+        down_until: Final = 3.0
+
+        async def main() -> tuple[
+            PipelineResult,
+            tuple[float, ...],
+        ]:
+            loop = get_running_loop()
+
+            refused: list[float] = []
+
+            def handler(
+                request: Request,
+                /,
+            ) -> Response:
+                if loop.time() < down_until:
+                    refused.append(
+                        loop.time(),
+                    )
+
+                    raise ConnectError(
+                        message="connection refused",
+                    )
+
+                return Response(
+                    status_code=200,
+                    content=to_wire(
+                        lookup=DictionaryLookup(
+                            outcome=LookupOutcome.FOUND,
+                            entries=(
+                                DictionaryEntry(
+                                    headword=request.url.path.rsplit(
+                                        sep="/",
+                                        maxsplit=1,
+                                    )[-1],
+                                    phonetic=None,
+                                    meanings=(
+                                        Meaning(
+                                            word_class="noun",
+                                            part_of_speech=PartOfSpeech.NOUN,
+                                            definitions=(
+                                                Definition(
+                                                    text="A word.",
+                                                ),
+                                            ),
+                                        ),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ).model_dump_json(),
+                )
+
+            dictionary = RemoteDictionary(
+                enrichment_url="http://enrichment.test",
+                timeout_seconds=180.0,
+                client=AsyncClient(
+                    transport=MockTransport(
+                        handler=handler,
+                    ),
+                ),
+                clock=loop.time,
+            )
+
+            result = await run_pipeline(
+                text=_TEXT,
+                profile=_PROFILE,
+                include_dictionary=True,
+                pipeline=replace(
+                    _pipeline(),
+                    dictionary=dictionary,
+                    dictionary_patience_seconds=180.0,
+                    clock=loop.time,
+                ),
+            )
+
+            return (
+                result,
+                tuple(
+                    refused,
+                ),
+            )
+
+        (
+            result,
+            refused,
+        ) = run_in_virtual_time(
+            main=main,
+        )
+
+        # NOTE:
+        # The service refuses every connection for its first three seconds, as it does while it restarts: each word it
+        # refused is asked again after as long as it has been unreachable, a second at the least, and every word is
+        # answered once it is back, rather than taking WordNet's gloss at the first refusal.
+        assert refused
+
+        assert all(
+            study_item.dictionary is not None and study_item.dictionary.outcome is LookupOutcome.FOUND
+            for study_item in result.items
         )
 
     def test_a_provider_that_never_answers_delays_the_analysis_by_the_waiting_time_at_most(
