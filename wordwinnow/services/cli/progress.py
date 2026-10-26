@@ -15,6 +15,9 @@ The line disappears when the work ends, so a report, JSON, or CSV on standard
 output is never touched, and a pipe, a file, or a test receives nothing.
 """
 
+from collections import (
+    deque,
+)
 from collections.abc import (
     Callable,
 )
@@ -45,7 +48,6 @@ from rich.progress import (
     SpinnerColumn,
     Task,
     TaskID,
-    TextColumn,
     TimeElapsedColumn,
 )
 from rich.text import (
@@ -93,19 +95,56 @@ PAUSED_DICTIONARY: Final = "the dictionary is not answering; WordNet stands in"
 # analysis lets no waiting word ask past its waiting time.
 WAITING_DICTIONARY: Final = "waiting for the dictionary: next try {retry}, WordNet {give_up}"
 
+# NOTE:
+# How long the dictionary stage may still take, at the pace of its last minute, and nothing while the provider is
+# paused or lookups wait, or before the minute holds enough answers to say anything; the minute starts again after
+# every pause and wait.
+#
+# One time, rounded as coarsely as such an estimate errs: simulated stages whose pace held were within a few per cent,
+# while a stage whose share of cached words changed, or which another analysis began to share the provider with, was
+# off by a sixth to two fifths; a range from the pace of each half of the minute would be narrower than those errors
+# while the pace held, and would run from seconds to minutes after a pause.
+_ESTIMATE_WINDOW: Final = timedelta(
+    seconds=60,
+)
+
+_ESTIMATE_LEAST_SPAN: Final = timedelta(
+    seconds=10,
+)
+
+_ESTIMATE_LEAST_ANSWERS: Final = 10
+
+# NOTE:
+# How long the dictionary stage may go without an answer before the line says so in place of the estimate: three of
+# its recent gaps between answers, which a steady pace passes about once in twenty gaps, and five seconds at the
+# least.
+_QUIET_GAPS: Final = 3
+
+_LEAST_QUIET: Final = timedelta(
+    seconds=5,
+)
+
 
 @final
 class _LineFields(
     TypedDict,
 ):
     """
-    What the line's columns read besides the description: the count and the
-    moments a wait ends.
+    What the line's columns read besides the description: the count, the
+    finishing time the estimate gives, the moments a wait ends, since when the
+    stage has had no answer, and how long a quiet may last before the line
+    says so.
     """
 
     count: str
 
+    finish: datetime | None
+
     waiting: tuple[datetime, datetime] | None
+
+    quiet_since: datetime | None
+
+    quiet_after: timedelta
 
 
 def _local_now() -> datetime:
@@ -148,6 +187,41 @@ def _duration(
         return f"{minutes} min"
 
     return f"{minutes} min {rest} s"
+
+
+def _about(
+    seconds: float,
+    /,
+) -> str:
+    # NOTE:
+    # Five seconds under a minute, ten under two, half a minute under ten, and a minute beyond: steps of a sixth to a
+    # tenth of the time, as coarse as the estimate's own error.
+    if seconds < 10:
+        return "a few seconds"
+
+    step = 5 if seconds < 60 else 10 if seconds < 120 else 30 if seconds < 600 else 60
+
+    return _duration(
+        round(
+            number=seconds / step,
+        )
+        * step,
+    )
+
+
+def _time_left(
+    finish: datetime,
+    now: datetime,
+    /,
+) -> str:
+    left = _about(
+        max(
+            0.0,
+            (finish - now).total_seconds(),
+        ),
+    )
+
+    return "a few seconds left" if left == "a few seconds" else f"about {left} left"
 
 
 def _in(
@@ -227,6 +301,50 @@ def _description(
     )
 
 
+def _count_and_time(
+    task: Task,
+    now: datetime,
+    /,
+) -> Text:
+    """
+    The count, and how long the stage may still take or how long it has gone
+    without an answer, counted from `now`.
+    """
+
+    count = task.fields["count"]
+
+    quiet_since = task.fields.get(
+        "quiet_since",
+    )
+
+    if quiet_since is not None and now - quiet_since >= task.fields["quiet_after"]:
+        quiet = int(
+            (now - quiet_since).total_seconds(),
+        )
+
+        return Text(
+            text=f"{count}, no answer for {quiet} s",
+        )
+
+    finish = task.fields.get(
+        "finish",
+    )
+
+    if finish is None:
+        return Text(
+            text=count,
+        )
+
+    return Text(
+        text=f"{count}, {
+            _time_left(
+                finish,
+                now,
+            )
+        }",
+    )
+
+
 @final
 class TerminalProgress:
     """
@@ -244,8 +362,10 @@ class TerminalProgress:
         clock: Callable[[], datetime] = _local_now,
     ) -> None:
         # NOTE:
-        # No percentage and no time remaining: the steps of one phase can differ a hundredfold in length, as the level
-        # experiment's candidates do, so a count and the time spent are the only figures that are always true.
+        # No percentage, and a time left only for the dictionary stage: the steps of other phases can differ a
+        # hundredfold in length, as the level experiment's candidates do, so a count and the time spent are the only
+        # figures always true there, while the dictionary stage keeps a pace the provider's budget and the cache set,
+        # so its recent pace says when it may finish.
         self._progress: Final = Progress(
             SpinnerColumn(),
             ClockColumn(
@@ -255,8 +375,9 @@ class TerminalProgress:
             BarColumn(
                 bar_width=24,
             ),
-            TextColumn(
-                text_format="{task.fields[count]}",
+            ClockColumn(
+                clock=clock,
+                draw=_count_and_time,
             ),
             TimeElapsedColumn(),
             console=console,
@@ -280,6 +401,12 @@ class TerminalProgress:
         self._clock: Final = clock
 
         self._waiting_until: tuple[datetime, datetime] | None = None
+
+        self._answers: Final[deque[tuple[datetime, int]]] = deque()
+
+        # NOTE:
+        # Since when the dictionary stage has had no answer: its start, its last answer, or the end of a wait.
+        self._quiet_since: datetime | None = None
 
     @property
     def shown(
@@ -335,6 +462,10 @@ class TerminalProgress:
         self._paused = False
 
         self._waiting_until = None
+
+        self._answers.clear()
+
+        self._quiet_since = None
 
         if self._task is None:
             self._task = self._progress.add_task(
@@ -397,6 +528,16 @@ class TerminalProgress:
 
         self._stage = stage
 
+        if stage is not Stage.DICTIONARY_ENRICHMENT or self._task is None:
+            return
+
+        self._quiet_since = self._clock()
+
+        self._progress.update(
+            task_id=self._task,
+            **self._fields(),
+        )
+
     def looked_up(
         self,
         *,
@@ -419,6 +560,14 @@ class TerminalProgress:
 
         self._paused = paused
 
+        now = self._clock()
+
+        self._quiet_since = now
+
+        self._answered(
+            now,
+        )
+
         # NOTE:
         # A change of state is drawn at once rather than at the next tick, so it is never lost between two lookups.
         self._progress.update(
@@ -440,11 +589,20 @@ class TerminalProgress:
         if self._task is None:
             return
 
+        now = self._clock()
+
         self._waiting_until = _until(
-            self._clock(),
+            now,
             retry_in_seconds,
             patience_left_seconds,
         )
+
+        if self._waiting_until is not None:
+            self._answers.clear()
+
+        # NOTE:
+        # A wait explains its own quiet, so the quiet is counted again from its end.
+        self._quiet_since = now
 
         self._progress.update(
             task_id=self._task,
@@ -469,19 +627,33 @@ class TerminalProgress:
         if self._task is None:
             return
 
+        reported_at = progress.reported_at.astimezone(
+            tz=self._clock().tzinfo,
+        )
+
+        waiting_until = _until(
+            reported_at,
+            progress.dictionary_retry_in_seconds,
+            progress.dictionary_patience_left_seconds or 0.0,
+        )
+
+        # NOTE:
+        # A report says when it was written, so an answer, or the start or end of a wait, dates the quiet from then.
+        if progress.done > self._done or (waiting_until is None) is not (self._waiting_until is None):
+            self._quiet_since = reported_at
+
         self._done = progress.done
 
         self._unavailable = progress.unavailable
 
         self._paused = progress.dictionary_paused
 
-        self._waiting_until = _until(
-            progress.reported_at.astimezone(
-                tz=self._clock().tzinfo,
-            ),
-            progress.dictionary_retry_in_seconds,
-            progress.dictionary_patience_left_seconds or 0.0,
-        )
+        self._waiting_until = waiting_until
+
+        if progress.stage is Stage.DICTIONARY_ENRICHMENT:
+            self._answered(
+                reported_at,
+            )
 
         # NOTE:
         # A report arrives once per poll rather than once per word, so each one is drawn at once instead of at the
@@ -496,6 +668,98 @@ class TerminalProgress:
             **self._fields(),
         )
 
+    def _answered(
+        self,
+        at: datetime,
+        /,
+    ) -> None:
+        if self._paused or self._waiting_until is not None:
+            self._answers.clear()
+
+            return
+
+        self._answers.append(
+            (
+                at,
+                self._done,
+            ),
+        )
+
+        while at - self._answers[0][0] > _ESTIMATE_WINDOW:
+            self._answers.popleft()
+
+    def _finish(
+        self,
+    ) -> datetime | None:
+        """
+        When the stage finishes at the pace of the last minute's answers, or
+        `None` when they cannot say.
+        """
+
+        if (
+            self._steps is None
+            or self._paused
+            or self._waiting_until is not None
+            or len(
+                self._answers,
+            )
+            < 2
+        ):
+            return None
+
+        (
+            first_at,
+            first_done,
+        ) = self._answers[0]
+
+        (
+            last_at,
+            last_done,
+        ) = self._answers[-1]
+
+        if last_at - first_at < _ESTIMATE_LEAST_SPAN or last_done - first_done < _ESTIMATE_LEAST_ANSWERS:
+            return None
+
+        return last_at + (last_at - first_at) * ((self._steps - last_done) / (last_done - first_done))
+
+    def _quiet_after(
+        self,
+    ) -> timedelta:
+        if (
+            len(
+                self._answers,
+            )
+            < 2
+        ):
+            return _LEAST_QUIET
+
+        (
+            first_at,
+            first_done,
+        ) = self._answers[0]
+
+        last_done = self._answers[-1][1]
+
+        if last_done <= first_done:
+            return _LEAST_QUIET
+
+        # NOTE:
+        # A worker's report enters the window whether or not it brought an answer, so the gaps are measured up to the
+        # report that brought the last one, or the quiet itself would lengthen the gap it is measured against.
+        answered_at = next(
+            at
+            for (
+                at,
+                done,
+            ) in self._answers
+            if done == last_done
+        )
+
+        return max(
+            _LEAST_QUIET,
+            (answered_at - first_at) / (last_done - first_done) * _QUIET_GAPS,
+        )
+
     def _fields(
         self,
     ) -> _LineFields:
@@ -503,13 +767,21 @@ class TerminalProgress:
         What the line's columns read besides the description, as it stands.
         """
 
+        # NOTE:
+        # The quiet is said only while the stage counts answers and nothing else explains it: a wait names its own
+        # times, and a paused dictionary answers every word at once.
+        counting = self._steps is not None and not self._paused and self._waiting_until is None
+
         return _LineFields(
             count=_count(
                 self._done,
                 self._steps,
                 self._unavailable,
             ),
+            finish=self._finish(),
             waiting=self._waiting_until,
+            quiet_since=self._quiet_since if counting else None,
+            quiet_after=self._quiet_after(),
         )
 
     def _description(

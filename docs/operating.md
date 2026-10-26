@@ -41,6 +41,18 @@ the next of them asking and to the moment WordNet stands in for every word
 still waiting, and while the dictionary is not answering at all and nothing
 waits, the line says so, because WordNet's glosses then stand in.
 
+Once the stage has answered at least ten words over ten seconds or more of its
+last minute, the count also says about how long the stage may still take at
+that minute's pace, rounded as coarsely as such an estimate errs; there is
+none while the dictionary is not answering or words wait, so it never counts
+down through a pause whose end it cannot know.
+
+When the stage goes without an answer for longer than three of its recent gaps
+between answers, and five seconds at the least, the count says for how long in
+place of the estimate, because something the line cannot see is holding the
+lookups: a pause the provider asked for, a slow answer, or a trial, which the
+operator view names.
+
 In the distributed mode the line shows the same stages and counts, from what
 the worker processing the analysis last wrote beside it, about once a second;
 until that first report, it says whether a worker has taken the analysis.
