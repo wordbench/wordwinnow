@@ -401,7 +401,8 @@ handles the same record while the first is still finishing it, and the first
 one's commit is lost.
 
 A cold analysis against the Free Dictionary API can take longer than five
-minutes, so with more than one worker such an analysis can be handled twice.
+minutes, and up to three more while it waits for a provider that stopped
+answering, so with more than one worker such an analysis can be handled twice.
 
 Handling a record again never changes a completed result:
 
@@ -438,7 +439,9 @@ on one thread: the requests intake and enrichment answer, a worker's calls to
 the broker, the store, and the dictionary, and the command line's polling.
 
 A worker handles one record at a time, and within it the dictionary stage
-keeps eight lookups in flight, each waiting its turn under the request budget.
+keeps eight lookups in flight, each waiting its turn under the request budget;
+a lookup the provider cannot answer for now waits outside those eight, for no
+longer than the analysis's waiting time.
 
 Tokenizing and tagging run in a worker thread, because their time grows with
 every word of the text and a long text would hold the loop for seconds;

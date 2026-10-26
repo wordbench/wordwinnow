@@ -222,6 +222,34 @@ class TestDictionaryLookup:
 
         assert lookup.entries == ()
 
+    def test_only_an_unavailable_lookup_says_when_to_ask_again_and_never_in_the_past(
+        self,
+    ) -> None:
+        with raises(
+            expected_exception=InvalidDictionaryDataError,
+        ):
+            DictionaryLookup(
+                outcome=LookupOutcome.NOT_FOUND,
+                retry_after_seconds=30.0,
+            )
+
+        with raises(
+            expected_exception=InvalidDictionaryDataError,
+        ):
+            DictionaryLookup(
+                outcome=LookupOutcome.UNAVAILABLE,
+                failure_reason="circuit_open",
+                retry_after_seconds=-1.0,
+            )
+
+        lookup = DictionaryLookup(
+            outcome=LookupOutcome.UNAVAILABLE,
+            failure_reason="circuit_open",
+            retry_after_seconds=30.0,
+        )
+
+        assert lookup.retry_after_seconds == 30.0
+
     def test_a_meaning_needs_a_definition_and_an_entry_needs_a_meaning(
         self,
     ) -> None:

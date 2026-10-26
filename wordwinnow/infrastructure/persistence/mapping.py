@@ -179,6 +179,8 @@ def progress_to_json(
         "reported_at": utc_of(
             value=progress.reported_at,
         ).isoformat(),
+        "dictionary_retry_in_seconds": progress.dictionary_retry_in_seconds,
+        "dictionary_patience_left_seconds": progress.dictionary_patience_left_seconds,
     }
 
 
@@ -202,6 +204,14 @@ def progress_from_json(
             datetime.fromisoformat(
                 payload["reported_at"],
             ),
+        ),
+        # NOTE:
+        # A report written before the dictionary stage could wait has neither key, and nothing waited then.
+        dictionary_retry_in_seconds=payload.get(
+            "dictionary_retry_in_seconds",
+        ),
+        dictionary_patience_left_seconds=payload.get(
+            "dictionary_patience_left_seconds",
         ),
     )
 

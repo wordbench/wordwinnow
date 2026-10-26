@@ -144,6 +144,15 @@ class Settings(
         gt=0,
     )
 
+    # NOTE:
+    # How long one analysis may wait, in all, for a dictionary provider that stopped answering, before WordNet stands
+    # in for every word still waiting: three minutes, which covers one wait of the two minutes the provider's network
+    # asks for when the provider's own server is unreachable and a trial after it; nought fails fast.
+    dictionary_patience_seconds: float = Field(
+        default=180.0,
+        ge=0,
+    )
+
     dictionary_found_ttl_seconds: int = 30 * 24 * 60 * 60
 
     dictionary_not_found_ttl_seconds: int = 7 * 24 * 60 * 60

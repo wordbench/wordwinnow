@@ -84,6 +84,11 @@ class ProcessingProgress:
 
     `dictionary_paused` says the dictionary has stopped asking its provider,
     so WordNet stands in for every word until it asks again.
+
+    `dictionary_retry_in_seconds` is set while lookups wait for the dictionary
+    to answer again: the seconds from `reported_at` until the next of them
+    asks, and `dictionary_patience_left_seconds` how much longer the stage
+    waits at most.
     """
 
     stage: Stage
@@ -97,6 +102,10 @@ class ProcessingProgress:
     dictionary_paused: bool
 
     reported_at: datetime
+
+    dictionary_retry_in_seconds: float | None = None
+
+    dictionary_patience_left_seconds: float | None = None
 
 
 @dataclass(

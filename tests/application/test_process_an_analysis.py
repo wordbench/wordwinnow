@@ -6,6 +6,18 @@ all written out, so the test reads as a worked example of what the pipeline
 does.
 """
 
+from asyncio import (
+    get_running_loop,
+)
+from asyncio import (
+    sleep as asyncio_sleep,
+)
+from collections.abc import (
+    Mapping,
+)
+from collections.abc import (
+    Set as AbstractSet,
+)
 from dataclasses import (
     replace,
 )
@@ -20,6 +32,13 @@ from typing import (
     final,
 )
 
+from httpx2 import (
+    AsyncClient,
+    MockTransport,
+    ReadTimeout,
+    Request,
+    Response,
+)
 from pytest import (
     raises,
 )
@@ -38,12 +57,19 @@ from tests.fakes.ports import (
     RecordingProgress,
     RecordingPublisher,
 )
+from tests.fakes.virtual_time import (
+    run_in_virtual_time,
+)
 from wordwinnow.application.errors import (
     AnalysisNotFoundError,
     MessagingUnavailableError,
 )
+from wordwinnow.application.ports.dictionary import (
+    Dictionary,
+)
 from wordwinnow.application.use_cases.process_an_analysis import (
     Pipeline,
+    PipelineResult,
     process_an_analysis,
     run_pipeline,
 )
@@ -85,7 +111,11 @@ from wordwinnow.domain.senses import (
     LexicalSense,
 )
 from wordwinnow.domain.study import (
+    GlossSource,
     StudyTier,
+)
+from wordwinnow.infrastructure.dictionary.free_dictionary import (
+    FreeDictionaryClient,
 )
 
 _TEXT: Final = "Holmes became the drunken groom. The groom sauntered slowly."
@@ -215,6 +245,250 @@ def _pipeline(
             },
         ),
         dictionary_concurrency=2,
+    )
+
+
+@final
+class _RecoveringDictionary:
+    """
+    Refuses the words in `refused` with a time to ask again until
+    `recovers_at` on the loop's clock, and answers every other lookup, and any
+    lookup after that, as `answers` does.
+
+    Each lookup is recorded with the moment it was asked.
+    """
+
+    def __init__(
+        self,
+        *,
+        refused: AbstractSet[str],
+        recovers_at: float,
+        retry_after_seconds: float,
+        answers: Dictionary,
+    ) -> None:
+        self._refused: Final = refused
+
+        self._recovers_at: Final = recovers_at
+
+        self._retry_after: Final = retry_after_seconds
+
+        self._answers: Final = answers
+
+        self.asked: Final[list[tuple[float, str]]] = []
+
+    async def look_up(
+        self,
+        *,
+        lemma: str,
+    ) -> DictionaryLookup:
+        now = get_running_loop().time()
+
+        self.asked.append(
+            (
+                now,
+                lemma,
+            ),
+        )
+
+        if lemma in self._refused and now < self._recovers_at:
+            return DictionaryLookup(
+                outcome=LookupOutcome.UNAVAILABLE,
+                failure_reason="circuit_open",
+                retry_after_seconds=self._retry_after,
+            )
+
+        return await self._answers.look_up(
+            lemma=lemma,
+        )
+
+
+@final
+class _RefusedUntil:
+    """
+    Refuses each word in `until` while the loop's clock is before its moment,
+    naming the seconds left until then, and answers every other lookup, and
+    any lookup after its moment, as `answers` does.
+    """
+
+    def __init__(
+        self,
+        *,
+        until: Mapping[str, float],
+        answers: Dictionary,
+    ) -> None:
+        self._until: Final = until
+
+        self._answers: Final = answers
+
+    async def look_up(
+        self,
+        *,
+        lemma: str,
+    ) -> DictionaryLookup:
+        now = get_running_loop().time()
+
+        moment = self._until.get(
+            lemma,
+        )
+
+        if moment is not None and now < moment:
+            return DictionaryLookup(
+                outcome=LookupOutcome.UNAVAILABLE,
+                failure_reason="circuit_open",
+                retry_after_seconds=moment - now,
+            )
+
+        return await self._answers.look_up(
+            lemma=lemma,
+        )
+
+
+@final
+class _HangsWhenAskedAgain:
+    """
+    Refuses `lemma` with a time to ask again, `retry_after_seconds`, and holds
+    every later lookup of it for `hangs_seconds` before refusing it again, as
+    a trial that the provider never answers holds the words waiting for it;
+    answers every other word as `answers` does.
+    """
+
+    def __init__(
+        self,
+        *,
+        lemma: str,
+        retry_after_seconds: float,
+        hangs_seconds: float,
+        answers: Dictionary,
+    ) -> None:
+        self._lemma: Final = lemma
+
+        self._retry_after: Final = retry_after_seconds
+
+        self._hangs: Final = hangs_seconds
+
+        self._answers: Final = answers
+
+        self._asked = 0
+
+    async def look_up(
+        self,
+        *,
+        lemma: str,
+    ) -> DictionaryLookup:
+        if lemma != self._lemma:
+            return await self._answers.look_up(
+                lemma=lemma,
+            )
+
+        self._asked += 1
+
+        if self._asked > 1:
+            await asyncio_sleep(
+                delay=self._hangs,
+            )
+
+        return DictionaryLookup(
+            outcome=LookupOutcome.UNAVAILABLE,
+            failure_reason="circuit_open",
+            retry_after_seconds=self._retry_after,
+        )
+
+
+@final
+class _BackAfterAnOutage:
+    """
+    Refuses the words in `refused` with the seconds left until `back_at` on
+    the loop's clock, and afterwards answers each of them as `answers` does
+    after `answer_seconds`, as a provider that has come back answers at its
+    own pace; answers every other word as `answers` does, at once.
+    """
+
+    def __init__(
+        self,
+        *,
+        refused: AbstractSet[str],
+        back_at: float,
+        answer_seconds: float,
+        answers: Dictionary,
+    ) -> None:
+        self._refused: Final = refused
+
+        self._back_at: Final = back_at
+
+        self._answer_seconds: Final = answer_seconds
+
+        self._answers: Final = answers
+
+    async def look_up(
+        self,
+        *,
+        lemma: str,
+    ) -> DictionaryLookup:
+        if lemma in self._refused:
+            now = get_running_loop().time()
+
+            if now < self._back_at:
+                return DictionaryLookup(
+                    outcome=LookupOutcome.UNAVAILABLE,
+                    failure_reason="circuit_open",
+                    retry_after_seconds=self._back_at - now,
+                )
+
+            await asyncio_sleep(
+                delay=self._answer_seconds,
+            )
+
+        return await self._answers.look_up(
+            lemma=lemma,
+        )
+
+
+def _run_with_patience(
+    *,
+    dictionary: Dictionary,
+    patience_seconds: float,
+    concurrency: int = 2,
+) -> tuple[PipelineResult, RecordingProgress, float]:
+    """
+    The worked example's pipeline over `dictionary`, run on virtual time, with
+    what its progress heard and the moment it ended.
+    """
+
+    progress = RecordingProgress()
+
+    async def main() -> tuple[PipelineResult, float]:
+        loop = get_running_loop()
+
+        result = await run_pipeline(
+            text=_TEXT,
+            profile=_PROFILE,
+            include_dictionary=True,
+            pipeline=replace(
+                _pipeline(),
+                dictionary=dictionary,
+                dictionary_concurrency=concurrency,
+                progress=progress,
+                dictionary_patience_seconds=patience_seconds,
+                clock=loop.time,
+            ),
+        )
+
+        return (
+            result,
+            loop.time(),
+        )
+
+    (
+        result,
+        ended_at,
+    ) = run_in_virtual_time(
+        main=main,
+    )
+
+    return (
+        result,
+        progress,
+        ended_at,
     )
 
 
@@ -397,6 +671,40 @@ class TestRunPipeline:
 
         assert all(study_item.dictionary is None for study_item in result.items)
 
+    async def test_the_words_a_learner_studies_first_are_looked_up_first(
+        self,
+    ) -> None:
+        dictionary = FakeDictionary()
+
+        # NOTE:
+        # The text meets the words as become, drunken, groom, saunter, slowly; one lookup at a time shows the order
+        # the stage asks in instead.
+        await run_pipeline(
+            text=_TEXT,
+            profile=LearnerProfile(
+                level=CefrLevel.B1,
+                target_level=CefrLevel.B2,
+                known_lemmas=frozenset(
+                    ("become",),
+                ),
+            ),
+            include_dictionary=True,
+            pipeline=replace(
+                _pipeline(
+                    dictionary=dictionary,
+                ),
+                dictionary_concurrency=1,
+            ),
+        )
+
+        assert dictionary.looked_up == [
+            "groom",
+            "drunken",
+            "saunter",
+            "slowly",
+            "become",
+        ]
+
     async def test_progress_hears_every_stage_in_order_and_every_lookup_with_its_outcome(
         self,
     ) -> None:
@@ -462,6 +770,591 @@ class TestRunPipeline:
             "level_assessment",
             "winnowing",
         ]
+
+
+@final
+class TestWaitingForTheDictionary:
+    def test_a_word_the_dictionary_asks_to_ask_later_is_asked_again_within_the_patience(
+        self,
+    ) -> None:
+        dictionary = _RecoveringDictionary(
+            refused=frozenset(
+                ("groom",),
+            ),
+            recovers_at=60.0,
+            retry_after_seconds=30.0,
+            answers=_pipeline().dictionary,
+        )
+
+        (
+            result,
+            progress,
+            ended_at,
+        ) = _run_with_patience(
+            dictionary=dictionary,
+            patience_seconds=180.0,
+        )
+
+        (groom,) = (study_item for study_item in result.items if study_item.item.lemma == "groom")
+
+        assert groom.dictionary is not None
+
+        assert groom.dictionary.outcome is LookupOutcome.FOUND
+
+        assert tuple(
+            at
+            for (
+                at,
+                lemma,
+            ) in dictionary.asked
+            if lemma == "groom"
+        ) == (
+            0.0,
+            30.0,
+            60.0,
+        )
+
+        assert ended_at == 60.0
+
+        assert "waiting 30 s, 180 s left" in progress.events
+
+        assert progress.events[-2:] == [
+            "found",
+            "winnowing",
+        ]
+
+        assert "resumed" in progress.events
+
+    def test_the_progress_names_the_earliest_of_the_waiting_words_and_follows_each_wake(
+        self,
+    ) -> None:
+        # NOTE:
+        # `groom` is refused for ten seconds and `drunken` for thirty, in whichever order they are asked: while both
+        # sleep, the line names the next try, `groom`'s, and once `groom` asks again it names `drunken`'s, twenty
+        # seconds on.
+        (
+            _,
+            progress,
+            _,
+        ) = _run_with_patience(
+            dictionary=_RefusedUntil(
+                until={
+                    "groom": 10.0,
+                    "drunken": 30.0,
+                },
+                answers=_pipeline().dictionary,
+            ),
+            patience_seconds=180.0,
+        )
+
+        waiting = [
+            event
+            for event in progress.events
+            if event == "resumed"
+            or event.startswith(
+                "waiting",
+            )
+        ]
+
+        assert "waiting 10 s, 180 s left" in waiting
+
+        assert waiting[-2:] == [
+            "waiting 20 s, 170 s left",
+            "resumed",
+        ]
+
+    def test_without_patience_the_refused_word_takes_wordnets_gloss_at_once(
+        self,
+    ) -> None:
+        dictionary = _RecoveringDictionary(
+            refused=frozenset(
+                ("groom",),
+            ),
+            recovers_at=60.0,
+            retry_after_seconds=30.0,
+            answers=_pipeline().dictionary,
+        )
+
+        (
+            result,
+            progress,
+            ended_at,
+        ) = _run_with_patience(
+            dictionary=dictionary,
+            patience_seconds=0.0,
+        )
+
+        (groom,) = (study_item for study_item in result.items if study_item.item.lemma == "groom")
+
+        gloss = groom.gloss
+
+        assert groom.dictionary is not None
+
+        assert groom.dictionary.failure_reason == "circuit_open"
+
+        assert gloss is not None
+
+        assert (
+            gloss.source,
+            gloss.text,
+        ) == (
+            GlossSource.LEXICAL_NETWORK,
+            _GROOM_SENSE.gloss,
+        )
+
+        assert ended_at == 0.0
+
+        assert (
+            progress.events.count(
+                "unavailable: circuit_open",
+            )
+            == 1
+        )
+
+        assert not any(
+            event.startswith(
+                "waiting",
+            )
+            for event in progress.events
+        )
+
+    def test_patience_that_cannot_cover_the_next_wait_ends_it_before_it_is_spent(
+        self,
+    ) -> None:
+        dictionary = _RecoveringDictionary(
+            refused=frozenset(
+                ("groom",),
+            ),
+            recovers_at=1_000.0,
+            retry_after_seconds=30.0,
+            answers=_pipeline().dictionary,
+        )
+
+        (
+            result,
+            _,
+            ended_at,
+        ) = _run_with_patience(
+            dictionary=dictionary,
+            patience_seconds=100.0,
+        )
+
+        (groom,) = (study_item for study_item in result.items if study_item.item.lemma == "groom")
+
+        # NOTE:
+        # Ninety seconds spent, ten left, and the next wait would be thirty: the word ends then rather than at a
+        # hundred, and never after.
+        assert groom.dictionary is not None
+
+        assert groom.dictionary.failure_reason == "circuit_open"
+
+        assert ended_at == 90.0
+
+    def test_a_waiting_word_gives_its_place_to_the_words_that_can_be_answered(
+        self,
+    ) -> None:
+        dictionary = _RecoveringDictionary(
+            refused=frozenset(
+                ("groom",),
+            ),
+            recovers_at=60.0,
+            retry_after_seconds=30.0,
+            answers=_pipeline().dictionary,
+        )
+
+        _run_with_patience(
+            dictionary=dictionary,
+            patience_seconds=180.0,
+            concurrency=1,
+        )
+
+        # NOTE:
+        # One lookup at a time, and the refused word is asked first: had it kept its place while it waited, every
+        # other word would have waited a minute behind it.
+        assert frozenset(
+            at
+            for (
+                at,
+                lemma,
+            ) in dictionary.asked
+            if lemma != "groom"
+        ) == frozenset(
+            (0.0,),
+        )
+
+    def test_a_word_still_asking_when_the_waiting_time_runs_out_is_let_go_then(
+        self,
+    ) -> None:
+        # NOTE:
+        # The word is refused at nought and asks again at ten, when the request it makes hangs for a minute: the
+        # waiting time of fifteen seconds ends at fifteen, and the word ends there with the refusal it had rather than
+        # when the request gives up at seventy.
+        (
+            result,
+            progress,
+            ended_at,
+        ) = _run_with_patience(
+            dictionary=_HangsWhenAskedAgain(
+                lemma="groom",
+                retry_after_seconds=10.0,
+                hangs_seconds=60.0,
+                answers=_pipeline().dictionary,
+            ),
+            patience_seconds=15.0,
+        )
+
+        (groom,) = (study_item for study_item in result.items if study_item.item.lemma == "groom")
+
+        assert groom.dictionary is not None
+
+        assert groom.dictionary.failure_reason == "circuit_open"
+
+        assert ended_at == 15.0
+
+        assert "unavailable: circuit_open" in progress.events
+
+    def test_a_waiting_word_queued_behind_the_answers_after_the_dictionary_came_back_is_answered(
+        self,
+    ) -> None:
+        # NOTE:
+        # Both words are turned away until ten, the waiting time is fifteen, and one lookup runs at a time: the first
+        # is answered at thirteen, and the second, queued behind it, at sixteen, past the waiting time, because an
+        # answer to a waiting word says the dictionary answers again, which lifts the deadline of the words asking.
+        (
+            result,
+            _,
+            ended_at,
+        ) = _run_with_patience(
+            dictionary=_BackAfterAnOutage(
+                refused=frozenset(
+                    (
+                        "groom",
+                        "slowly",
+                    ),
+                ),
+                back_at=10.0,
+                answer_seconds=3.0,
+                answers=_pipeline().dictionary,
+            ),
+            patience_seconds=15.0,
+            concurrency=1,
+        )
+
+        outcomes = {
+            value: value_object.outcome
+            for study_item in result.items
+            if (value_object := study_item.dictionary) is not None
+            and (value := study_item.item.lemma)
+            in {
+                "groom",
+                "slowly",
+            }
+        }
+
+        assert outcomes == {
+            "groom": LookupOutcome.FOUND,
+            "slowly": LookupOutcome.NOT_FOUND,
+        }
+
+        assert ended_at == 16.0
+
+    def test_a_provider_down_for_two_minutes_is_waited_out_without_a_request_storm(
+        self,
+    ) -> None:
+        down_until: Final = 120.0
+
+        async def main() -> tuple[PipelineResult, tuple[float, ...]]:
+            loop = get_running_loop()
+
+            sent: list[float] = []
+
+            async def handler(
+                request: Request,
+                /,
+            ) -> Response:
+                arrived = loop.time()
+
+                sent.append(
+                    arrived,
+                )
+
+                await asyncio_sleep(
+                    delay=0.1,
+                )
+
+                if arrived < down_until:
+                    return Response(
+                        status_code=503,
+                    )
+
+                return Response(
+                    status_code=200,
+                    json=[
+                        {
+                            "word": "groom",
+                            "meanings": [
+                                {
+                                    "partOfSpeech": "noun",
+                                    "definitions": [
+                                        {
+                                            "definition": "A person who looks after horses.",
+                                        },
+                                    ],
+                                },
+                            ],
+                        },
+                    ],
+                )
+
+            client = FreeDictionaryClient(
+                base_url="https://dictionary.test/api/v2/entries/en",
+                timeout_seconds=30.0,
+                requests_per_second=2.0,
+                burst=4,
+                client=AsyncClient(
+                    transport=MockTransport(
+                        handler=handler,
+                    ),
+                ),
+                clock=loop.time,
+            )
+
+            result = await run_pipeline(
+                text=_TEXT,
+                profile=_PROFILE,
+                include_dictionary=True,
+                pipeline=replace(
+                    _pipeline(),
+                    dictionary=client,
+                    dictionary_patience_seconds=180.0,
+                    clock=loop.time,
+                ),
+            )
+
+            return (
+                result,
+                tuple(
+                    sent,
+                ),
+            )
+
+        (
+            result,
+            sent,
+        ) = run_in_virtual_time(
+            main=main,
+        )
+
+        during = tuple(at for at in sent if at < down_until)
+
+        # NOTE:
+        # Five failed requests open the circuit, and while the provider stays down only a trial asks, ten seconds
+        # after the opening and after each trial that fails, less a random quarter at most, so the trials come 7.5
+        # seconds apart at the least, and no more than fifteen of them and twenty requests in all reach a provider
+        # that answers none of them in two minutes.
+        assert all(
+            (value_object := study_item.dictionary) is not None and value_object.outcome is LookupOutcome.FOUND
+            for study_item in result.items
+        )
+
+        assert (
+            len(
+                during,
+            )
+            <= 20
+        )
+
+    def test_a_lone_word_in_a_short_outage_is_answered_after_it_unless_the_analysis_fails_fast(
+        self,
+    ) -> None:
+        # NOTE:
+        # The one word the dictionary is asked about meets an outage of ten seconds: its three failed attempts are too
+        # few to open the circuit, and nothing else was answered, so it waits within the analysis's waiting time, its
+        # fifth failure opens the circuit, and the first trial after the outage is answered.
+        #
+        # Without waiting time it gets WordNet's gloss after its three attempts, as a word always did.
+        down_until: Final = 10.0
+
+        async def main(
+            patience_seconds: float,
+            /,
+        ) -> tuple[LookupOutcome | None, int]:
+            loop = get_running_loop()
+
+            sent: list[float] = []
+
+            async def handler(
+                request: Request,
+                /,
+            ) -> Response:
+                arrived = loop.time()
+
+                sent.append(
+                    arrived,
+                )
+
+                await asyncio_sleep(
+                    delay=0.1,
+                )
+
+                if arrived < down_until:
+                    return Response(
+                        status_code=503,
+                    )
+
+                return Response(
+                    status_code=200,
+                    json=[
+                        {
+                            "word": "groom",
+                            "meanings": [
+                                {
+                                    "partOfSpeech": "noun",
+                                    "definitions": [
+                                        {
+                                            "definition": "A person who looks after horses.",
+                                        },
+                                    ],
+                                },
+                            ],
+                        },
+                    ],
+                )
+
+            client = FreeDictionaryClient(
+                base_url="https://dictionary.test/api/v2/entries/en",
+                timeout_seconds=30.0,
+                requests_per_second=2.0,
+                burst=4,
+                client=AsyncClient(
+                    transport=MockTransport(
+                        handler=handler,
+                    ),
+                ),
+                clock=loop.time,
+            )
+
+            result = await run_pipeline(
+                text="The groom.",
+                profile=_PROFILE,
+                include_dictionary=True,
+                pipeline=replace(
+                    _pipeline(),
+                    dictionary=client,
+                    dictionary_patience_seconds=patience_seconds,
+                    clock=loop.time,
+                ),
+            )
+
+            dictionary = result.items[0].dictionary
+
+            return (
+                None if dictionary is None else dictionary.outcome,
+                len(
+                    sent,
+                ),
+            )
+
+        (
+            waited,
+            asked_while_waiting,
+        ) = run_in_virtual_time(
+            main=lambda: main(
+                180.0,
+            ),
+        )
+
+        (
+            failed_fast,
+            asked_failing_fast,
+        ) = run_in_virtual_time(
+            main=lambda: main(
+                0.0,
+            ),
+        )
+
+        assert waited is LookupOutcome.FOUND
+
+        # NOTE:
+        # Five failures and one trial, or two when the first comes before the outage ends.
+        assert 6 <= asked_while_waiting <= 7
+
+        assert (
+            failed_fast,
+            asked_failing_fast,
+        ) == (
+            LookupOutcome.UNAVAILABLE,
+            3,
+        )
+
+    def test_a_provider_that_never_answers_delays_the_analysis_by_the_waiting_time_at_most(
+        self,
+    ) -> None:
+        # NOTE:
+        # Every request hangs for the whole thirty seconds the client allows it, so a trial costs as much as a wait:
+        # the time the words spend asking again counts toward the waiting time, and the analysis ends no later than
+        # one that fails fast by the waiting time and the one request a word still asking when it runs out may take;
+        # counting only the sleeps, it ended twice the waiting time later.
+        def ended_after(
+            *,
+            patience_seconds: float,
+        ) -> float:
+            async def main() -> float:
+                loop = get_running_loop()
+
+                async def handler(
+                    request: Request,
+                    /,
+                ) -> Response:
+                    await asyncio_sleep(
+                        delay=30.0,
+                    )
+
+                    raise ReadTimeout(
+                        message="the provider never answered",
+                        request=request,
+                    )
+
+                client = FreeDictionaryClient(
+                    base_url="https://dictionary.test/api/v2/entries/en",
+                    timeout_seconds=30.0,
+                    requests_per_second=2.0,
+                    burst=4,
+                    client=AsyncClient(
+                        transport=MockTransport(
+                            handler=handler,
+                        ),
+                    ),
+                    clock=loop.time,
+                )
+
+                await run_pipeline(
+                    text=_TEXT,
+                    profile=_PROFILE,
+                    include_dictionary=True,
+                    pipeline=replace(
+                        _pipeline(),
+                        dictionary=client,
+                        dictionary_patience_seconds=patience_seconds,
+                        clock=loop.time,
+                    ),
+                )
+
+                return loop.time()
+
+            return run_in_virtual_time(
+                main=main,
+            )
+
+        fast = ended_after(
+            patience_seconds=0.0,
+        )
+
+        patient = ended_after(
+            patience_seconds=120.0,
+        )
+
+        assert patient - fast <= 120.0 + 30.0
 
 
 @final

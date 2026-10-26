@@ -35,9 +35,11 @@ the dictionary is asked about, and the time the step has taken.
 It does so only on an interactive terminal and clears the line when it ends,
 so a pipe, a file, and the output of `--json` and `--csv` never contain it.
 
-In the dictionary stage the count also says how many words went unanswered,
-and while the dictionary is not answering at all the line says so, because
-WordNet's glosses then stand in.
+In the dictionary stage the count also says how many words went unanswered;
+while words wait for the dictionary to answer again, the line counts down to
+the next of them asking and to the moment WordNet stands in for every word
+still waiting, and while the dictionary is not answering at all and nothing
+waits, the line says so, because WordNet's glosses then stand in.
 
 In the distributed mode the line shows the same stages and counts, from what
 the worker processing the analysis last wrote beside it, about once a second;
@@ -205,6 +207,7 @@ and the model.
 | `WORDWINNOW_DICTIONARY_CONCURRENCY` | 8 | Lookups in flight per analysis |
 | `WORDWINNOW_DICTIONARY_REQUESTS_PER_SECOND`, `WORDWINNOW_DICTIONARY_BURST` | 2, 4 | The provider budget |
 | `WORDWINNOW_DICTIONARY_TIMEOUT_SECONDS` | 30 | How long one request to the provider may take |
+| `WORDWINNOW_DICTIONARY_PATIENCE_SECONDS` | 180 | How long an analysis waits, in all, for a provider that stopped answering, before WordNet stands in for the words still waiting; 0 fails fast |
 | `WORDWINNOW_ENRICHMENT_TIMEOUT_SECONDS` | 180 | How long a worker waits for one lookup from the enrichment service |
 | `WORDWINNOW_DICTIONARY_FOUND_TTL_SECONDS`, `WORDWINNOW_DICTIONARY_NOT_FOUND_TTL_SECONDS` | 30 days, 7 days | How long the cache keeps a found and a not-found answer |
 | `WORDWINNOW_STALE_AFTER_SECONDS` | 600 | How long an analysis may wait since it was requested, or process since it started, before `wordwinnow admin requeue` hands it back |
@@ -304,8 +307,10 @@ the provider, before a retry, or for a trial's answer, and the retries by
 reason.
 
 While an analysis processes, `GET /analyses/{id}` on intake carries the worker's
-last report as `progress`: the stage, the count, the words left unanswered, and
-whether the dictionary is paused.
+last report as `progress`: the stage, the count, the words left unanswered,
+whether the dictionary is paused, and, while words wait for it to answer
+again, the seconds from the report until the next try and until the stage
+stops waiting.
 
 ## Recovering
 
@@ -313,6 +318,12 @@ The dictionary client asks again after a timeout, a failed connection, or a
 server error a retry can change, at most twice per word, after a wait that
 doubles each time and is partly random, or as long as the provider asks, up to
 thirty seconds.
+
+A word whose attempts all fail this way while the circuit stays closed, with
+nothing answered since its first failure, may have failed for the provider
+rather than for itself, so it is turned away with the next such wait as its
+time to ask again; a word whose failures an answer to another word interrupted
+gets WordNet's gloss at once, because asking it again would only fail again.
 
 A request to slow down, HTTP 429, is about the client rather than the word:
 the whole client pauses, for every lookup and every analysis it serves, as
@@ -325,21 +336,24 @@ refusal counted is refused in a row, and an earlier one's `Retry-After` still
 holds the client as long as it says.
 
 The refused word is asked again after the pause without spending one of its
-attempts, and a word refused five times goes unanswered as rate limited.
+attempts, and a word refused five times ends as rate limited, with the pause's
+end as its time to ask again.
 
 A pause ends with one request and then the usual two a second, so the lookups
 that waited for it never leave together.
 
-A lookup waits out a pause of up to thirty seconds; a longer one sends it away
-unanswered as rate limited, while the pause stands for every other lookup.
+A lookup waits out a pause of up to thirty seconds; a longer one ends it as
+rate limited, with the pause's end as its time to ask again, while the pause
+stands for every other lookup.
 
 `Retry-After` counts only as whole seconds or a date, as HTTP defines it: a
 fraction, a sign, or a word is no wait the provider named, and the client then
 decides the wait itself.
 
-A provider that asks for a longer wait is not asked about that word again, and
-the word gets WordNet's gloss at once rather than holding one of the lookups
-the pipeline runs at a time.
+A server error that names a wait longer than thirty seconds ends that word's
+lookup at once, with that time to ask again, rather than holding one of the
+lookups the pipeline runs at a time: the analysis asks it again then if its
+waiting time covers the wait, and otherwise WordNet's gloss stands in.
 
 The Free Dictionary API asks for two minutes when its own server cannot be
 reached: the network in front of it still answers the words it has cached, and
@@ -349,8 +363,9 @@ After five requests in a row fail, it stops asking, and tries one word with a
 single request ten seconds later, and again ten seconds after each such
 request that fails, each wait up to a quarter shorter at random, or, when that
 is later, until every wait the provider named has ended, whichever request
-named it; the words in between get WordNet's gloss instead, and the report
-counts them as unavailable.
+named it; the words in between wait for that trial, or get WordNet's gloss
+when the analysis has no waiting time left, and the report counts those as
+unavailable.
 
 Ten seconds keeps a long outage to six to eight trial requests a minute, and
 asks a provider that came back within ten seconds unless it asked for longer;
@@ -377,12 +392,52 @@ When such a word is answered instead, the client still waits for the trial,
 because only the word tried closes the circuit, and a word that ends while
 that one is being tried leaves the outcome to it.
 
+An analysis waits for a dictionary provider that stopped answering, three
+minutes in all unless `WORDWINNOW_DICTIONARY_PATIENCE_SECONDS` says otherwise: a
+word the client turns away with a time to ask again, because the circuit is
+open, the provider paused the client for longer than thirty seconds or refused
+the word five times, a server error named a longer wait, or its attempts
+failed before five failures in a row could open the circuit, gives back its
+place among the lookups in flight and is asked again at that time, while the
+analysis has waiting time left.
+
+The waiting time counts from a word's first refusal until it is answered or
+given up, its asking again included, while any word is in that state, however
+many are, so an outage spends it once, and a word whose next try would come
+after it has run out gets WordNet's gloss at once.
+
+Waiting never asks a failing provider more often, because the client still
+sends only the trial while the circuit is open; it changes only how long the
+analysis takes, and while the dictionary answers none of the waiting words, a
+word that asks again does so within the time left, so the words still waiting
+when it runs out, behind a trial the provider does not answer, are let go then
+with the refusals they had; once it answers a waiting word, the others are no
+longer waiting for it to come back but for the pace of its answers, and are
+not cut off.
+
+The words are asked in the order a learner studies them: the focus words
+first, then the stretch, the review, and the known words, and within each the
+more frequent in the text first, so a provider that stops answering part way,
+or waiting time that runs out, costs the words that matter least; the report
+keeps its own order.
+
+A setting of nought makes an analysis fail fast: every word turned away gets
+WordNet's gloss at once.
+
+In the distributed mode the worker waits, not the enrichment service: the
+service answers a lookup the open circuit refuses at once, with the time to
+ask again, so no request to it is held open while the circuit is open; during
+a pause the provider asked for, or a word's retries, it holds the request as
+the client does, and a lookup it holds longer than
+`WORDWINNOW_ENRICHMENT_TIMEOUT_SECONDS` reaches the worker as timed out, with no
+time to ask again.
+
 Each step is a log event:
 
 | Event | Level | When |
 | --- | --- | --- |
 | `dictionary.retry` | `DEBUG` | A request is about to be sent again, with its reason, the provider's status, and its wait |
-| `dictionary.retry.declined` | `DEBUG` | The provider asked for a longer wait than thirty seconds, and the word goes unanswered |
+| `dictionary.retry.declined` | `DEBUG` | A failure named a wait longer than thirty seconds, and the lookup ends with that time to ask again |
 | `dictionary.cooldown` | `DEBUG` | A 429 paused the whole client, with the wait the provider named, the wait the client chose, and the refusals in a row |
 | `dictionary.circuit.opened` | `WARNING` | Five requests in a row failed, and the client stops asking |
 | `dictionary.circuit.trial` | `DEBUG` | The wait is over, and one word is tried with a single request |
@@ -403,8 +458,9 @@ stored but could not publish, is handed back to the workers by
 
 Set that above the longest analysis you expect: an analysis still running when
 it is handed back is processed a second time, and a cold analysis against the
-Free Dictionary API can run for twelve minutes or more, which the default of
-ten minutes does not cover.
+Free Dictionary API can run for twelve minutes or more, three more while it
+waits for a provider that stopped answering, which the default of ten minutes
+does not cover.
 
 A worker that meets a store or a broker that is not there exits, and Compose
 restarts it from the last committed offset; a record that cannot be handled is

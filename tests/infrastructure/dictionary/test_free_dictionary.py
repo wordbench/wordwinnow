@@ -1847,6 +1847,96 @@ class TestFreeDictionaryClient:
             ),
         )
 
+    async def test_a_refusal_says_when_to_ask_again_and_so_does_a_word_whose_failures_may_be_the_providers(
+        self,
+    ) -> None:
+        steps: list[Step] = [
+            ConnectError(
+                message="connection refused",
+            ),
+        ]
+
+        harness = Harness(
+            handler=_answering(
+                steps,
+            ),
+        )
+
+        # NOTE:
+        # Three failures leave the circuit closed, and nothing was answered since the first, so the word may have
+        # failed for the provider rather than for itself: it names the next backoff, half of two seconds fixed and
+        # half random.
+        spent = await harness.client.look_up(
+            lemma="photograph",
+        )
+
+        opening = await harness.client.look_up(
+            lemma="mask",
+        )
+
+        harness.clock.advance(
+            seconds=2.0,
+        )
+
+        refused = await harness.client.look_up(
+            lemma="groom",
+        )
+
+        steps[:] = [
+            Response(
+                status_code=503,
+                headers={
+                    "Retry-After": "600",
+                },
+            ),
+        ]
+
+        harness.clock.advance(
+            seconds=20.0,
+        )
+
+        declined = await harness.client.look_up(
+            lemma="rocket",
+        )
+
+        assert spent.failure_reason == "transport_error"
+
+        assert spent.retry_after_seconds is not None
+
+        assert 1.0 <= spent.retry_after_seconds <= 2.0
+
+        # NOTE:
+        # The word that opened the circuit and the word it refused two seconds later name the trial's moment, ten
+        # seconds after the opening less a random quarter at most.
+        assert opening.failure_reason == "transport_error"
+
+        assert opening.retry_after_seconds is not None
+
+        assert 7.5 <= opening.retry_after_seconds <= 10.0
+
+        assert refused.failure_reason == "circuit_open"
+
+        assert refused.retry_after_seconds is not None
+
+        # NOTE:
+        # Both name one moment, read on a clock two seconds apart, so they differ by the two seconds up to rounding.
+        assert (
+            abs(
+                refused.retry_after_seconds + 2.0 - opening.retry_after_seconds,
+            )
+            < 1e-9
+        )
+
+        # NOTE:
+        # The trial's own failure reopens the circuit for the ten minutes the provider asked for.
+        assert (
+            declined.failure_reason,
+            declined.retry_after_seconds,
+        ) == (
+            "provider_error",
+            600.0,
+        )
+
     async def test_four_failed_requests_in_a_row_leave_the_circuit_closed_and_the_fifth_opens_it(
         self,
     ) -> None:

@@ -444,6 +444,10 @@ class ProgressOut(
 
     reported_at: datetime
 
+    dictionary_retry_in_seconds: float | None = None
+
+    dictionary_patience_left_seconds: float | None = None
+
     @classmethod
     def from_domain(
         cls,
@@ -461,6 +465,8 @@ class ProgressOut(
             unavailable=progress.unavailable,
             dictionary_paused=progress.dictionary_paused,
             reported_at=progress.reported_at,
+            dictionary_retry_in_seconds=progress.dictionary_retry_in_seconds,
+            dictionary_patience_left_seconds=progress.dictionary_patience_left_seconds,
         )
 
     def to_domain(
@@ -477,6 +483,8 @@ class ProgressOut(
             unavailable=self.unavailable,
             dictionary_paused=self.dictionary_paused,
             reported_at=self.reported_at,
+            dictionary_retry_in_seconds=self.dictionary_retry_in_seconds,
+            dictionary_patience_left_seconds=self.dictionary_patience_left_seconds,
         )
 
 

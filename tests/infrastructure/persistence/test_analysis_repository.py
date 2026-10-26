@@ -3,6 +3,9 @@ The analysis repository against a SQLite file: what goes in comes back out,
 field by field, and what may no longer be kept is deleted.
 """
 
+from dataclasses import (
+    replace,
+)
 from datetime import (
     UTC,
     timedelta,
@@ -59,6 +62,10 @@ from wordwinnow.domain.document import (
 )
 from wordwinnow.domain.identifiers import (
     AnalysisId,
+)
+from wordwinnow.infrastructure.persistence.mapping import (
+    progress_from_json,
+    progress_to_json,
 )
 from wordwinnow.infrastructure.persistence.models import (
     AnalysisRow,
@@ -569,6 +576,56 @@ _PROGRESS: Final = ProcessingProgress(
 
 @final
 class TestProgress:
+    async def test_a_report_keeps_how_long_waiting_lookups_wait_and_an_older_one_reads_as_none(
+        self,
+        *,
+        new_unit_of_work: NewUnitOfWork,
+    ) -> None:
+        analysis = processing_analysis()
+
+        await store_analysis(
+            analysis=analysis,
+            new_unit_of_work=new_unit_of_work,
+        )
+
+        waiting = replace(
+            _PROGRESS,
+            dictionary_retry_in_seconds=20.0,
+            dictionary_patience_left_seconds=170.0,
+        )
+
+        async with new_unit_of_work() as uow:
+            await uow.analyses.record_progress(
+                analysis_id=analysis.id,
+                progress=waiting,
+            )
+
+            await uow.commit()
+
+        async with new_unit_of_work() as uow:
+            kept = await uow.analyses.progress_of(
+                analysis_id=analysis.id,
+            )
+
+        # NOTE:
+        # A report written before the dictionary stage could wait has neither key.
+        older = progress_to_json(
+            progress=_PROGRESS,
+        )
+
+        del older["dictionary_retry_in_seconds"]
+
+        del older["dictionary_patience_left_seconds"]
+
+        assert kept == waiting
+
+        assert (
+            progress_from_json(
+                payload=older,
+            )
+            == _PROGRESS
+        )
+
     async def test_a_report_is_kept_while_processing_and_forgotten_by_the_next_save(
         self,
         *,

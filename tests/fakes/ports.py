@@ -713,6 +713,18 @@ class RecordingProgress:
             f"{lookup.outcome}" if lookup.failure_reason is None else f"{lookup.outcome}: {lookup.failure_reason}",
         )
 
+    def dictionary_waiting(
+        self,
+        *,
+        retry_in_seconds: float | None,
+        patience_left_seconds: float,
+    ) -> None:
+        self.events.append(
+            "resumed"
+            if retry_in_seconds is None
+            else f"waiting {retry_in_seconds:g} s, {patience_left_seconds:g} s left",
+        )
+
 
 @final
 class FakeLexicalSemantics:

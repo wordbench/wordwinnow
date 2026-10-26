@@ -58,14 +58,17 @@ class FailureReason(
 def unavailable(
     *,
     reason: FailureReason,
+    retry_after_seconds: float | None = None,
 ) -> DictionaryLookup:
     """
-    The lookup that says the dictionary could not answer, and why.
+    The lookup that says the dictionary could not answer, and why, with the
+    seconds after which it may answer again when it knows them.
     """
 
     return DictionaryLookup(
         outcome=LookupOutcome.UNAVAILABLE,
         failure_reason=reason,
+        retry_after_seconds=retry_after_seconds,
     )
 
 
@@ -149,6 +152,8 @@ class LookupPayload(
 
     entries: list[EntryPayload] = []
 
+    retry_after_seconds: float | None = None
+
 
 def to_wire(
     *,
@@ -185,6 +190,7 @@ def to_wire(
             )
             for entry in lookup.entries
         ],
+        retry_after_seconds=lookup.retry_after_seconds,
     )
 
 
@@ -226,6 +232,7 @@ def from_wire(
             for entry in payload.entries
         ),
         failure_reason=payload.failure_reason,
+        retry_after_seconds=payload.retry_after_seconds,
     )
 
 

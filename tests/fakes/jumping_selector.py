@@ -13,6 +13,10 @@ from typing import (
     override,
 )
 
+# NOTE:
+# How long the loop waits, in real time, for a worker thread's result when nothing else is scheduled.
+_GRACE_SECONDS: Final = 5.0
+
 
 @final
 class VirtualClock:
@@ -57,9 +61,17 @@ class JumpingSelector(
             return ready
 
         # WARN:
-        # Nothing ready and no timer means every task waits for something nobody will ever do: on a real loop that
-        # hangs for ever, so it is reported at once instead.
+        # Nothing ready and no timer means every task waits for something outside the loop: a worker thread's result,
+        # which reaches the loop through the selector and is waited for in real time, or something nobody will ever
+        # do, which on a real loop hangs for ever and is reported here once the grace is over.
         if timeout is None:
+            arrived = super().select(
+                timeout=_GRACE_SECONDS,
+            )
+
+            if arrived:
+                return arrived
+
             raise RuntimeError(
                 "the virtual loop has nothing ready and no timer scheduled, so its tasks wait for ever",
             )

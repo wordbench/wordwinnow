@@ -90,6 +90,10 @@ class TestWire:
             _FOUND,
             _NOT_FOUND,
             _UNAVAILABLE,
+            unavailable(
+                reason=FailureReason.CIRCUIT_OPEN,
+                retry_after_seconds=23.5,
+            ),
         ):
             encoded = to_wire(
                 lookup=lookup,
@@ -102,6 +106,21 @@ class TestWire:
             )
 
             assert decoded == lookup
+
+    def test_a_payload_without_a_time_to_ask_again_names_none(
+        self,
+    ) -> None:
+        # NOTE:
+        # A service older than the field sends no such key.
+        decoded = from_wire(
+            payload=LookupPayload.model_validate_json(
+                json_data='{"outcome": "unavailable", "failure_reason": "circuit_open"}',
+            ),
+        )
+
+        assert decoded == unavailable(
+            reason=FailureReason.CIRCUIT_OPEN,
+        )
 
     def test_the_part_of_speech_travels_as_its_value_or_null(
         self,

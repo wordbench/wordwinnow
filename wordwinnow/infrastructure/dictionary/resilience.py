@@ -321,6 +321,8 @@ class CircuitBreaker:
 
         self._failures = 0
 
+        self._failure_run = 0
+
         # NOTE:
         # When the latest wait a failure named ends, whichever failure named it, since no trial may come before it.
         self._named_until = 0.0
@@ -386,6 +388,21 @@ class CircuitBreaker:
         return self._failures
 
     @property
+    def failure_run(
+        self,
+    ) -> int:
+        """
+        Which run of failures in a row the count belongs to, as a number that
+        changes whenever the count starts again: at a success, and when the
+        circuit opens.
+
+        A caller that noted it at a failure can tell later whether every
+        failure since is still part of one run.
+        """
+
+        return self._failure_run
+
+    @property
     def failure_threshold(
         self,
     ) -> int:
@@ -444,10 +461,14 @@ class CircuitBreaker:
 
             self._failures = 0
 
+            self._failure_run += 1
+
             self._settle()
 
         elif self._state is BreakerState.CLOSED:
             self._failures = 0
+
+            self._failure_run += 1
 
     def record_failure(
         self,
@@ -506,6 +527,8 @@ class CircuitBreaker:
             )
 
             self._failures = 0
+
+            self._failure_run += 1
 
         self._settle()
 

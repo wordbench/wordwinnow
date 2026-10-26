@@ -216,6 +216,9 @@ class DictionaryLookup:
 
     Entries exist exactly when the word was found, and a failure reason exists
     exactly when the dictionary was unavailable.
+
+    An unavailable dictionary may also say in how many seconds it may answer
+    again, which whoever asked may wait for before asking once more.
     """
 
     outcome: LookupOutcome
@@ -223,6 +226,8 @@ class DictionaryLookup:
     entries: tuple[DictionaryEntry, ...] = ()
 
     failure_reason: str | None = None
+
+    retry_after_seconds: float | None = None
 
     def __post_init__(
         self,
@@ -249,6 +254,19 @@ class DictionaryLookup:
         if self.outcome is not LookupOutcome.UNAVAILABLE and self.failure_reason:
             raise InvalidDictionaryDataError(
                 f"only an unavailable lookup has a failure reason, and this one is {self.outcome}",
+            )
+
+        if self.retry_after_seconds is None:
+            return
+
+        if self.outcome is not LookupOutcome.UNAVAILABLE:
+            raise InvalidDictionaryDataError(
+                f"only an unavailable lookup says when to ask again, and this one is {self.outcome}",
+            )
+
+        if self.retry_after_seconds < 0:
+            raise InvalidDictionaryDataError(
+                f"a lookup cannot ask to be asked again in the past, got {self.retry_after_seconds} seconds",
             )
 
 

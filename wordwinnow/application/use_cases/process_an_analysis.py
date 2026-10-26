@@ -7,16 +7,28 @@ performance is part of what the analysis reports.
 
 from asyncio import (
     Semaphore,
+    Timeout,
     gather,
+    timeout,
     to_thread,
 )
+from asyncio import (
+    sleep as asyncio_sleep,
+)
 from collections.abc import (
+    Awaitable,
+    Callable,
+    Generator,
     Sequence,
+)
+from contextlib import (
+    contextmanager,
 )
 from dataclasses import (
     dataclass,
 )
 from time import (
+    monotonic,
     perf_counter,
 )
 from typing import (
@@ -89,6 +101,8 @@ from wordwinnow.domain.study import (
     DictionaryInformation,
     EnrichedItem,
     StudyItem,
+    study_tier,
+    tier_order,
     winnow,
 )
 from wordwinnow.domain.vocabulary import (
@@ -105,6 +119,10 @@ DEFINITIONS_PER_ITEM: Final = 3
 # NOTE:
 # How many senses a learner sees per word, most used first.
 SENSES_PER_ITEM: Final = 3
+
+# NOTE:
+# The shortest wait, so a lookup told to ask again at once still lets the clock move before it asks.
+_SHORTEST_WAIT_SECONDS: Final = 1.0
 
 
 @final
@@ -128,6 +146,14 @@ class _Unwatched:
     ) -> None:
         return
 
+    def dictionary_waiting(
+        self,
+        *,
+        retry_in_seconds: float | None,
+        patience_left_seconds: float,
+    ) -> None:
+        return
+
 
 _UNWATCHED: Final = _Unwatched()
 
@@ -147,6 +173,11 @@ class Pipeline:
 
     `progress` hears how far a run has come; a pipeline built without one
     tells nobody.
+
+    `dictionary_patience_seconds` is how long the dictionary stage may wait,
+    in all, for a dictionary that asked to be asked again later, and nought,
+    as a pipeline built without it has, ends such a lookup at once; `clock`
+    and `sleep` time those waits.
     """
 
     linguistics: LinguisticAnalyzer
@@ -164,6 +195,12 @@ class Pipeline:
     dictionary_concurrency: int = 8
 
     progress: PipelineProgress = _UNWATCHED
+
+    dictionary_patience_seconds: float = 0.0
+
+    clock: Callable[[], float] = monotonic
+
+    sleep: Callable[[float], Awaitable[None]] = asyncio_sleep
 
 
 @dataclass(
@@ -315,8 +352,41 @@ async def run_pipeline(
             ),
         )
 
+        # NOTE:
+        # The words a learner studies first are asked first, the more frequent in the text before the rest, so a
+        # provider that stops answering late, or a wait that runs out, costs the words that matter least; the report
+        # keeps its own order whatever this one is.
+        tiers = tuple(
+            study_tier(
+                lemma=item.lemma,
+                level=level,
+                profile=profile,
+            )
+            for (
+                item,
+                level,
+            ) in zip(
+                items,
+                levels,
+                strict=True,
+            )
+        )
+
         dictionary_information = await _look_up_all(
             items,
+            sorted(
+                range(
+                    len(
+                        items,
+                    ),
+                ),
+                key=lambda index: (
+                    tier_order(
+                        tier=tiers[index],
+                    ),
+                    -items[index].occurrence_count,
+                ),
+            ),
             pipeline,
         )
 
@@ -662,21 +732,94 @@ def _assess_all(
 
 async def _look_up_all(
     items: Sequence[VocabularyItem],
+    order: Sequence[int],
     pipeline: Pipeline,
     /,
 ) -> tuple[DictionaryInformation, ...]:
+    """
+    Look the items up in the order `order` gives, as many at a time as the
+    pipeline allows, and hand the answers back in the items' own order.
+    """
+
     semaphore = Semaphore(
         value=pipeline.dictionary_concurrency,
+    )
+
+    patience = _Patience(
+        seconds=pipeline.dictionary_patience_seconds,
+        clock=pipeline.clock,
+        sleep=pipeline.sleep,
+        progress=pipeline.progress,
     )
 
     async def look_up(
         item: VocabularyItem,
         /,
     ) -> DictionaryInformation:
-        async with semaphore:
-            lookup = await pipeline.dictionary.look_up(
-                lemma=item.lemma,
-            )
+        # NOTE:
+        # A word the dictionary turned away with a time to ask again holds the analysis's waiting time from that
+        # moment until it is answered or let go, so the time it spends asking again, waiting for a trial's outcome
+        # included, counts as well as the time it sleeps.
+        held = False
+
+        try:
+            async with semaphore:
+                lookup = await pipeline.dictionary.look_up(
+                    lemma=item.lemma,
+                )
+
+            while (
+                wait := patience.wait_for(
+                    retry_after_seconds=lookup.retry_after_seconds,
+                )
+            ) is not None:
+                if not held:
+                    patience.hold()
+
+                    held = True
+
+                await patience.sleep(
+                    seconds=wait,
+                )
+
+                # NOTE:
+                # A waiting lookup gives its place back and takes one again to ask: the words the cache can answer go
+                # on meanwhile, and the lookups that wake together still ask the dictionary only as many at a time as
+                # an analysis does.
+                #
+                # While the dictionary answers none of the waiting words, it asks within the waiting time left, so a
+                # request that hangs, or a trial whose outcome is slow to come, never keeps a waiting word past the
+                # moment the waiting time runs out; a word cut off then keeps the refusal it last had, and WordNet
+                # stands in.
+                #
+                # The deadline is read on the loop's clock, which is the monotonic clock the pipeline's own defaults
+                # to, and the virtual one a test gives both.
+                deadline = timeout(
+                    delay=patience.time_to_ask(),
+                )
+
+                try:
+                    async with deadline:
+                        with patience.bounding(
+                            deadline=deadline,
+                        ):
+                            async with semaphore:
+                                lookup = await pipeline.dictionary.look_up(
+                                    lemma=item.lemma,
+                                )
+
+                except TimeoutError:
+                    if not deadline.expired():
+                        raise
+
+                    break
+
+                if lookup.outcome is not LookupOutcome.UNAVAILABLE:
+                    patience.answered()
+
+        finally:
+            if held:
+                patience.release()
 
         pipeline.progress.looked_up(
             lookup=lookup,
@@ -704,13 +847,238 @@ async def _look_up_all(
             definitions=definitions,
         )
 
-    return tuple(
-        await gather(
-            *(
-                look_up(
-                    item,
-                )
-                for item in items
-            ),
+    # NOTE:
+    # Tasks take the semaphore in the order they start, which is the order given here.
+    answers = await gather(
+        *(
+            look_up(
+                items[index],
+            )
+            for index in order
         ),
     )
+
+    by_index = dict(
+        zip(
+            order,
+            answers,
+            strict=True,
+        ),
+    )
+
+    return tuple(
+        by_index[index]
+        for index in range(
+            len(
+                items,
+            ),
+        )
+    )
+
+
+@final
+class _Patience:
+    """
+    How long one analysis may still spend, in all, on words the dictionary
+    turned away with a time to ask again.
+
+    The time counts from a word's first refusal until it is answered or let
+    go, while at least one word is in that state, however many are, so an
+    outage spends it once.
+    """
+
+    def __init__(
+        self,
+        *,
+        seconds: float,
+        clock: Callable[[], float],
+        sleep: Callable[[float], Awaitable[None]],
+        progress: PipelineProgress,
+    ) -> None:
+        self._seconds: Final = seconds
+
+        self._clock: Final = clock
+
+        self._sleep: Final = sleep
+
+        self._progress: Final = progress
+
+        # NOTE:
+        # When each sleeping word asks again, so the progress can name the earliest of them rather than the latest.
+        self._wakes: Final[list[float]] = []
+
+        self._held = 0
+
+        self._since = 0.0
+
+        self._spent = 0.0
+
+        # NOTE:
+        # The deadlines of the waiting words now asking again, and whether the dictionary has answered a waiting word
+        # since it last turned one away, which lifts them: once it answers again, the words still queued behind the
+        # pace of its answers are no longer waiting for it to come back.
+        self._deadlines: Final[set[Timeout]] = set()
+
+        self._answering = False
+
+    def wait_for(
+        self,
+        *,
+        retry_after_seconds: float | None,
+    ) -> float | None:
+        """
+        How long to wait before asking again, or `None` when the word is let
+        go: the dictionary named no time, or the time left would not cover it.
+        """
+
+        if retry_after_seconds is None:
+            return None
+
+        self._answering = False
+
+        wait = max(
+            retry_after_seconds,
+            _SHORTEST_WAIT_SECONDS,
+        )
+
+        if wait > self.left():
+            return None
+
+        return wait
+
+    def time_to_ask(
+        self,
+    ) -> float | None:
+        """
+        How long a waiting word may take to ask again: the time left, or no
+        limit once the dictionary has answered a waiting word since it last
+        turned one away.
+        """
+
+        return None if self._answering else self.left()
+
+    @contextmanager
+    def bounding(
+        self,
+        *,
+        deadline: Timeout,
+    ) -> Generator[None]:
+        """
+        Keep `deadline`, a waiting word's while it asks again, so an answer to
+        another waiting word can lift it.
+        """
+
+        self._deadlines.add(
+            deadline,
+        )
+
+        try:
+            yield
+
+        finally:
+            self._deadlines.discard(
+                deadline,
+            )
+
+    def answered(
+        self,
+    ) -> None:
+        """
+        A waiting word was answered: the dictionary answers again, so the
+        deadlines of the words asking now are lifted, and the words that ask
+        later have none until it turns a word away again.
+        """
+
+        self._answering = True
+
+        for deadline in self._deadlines:
+            deadline.reschedule(
+                when=None,
+            )
+
+    def hold(
+        self,
+    ) -> None:
+        """
+        A word turned away begins to count toward the time.
+        """
+
+        if not self._held:
+            self._since = self._clock()
+
+        self._held += 1
+
+    def release(
+        self,
+    ) -> None:
+        """
+        A word that held the time is answered or let go.
+        """
+
+        self._held -= 1
+
+        if not self._held:
+            self._spent += self._clock() - self._since
+
+    async def sleep(
+        self,
+        *,
+        seconds: float,
+    ) -> None:
+        """
+        Sleep before a word asks again, and tell the progress when the
+        earliest sleeping word asks again and how long the stage still waits
+        at most, each time a word begins or ends a sleep.
+        """
+
+        wake = self._clock() + seconds
+
+        self._wakes.append(
+            wake,
+        )
+
+        try:
+            self._report()
+
+            await self._sleep(
+                seconds,
+            )
+
+        finally:
+            self._wakes.remove(
+                wake,
+            )
+
+            self._report()
+
+    def _report(
+        self,
+    ) -> None:
+        now = self._clock()
+
+        self._progress.dictionary_waiting(
+            retry_in_seconds=max(
+                0.0,
+                min(
+                    self._wakes,
+                )
+                - now,
+            )
+            if self._wakes
+            else None,
+            patience_left_seconds=self.left(),
+        )
+
+    def left(
+        self,
+    ) -> float:
+        """
+        How much of the time is left now.
+        """
+
+        spent = self._spent + (self._clock() - self._since if self._held else 0.0)
+
+        return max(
+            0.0,
+            self._seconds - spent,
+        )

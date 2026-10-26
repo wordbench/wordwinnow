@@ -27,6 +27,10 @@ from collections.abc import (
 from contextlib import (
     asynccontextmanager,
 )
+from datetime import (
+    datetime,
+    timedelta,
+)
 from logging import (
     getLogger,
 )
@@ -321,6 +325,14 @@ class Unwatched:
     ) -> None:
         return
 
+    def dictionary_waiting(
+        self,
+        *,
+        retry_in_seconds: float | None,
+        patience_left_seconds: float,
+    ) -> None:
+        return
+
     def processing(
         self,
         *,
@@ -374,6 +386,8 @@ class StoredProgress:
 
         self._paused = False
 
+        self._waiting_until: tuple[datetime, datetime] | None = None
+
         self._changed = False
 
         self._warned = False
@@ -426,6 +440,8 @@ class StoredProgress:
 
         self._paused = False
 
+        self._waiting_until = None
+
         self._changed = True
 
     def looked_up(
@@ -445,6 +461,34 @@ class StoredProgress:
 
         self._changed = True
 
+    def dictionary_waiting(
+        self,
+        *,
+        retry_in_seconds: float | None,
+        patience_left_seconds: float,
+    ) -> None:
+        now = self._clock.now()
+
+        # NOTE:
+        # A wait is kept as the moments it ends, read on the clock the report is stamped with, so a report written a
+        # second later says a second less.
+        self._waiting_until = (
+            None
+            if retry_in_seconds is None
+            else (
+                now
+                + timedelta(
+                    seconds=retry_in_seconds,
+                ),
+                now
+                + timedelta(
+                    seconds=patience_left_seconds,
+                ),
+            )
+        )
+
+        self._changed = True
+
     async def flush(
         self,
     ) -> None:
@@ -457,13 +501,33 @@ class StoredProgress:
 
         self._changed = False
 
+        reported_at = self._clock.now()
+
+        waiting = self._waiting_until
+
         progress = ProcessingProgress(
             stage=self._stage,
             steps=self._steps,
             done=self._done,
             unavailable=self._unavailable,
             dictionary_paused=self._paused,
-            reported_at=self._clock.now(),
+            reported_at=reported_at,
+            dictionary_retry_in_seconds=(
+                None
+                if waiting is None
+                else max(
+                    0.0,
+                    (waiting[0] - reported_at).total_seconds(),
+                )
+            ),
+            dictionary_patience_left_seconds=(
+                None
+                if waiting is None
+                else max(
+                    0.0,
+                    (waiting[1] - reported_at).total_seconds(),
+                )
+            ),
         )
 
         try:

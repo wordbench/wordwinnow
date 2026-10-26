@@ -46,3 +46,18 @@ class PipelineProgress(
         """
 
         ...
+
+    def dictionary_waiting(
+        self,
+        *,
+        retry_in_seconds: float | None,
+        patience_left_seconds: float,
+    ) -> None:
+        """
+        The dictionary stage waits for the dictionary to answer again: the
+        next lookup asks in `retry_in_seconds`, and the stage waits
+        `patience_left_seconds` more at most; `retry_in_seconds` is `None`
+        once no lookup waits any longer.
+        """
+
+        ...

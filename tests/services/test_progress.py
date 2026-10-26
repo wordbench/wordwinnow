@@ -7,6 +7,10 @@ dictionary hears what it is doing.
 from asyncio import (
     sleep as asyncio_sleep,
 )
+from datetime import (
+    datetime,
+    timedelta,
+)
 from logging import (
     WARNING,
 )
@@ -138,6 +142,23 @@ def _processing() -> Analysis:
 
 
 @final
+class _MovingClock:
+    """
+    A clock at the epoch until the test moves it.
+    """
+
+    def __init__(
+        self,
+    ) -> None:
+        self.at = EPOCH
+
+    def now(
+        self,
+    ) -> datetime:
+        return self.at
+
+
+@final
 class TestPausedAfter:
     def test_a_refusal_pauses_an_answer_resumes_and_any_other_failure_leaves_it_as_it_was(
         self,
@@ -233,6 +254,68 @@ class TestStoredProgress:
         }
 
         assert storage.progress == {}
+
+    async def test_a_report_says_when_the_waiting_lookups_ask_again_and_how_long_the_stage_waits_at_most(
+        self,
+    ) -> None:
+        analysis = _processing()
+
+        storage = await _stored(
+            analysis,
+        )
+
+        clock = _MovingClock()
+
+        progress = StoredProgress(
+            analysis_id=analysis.id,
+            new_unit_of_work=storage.new_unit_of_work,
+            clock=clock,
+        )
+
+        progress.stage_started(
+            stage=Stage.DICTIONARY_ENRICHMENT,
+            steps=4,
+        )
+
+        progress.dictionary_waiting(
+            retry_in_seconds=30.0,
+            patience_left_seconds=180.0,
+        )
+
+        # NOTE:
+        # The report is written ten seconds later, and says ten seconds less of each wait.
+        clock.at += timedelta(
+            seconds=10,
+        )
+
+        await progress.flush()
+
+        waiting = storage.progress[analysis.id]
+
+        progress.dictionary_waiting(
+            retry_in_seconds=None,
+            patience_left_seconds=150.0,
+        )
+
+        await progress.flush()
+
+        resumed = storage.progress[analysis.id]
+
+        assert (
+            waiting.dictionary_retry_in_seconds,
+            waiting.dictionary_patience_left_seconds,
+        ) == (
+            20.0,
+            170.0,
+        )
+
+        assert (
+            resumed.dictionary_retry_in_seconds,
+            resumed.dictionary_patience_left_seconds,
+        ) == (
+            None,
+            None,
+        )
 
     async def test_a_report_on_an_analysis_no_longer_processing_is_dropped(
         self,

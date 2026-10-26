@@ -230,11 +230,18 @@ namespace-modules = [
 # positional-only one breaks substitution, which the type checker proves.
 #
 # Scanned on its own, the module reports that signature and nothing else, so the exclusion hides exactly that.
+#
+# `wordwinnow/services/cli/clock_column.py` overrides `rich.progress.ProgressColumn.render`, whose parameter Rich
+# declares positional-or-keyword and passes positionally: a keyword-only override breaks the progress line, and a
+# positional-only one breaks substitution, which the type checker proves.
+#
+# Scanned on its own, the module reports that signature and nothing else, so the exclusion hides exactly that.
 exclude = [
   "data/reference/ATTRIBUTION.md",
   "wordwinnow/infrastructure/log_formatters.py",
   "wordwinnow/infrastructure/messaging/handoff.py",
   "tests/fakes/jumping_selector.py",
+  "wordwinnow/services/cli/clock_column.py",
 ]
 
 [tool.pytest.ini_options]

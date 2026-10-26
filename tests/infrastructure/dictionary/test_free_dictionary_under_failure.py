@@ -1446,3 +1446,403 @@ class TestTheFailuresInARow:
         assert retry_in_seconds is not None
 
         assert 7.0 <= retry_in_seconds <= 10.0
+
+    def test_the_trial_waits_for_the_wait_the_provider_named_even_past_the_recovery_period(
+        self,
+    ) -> None:
+        # NOTE:
+        # Two words, each asked again a second after every 503, until the fifth 503, three and a half seconds in,
+        # names twenty-five seconds: the circuit opens for those rather than its own ten, so a word asked a tenth of a
+        # second before they end sends nothing and is told to ask again then, and the trial is sent no sooner.
+        asked: dict[str, int] = {}
+
+        recovered: list[bool] = [
+            False,
+        ]
+
+        def answer(
+            request: Request,
+            /,
+        ) -> Response:
+            if recovered[0]:
+                return Response(
+                    status_code=200,
+                    json=_FOUND_PAYLOAD,
+                )
+
+            lemma = request.url.path.rsplit(
+                sep="/",
+                maxsplit=1,
+            )[-1]
+
+            asked[lemma] = (
+                asked.get(
+                    lemma,
+                    0,
+                )
+                + 1
+            )
+
+            # NOTE:
+            # The second word's second request is the fifth in a row.
+            return Response(
+                status_code=503,
+                headers={
+                    "Retry-After": "25" if asked[lemma] == 2 and lemma == "mask" else "1",
+                },
+            )
+
+        async def scenario() -> tuple[tuple[_Arrival, ...], float, DictionaryLookup, DictionaryLookup]:
+            loop = get_running_loop()
+
+            (
+                client,
+                arrivals,
+            ) = _counted(
+                answer,
+                hang_seconds=0.1,
+            )
+
+            for word in (
+                "photograph",
+                "mask",
+            ):
+                await client.look_up(
+                    lemma=word,
+                )
+
+            opened_at = loop.time()
+
+            await asyncio_sleep(
+                delay=24.9,
+            )
+
+            early = await client.look_up(
+                lemma="lantern",
+            )
+
+            recovered[0] = True
+
+            await asyncio_sleep(
+                delay=0.1,
+            )
+
+            trial = await client.look_up(
+                lemma="lantern",
+            )
+
+            return (
+                tuple(
+                    arrivals,
+                ),
+                opened_at,
+                early,
+                trial,
+            )
+
+        (
+            arrivals,
+            opened_at,
+            early,
+            trial,
+        ) = run_in_virtual_time(
+            main=scenario,
+        )
+
+        assert (
+            round(
+                number=opened_at,
+                ndigits=6,
+            )
+            == 3.5
+        )
+
+        assert early.failure_reason == FailureReason.CIRCUIT_OPEN
+
+        assert early.retry_after_seconds is not None
+
+        assert (
+            abs(
+                early.retry_after_seconds - 0.1,
+            )
+            < 1e-6
+        )
+
+        assert tuple(arrival.circuit for arrival in arrivals) == (
+            *((BreakerState.CLOSED,) * 5),
+            BreakerState.HALF_OPEN,
+        )
+
+        assert trial.outcome is LookupOutcome.FOUND
+
+    def test_a_word_alone_in_an_outage_asks_again_until_the_fifth_failure_opens_the_circuit(
+        self,
+    ) -> None:
+        # NOTE:
+        # One word against a provider that fails every request: its three attempts leave four short of opening the
+        # circuit, so rather than taking WordNet's gloss it names the next backoff; asked again then, its fourth
+        # failure leaves the circuit closed and its fifth opens it, and the word names the trial's moment instead.
+        async def scenario() -> tuple[DictionaryLookup, BreakerState, DictionaryLookup, tuple[_Arrival, ...]]:
+            (
+                client,
+                arrivals,
+            ) = _counted(
+                _server_error,
+                hang_seconds=0.1,
+            )
+
+            spent = await client.look_up(
+                lemma="photograph",
+            )
+
+            closed = client.activity().circuit
+
+            await asyncio_sleep(
+                delay=spent.retry_after_seconds or 0.0,
+            )
+
+            opening = await client.look_up(
+                lemma="photograph",
+            )
+
+            return (
+                spent,
+                closed,
+                opening,
+                tuple(
+                    arrivals,
+                ),
+            )
+
+        (
+            spent,
+            closed,
+            opening,
+            arrivals,
+        ) = run_in_virtual_time(
+            main=scenario,
+        )
+
+        assert spent.failure_reason == FailureReason.PROVIDER_ERROR
+
+        assert spent.retry_after_seconds is not None
+
+        assert 1.0 <= spent.retry_after_seconds <= 2.0
+
+        assert closed is BreakerState.CLOSED
+
+        assert tuple(arrival.in_a_row for arrival in arrivals) == (
+            0,
+            1,
+            2,
+            3,
+            4,
+        )
+
+        assert opening.failure_reason == FailureReason.PROVIDER_ERROR
+
+        assert opening.retry_after_seconds is not None
+
+        assert 7.5 <= opening.retry_after_seconds <= 10.0
+
+    def test_a_word_whose_failures_an_answer_interrupted_names_no_time(
+        self,
+    ) -> None:
+        # NOTE:
+        # The provider fails one word every time and answers another, asked while the first waits to ask again: the
+        # answer shows the failures are the word's own, so once its attempts are spent it names no time, and WordNet
+        # stands in for it.
+        def answer(
+            request: Request,
+            /,
+        ) -> Response:
+            if request.url.path.endswith(
+                "/photograph",
+            ):
+                return Response(
+                    status_code=503,
+                )
+
+            return Response(
+                status_code=200,
+                json=_FOUND_PAYLOAD,
+            )
+
+        async def scenario() -> tuple[DictionaryLookup, DictionaryLookup, BreakerState, int | None]:
+            (
+                client,
+                _,
+            ) = _counted(
+                answer,
+                hang_seconds=0.1,
+            )
+
+            failing = create_task(
+                coro=client.look_up(
+                    lemma="photograph",
+                ),
+            )
+
+            await asyncio_sleep(
+                delay=0.15,
+            )
+
+            found = await client.look_up(
+                lemma="mask",
+            )
+
+            spent = await failing
+
+            return (
+                found,
+                spent,
+                client.activity().circuit,
+                client.activity().consecutive_failures,
+            )
+
+        (
+            found,
+            spent,
+            circuit,
+            in_a_row,
+        ) = run_in_virtual_time(
+            main=scenario,
+        )
+
+        assert found.outcome is LookupOutcome.FOUND
+
+        assert (
+            spent.failure_reason,
+            spent.retry_after_seconds,
+            circuit,
+            in_a_row,
+        ) == (
+            FailureReason.PROVIDER_ERROR,
+            None,
+            BreakerState.CLOSED,
+            2,
+        )
+
+    def test_a_wait_one_failure_named_holds_the_trial_back_after_other_failures_open_the_circuit(
+        self,
+    ) -> None:
+        # NOTE:
+        # The first word's 503 names sixty seconds, so its lookup ends at once with that wait; four failures of two
+        # other words, naming none, then open the circuit a second and a half in, and its own ten seconds would let a
+        # trial go eight seconds later, but no trial may come before the sixty seconds the provider named end.
+        named: list[bool] = [
+            False,
+        ]
+
+        recovered: list[bool] = [
+            False,
+        ]
+
+        def answer(
+            request: Request,
+            /,
+        ) -> Response:
+            if recovered[0]:
+                return Response(
+                    status_code=200,
+                    json=_FOUND_PAYLOAD,
+                )
+
+            if not named[0]:
+                named[0] = True
+
+                return Response(
+                    status_code=503,
+                    headers={
+                        "Retry-After": "60",
+                    },
+                )
+
+            return Response(
+                status_code=503,
+            )
+
+        async def scenario() -> tuple[DictionaryLookup, DictionaryLookup, tuple[_Arrival, ...], float]:
+            loop = get_running_loop()
+
+            (
+                client,
+                arrivals,
+            ) = _counted(
+                answer,
+                hang_seconds=0.1,
+            )
+
+            first = await client.look_up(
+                lemma="photograph",
+            )
+
+            for word in (
+                "mask",
+                "groom",
+            ):
+                await client.look_up(
+                    lemma=word,
+                )
+
+            recovered[0] = True
+
+            await asyncio_sleep(
+                delay=59.9 - loop.time(),
+            )
+
+            early = await client.look_up(
+                lemma="lantern",
+            )
+
+            await asyncio_sleep(
+                delay=early.retry_after_seconds or 0.0,
+            )
+
+            await client.look_up(
+                lemma="lantern",
+            )
+
+            return (
+                first,
+                early,
+                tuple(
+                    arrivals,
+                ),
+                loop.time(),
+            )
+
+        (
+            first,
+            early,
+            arrivals,
+            ended,
+        ) = run_in_virtual_time(
+            main=scenario,
+        )
+
+        assert (
+            first.failure_reason,
+            first.retry_after_seconds,
+        ) == (
+            FailureReason.PROVIDER_ERROR,
+            60.0,
+        )
+
+        assert early.failure_reason == FailureReason.CIRCUIT_OPEN
+
+        assert early.retry_after_seconds is not None
+
+        assert (
+            abs(
+                early.retry_after_seconds - 0.2,
+            )
+            < 1e-6
+        )
+
+        assert tuple(arrival.circuit for arrival in arrivals) == (
+            *((BreakerState.CLOSED,) * 5),
+            BreakerState.HALF_OPEN,
+        )
+
+        assert ended >= 60.1

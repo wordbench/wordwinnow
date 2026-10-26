@@ -2,6 +2,10 @@
 The progress line the command line shows on standard error.
 """
 
+from datetime import (
+    datetime,
+    timedelta,
+)
 from io import (
     StringIO,
 )
@@ -45,6 +49,35 @@ from wordwinnow.services.cli.progress import (
 _ANSWERED: Final = DictionaryLookup(
     outcome=LookupOutcome.NOT_FOUND,
 )
+
+
+@final
+class _SteppedClock:
+    """
+    A wall clock that moves only when a test moves it.
+    """
+
+    def __init__(
+        self,
+    ) -> None:
+        self.now = EPOCH
+
+    def __call__(
+        self,
+    ) -> datetime:
+        return self.now
+
+
+def _terminal(
+    stream: StringIO,
+    /,
+) -> Console:
+    return Console(
+        force_terminal=True,
+        force_interactive=True,
+        file=stream,
+        width=160,
+    )
 
 
 @final
@@ -300,6 +333,91 @@ class TestTerminalProgress:
 
         assert "placing the words in tiers" in placing
 
+    def test_lookups_waiting_for_the_dictionary_name_the_next_try_and_when_wordnet_takes_over(
+        self,
+    ) -> None:
+        stream = StringIO()
+
+        drawn: list[str] = []
+
+        with TerminalProgress(
+            console=Console(
+                force_terminal=True,
+                force_interactive=True,
+                file=stream,
+                width=140,
+            ),
+            clock=lambda: EPOCH,
+        ) as progress:
+            progress.stage_started(
+                stage=Stage.DICTIONARY_ENRICHMENT,
+                steps=4,
+            )
+
+            for (
+                retry_in_seconds,
+                patience_left_seconds,
+            ) in (
+                (
+                    30.0,
+                    180.0,
+                ),
+                (
+                    None,
+                    150.0,
+                ),
+            ):
+                before = stream.getvalue()
+
+                progress.dictionary_waiting(
+                    retry_in_seconds=retry_in_seconds,
+                    patience_left_seconds=patience_left_seconds,
+                )
+
+                drawn.append(
+                    stream.getvalue().removeprefix(
+                        before,
+                    ),
+                )
+
+        (
+            waiting,
+            resumed,
+        ) = drawn
+
+        assert "waiting for the dictionary: next try in 30 s, WordNet within 3 min" in waiting
+
+        assert STAGE_DESCRIPTIONS[Stage.DICTIONARY_ENRICHMENT] in resumed
+
+    def test_a_workers_report_of_waiting_lookups_names_the_times_from_when_it_was_written(
+        self,
+    ) -> None:
+        stream = StringIO()
+
+        with TerminalProgress(
+            console=Console(
+                force_terminal=True,
+                force_interactive=True,
+                file=stream,
+                width=140,
+            ),
+            clock=lambda: EPOCH,
+        ) as progress:
+            progress.processing(
+                progress=ProcessingProgress(
+                    stage=Stage.DICTIONARY_ENRICHMENT,
+                    steps=156,
+                    done=40,
+                    unavailable=0,
+                    dictionary_paused=False,
+                    reported_at=EPOCH,
+                    dictionary_retry_in_seconds=20.0,
+                    dictionary_patience_left_seconds=170.0,
+                ),
+            )
+
+        assert "waiting for the dictionary: next try in 20 s, WordNet within 2 min 50 s" in stream.getvalue()
+
     def test_every_stage_has_a_description(
         self,
     ) -> None:
@@ -308,3 +426,58 @@ class TestTerminalProgress:
         ) == set(
             Stage,
         )
+
+
+@final
+class TestTimesCountedFromNow:
+    def test_a_wait_counts_down_between_two_reports_and_says_now_once_its_moment_passed(
+        self,
+    ) -> None:
+        stream = StringIO()
+
+        clock = _SteppedClock()
+
+        drawn: list[str] = []
+
+        with TerminalProgress(
+            console=_terminal(
+                stream,
+            ),
+            clock=clock,
+        ) as progress:
+            progress.stage_started(
+                stage=Stage.DICTIONARY_ENRICHMENT,
+                steps=40,
+            )
+
+            progress.dictionary_waiting(
+                retry_in_seconds=30.0,
+                patience_left_seconds=45.0,
+            )
+
+            for second in (
+                12,
+                31,
+            ):
+                clock.now = EPOCH + timedelta(
+                    seconds=second,
+                )
+
+                before = stream.getvalue()
+
+                progress.line.refresh()
+
+                drawn.append(
+                    stream.getvalue().removeprefix(
+                        before,
+                    ),
+                )
+
+        (
+            counting,
+            passed,
+        ) = drawn
+
+        assert "waiting for the dictionary: next try in 18 s, WordNet within 33 s" in counting
+
+        assert "waiting for the dictionary: next try now, WordNet within 14 s" in passed

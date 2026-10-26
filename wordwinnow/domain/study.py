@@ -217,6 +217,18 @@ class StudyItem:
         return None
 
 
+def tier_order(
+    *,
+    tier: StudyTier,
+) -> int:
+    """
+    Where `tier` stands in the order a learner works through the tiers, first
+    at nought.
+    """
+
+    return _TIER_ORDER[tier]
+
+
 def study_tier(
     *,
     lemma: str,

@@ -342,6 +342,7 @@ def build_pipeline(
     adapters: LinguisticAdapters,
     dictionary: Dictionary,
     dictionary_concurrency: int,
+    dictionary_patience_seconds: float = 0.0,
 ) -> Pipeline:
     """
     The pipeline over the local stack and whichever dictionary is given.
@@ -355,6 +356,7 @@ def build_pipeline(
         dictionary=dictionary,
         lexical_semantics=adapters.lexical_semantics,
         dictionary_concurrency=dictionary_concurrency,
+        dictionary_patience_seconds=dictionary_patience_seconds,
     )
 
 
@@ -689,6 +691,7 @@ async def local_profile(
                 adapters=adapters,
                 dictionary=provided.dictionary,
                 dictionary_concurrency=settings.dictionary_concurrency,
+                dictionary_patience_seconds=settings.dictionary_patience_seconds,
             ),
             sources=build_sources(
                 settings=settings,
@@ -987,6 +990,7 @@ async def worker_profile(
                 adapters=adapters,
                 dictionary=dictionary,
                 dictionary_concurrency=settings.dictionary_concurrency,
+                dictionary_patience_seconds=settings.dictionary_patience_seconds,
             ),
             clock=SystemClock(),
             metrics=build_metrics(),

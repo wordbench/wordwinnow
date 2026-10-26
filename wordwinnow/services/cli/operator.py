@@ -219,6 +219,17 @@ class OperatorProgress:
             lookup=lookup,
         )
 
+    def dictionary_waiting(
+        self,
+        *,
+        retry_in_seconds: float | None,
+        patience_left_seconds: float,
+    ) -> None:
+        self._line.dictionary_waiting(
+            retry_in_seconds=retry_in_seconds,
+            patience_left_seconds=patience_left_seconds,
+        )
+
     def processing(
         self,
         *,
