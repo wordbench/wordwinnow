@@ -210,8 +210,24 @@ docker compose --profile full up -d --scale analysis-worker=4
 That is how the worker count changes; the requested-analyses topic has four
 partitions, so a fifth worker would idle.
 
-`make down` stops everything and removes the volumes, the dictionary cache among
-them; `docker compose --profile full down` stops everything and keeps them.
+`make down` stops everything and keeps the named volumes, so the next
+`make up-full` finds the analyses, the queue, the dictionary cache, the facts,
+and the traces where they were; `make reset CONFIRM=1` stops everything and
+deletes them, and without `CONFIRM=1` it only says what it would delete.
+
+| Volume | Holds | `make down` | `make reset CONFIRM=1` |
+| --- | --- | --- | --- |
+| `postgres-data` | The analyses, with their texts while they may be kept | Kept | Deleted |
+| `kafka-data` | The topics, with any request no worker has taken yet | Kept | Deleted |
+| `redis-data` | The dictionary cache | Kept | Deleted |
+| `clickhouse-data` | The per-word facts `wordwinnow stats` summarizes | Kept | Deleted |
+| `tempo-data` | The traces | Kept | Deleted |
+| Anonymous, from the Prometheus and Kafka images | Prometheus's samples; Kafka leaves its two empty | Deleted | Deleted |
+
+The anonymous volumes the Prometheus and Kafka images declare for themselves
+are a new container's every time, so `make down` removes them rather than
+leaving them behind; a Prometheus that keeps its samples between runs would
+need a named volume of its own.
 
 ## Configuration
 

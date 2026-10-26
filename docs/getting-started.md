@@ -131,8 +131,8 @@ lookups in flight.
 instead, and the same analysis then took about five seconds, observed once on
 the laptop the performance numbers come from.
 
-`make down` stops everything and removes the volumes, the dictionary cache among
-them.
+`make down` stops everything and keeps the data, the analyses and the dictionary
+cache among it, for the next `make up-full`; `make reset CONFIRM=1` deletes it.
 
 ## Checking it
 

@@ -60,7 +60,7 @@ GITLEAKS_VERSION := 8.30.1
 GITLEAKS_RELEASE := https://github.com/gitleaks/gitleaks/releases/tag/v$(GITLEAKS_VERSION)
 
 .PHONY: help setup nltk-data model format format-check lint typecheck conventions test test-integration secrets \
-	verify check-commits drift hooks build up up-full down demo
+	verify check-commits drift hooks build up up-full down reset demo
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -151,7 +151,23 @@ up: ## Start the backing services (postgres, redis, kafka, clickhouse)
 up-full: ## Start everything, including the application services and observability
 	docker compose --profile full up -d --build --wait
 
-down: ## Stop and remove every container and volume
+# NOTE:
+# `down` keeps the named volumes, so the analyses, the queue, the dictionary cache, the facts, and the traces outlive
+# it, and removes only the anonymous volumes the Prometheus and Kafka images declare for themselves, which a new
+# container never reattaches and which would otherwise pile up: Prometheus's samples, which the stack does not keep
+# between runs, and two that Kafka leaves empty.
+down: ## Stop and remove every container, keeping the named volumes and their data
+	docker compose --profile full rm --stop --force --volumes
+	docker compose --profile full down
+
+# WARN:
+# `reset` deletes every volume of the stack and the data in it, so it does nothing unless `CONFIRM=1` asks for it.
+reset: ## Stop everything and delete every volume and its data, with CONFIRM=1
+	@if [ "$(CONFIRM)" != "1" ]; then \
+		echo "make reset deletes the analyses, the queue, the dictionary cache, the facts, and the traces"; \
+		echo "run make reset CONFIRM=1 to delete them"; \
+		exit 2; \
+	fi
 	docker compose --profile full down -v
 
 demo: ## Analyze the sample story locally, without the dictionary
