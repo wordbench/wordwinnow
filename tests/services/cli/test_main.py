@@ -9,6 +9,9 @@ from datetime import (
     datetime,
     timedelta,
 )
+from io import (
+    StringIO,
+)
 from json import (
     loads,
 )
@@ -503,6 +506,71 @@ class TestCli:
         assert result.exit_code == 0, result.output
 
         assert "no words to study" in result.output
+
+    def test_standard_input_is_analyzed_and_refused_without_text(
+        self,
+        *,
+        workspace: Path,
+        monkeypatch: MonkeyPatch,
+    ) -> None:
+        # NOTE:
+        # Text another tool extracts, as `pdftotext` does from a PDF, reaches the command on standard input, which the
+        # module binds when it is imported, so the test replaces that binding; a page that holds no text, as a scanned
+        # one, reaches it as a form feed alone.
+        monkeypatch.setattr(
+            target=main,
+            name="stdin",
+            value=StringIO(
+                initial_value=_TEXT,
+            ),
+        )
+
+        piped = _runner.invoke(
+            app=app,
+            args=[
+                "analyze",
+                "-",
+                "--local",
+                "--no-dictionary",
+                "--level",
+                "A2",
+                "--json",
+            ],
+        )
+
+        assert piped.exit_code == 0, piped.output
+
+        payload = loads(
+            s=piped.stdout,
+        )
+
+        assert payload["document"]["title"] == "standard input"
+
+        assert "drunken" in (entry["lemma"] for entry in payload["items"])
+
+        monkeypatch.setattr(
+            target=main,
+            name="stdin",
+            value=StringIO(
+                initial_value="\f\n",
+            ),
+        )
+
+        blank = _runner.invoke(
+            app=app,
+            args=[
+                "analyze",
+                "-",
+                "--local",
+                "--no-dictionary",
+                "--level",
+                "A2",
+            ],
+        )
+
+        assert blank.exit_code == 1
+
+        assert "a document requires non-blank text" in blank.output
 
     def test_a_failed_analysis_fails_the_command(
         self,

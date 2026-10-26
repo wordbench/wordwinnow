@@ -15,6 +15,19 @@ Every command, the configuration, and what to do when something stops.
 `--local` runs `analyze`, `show`, and `list` against the SQLite store in this process;
 without it, they talk to the intake service, which `stats` always reads from.
 
+`analyze FILE` reads plain text, Markdown, SRT, or WebVTT; for anything else,
+such as a PDF, extract the text with a tool of your choice and pipe it in, `-`
+reading standard input:
+
+```sh
+pdftotext paper.pdf - | uv run wordwinnow analyze - --level B1
+```
+
+Poppler's `pdftotext` is one such tool, packaged as `poppler` by Homebrew and as
+`poppler-utils` by Debian and Ubuntu; a scanned PDF holds pictures of its pages
+rather than text and needs text recognition first, and when the extractor
+finds no text, `analyze` refuses the empty document.
+
 | Option | Meaning |
 | --- | --- |
 | `--level`, `--target` | The level you have, which every analysis requires, and the one you are working toward, one above your level when omitted |
