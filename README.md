@@ -95,10 +95,10 @@ services over PostgreSQL, Kafka, Redis, and ClickHouse, and the same command
 without `--local` sends the text there.
 
 While it works, `analyze` says on standard error what it is doing, and
-`--view operator` adds under that line what the dictionary is doing: the lookups
-in flight and what each waits for, the request budget, any pause the provider
-asked for, the answers that came from the cache, the retries, the circuit, and
-the breaker's count of failures in a row.
+`--view operator` adds under that line what the dictionary is doing: whether the
+provider is answering, rate-limited, or failing, and why, the last minute of
+the client's requests, and the lookups in flight; [the operating guide](docs/operating.md) names
+every row.
 
 ![The operator's view of a request limit, an outage, and a recovery](docs/images/operator.gif)
 

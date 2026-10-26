@@ -23,6 +23,9 @@ from asyncio import (
 from asyncio import (
     sleep as asyncio_sleep,
 )
+from collections import (
+    deque,
+)
 from collections.abc import (
     Awaitable,
     Sequence,
@@ -130,6 +133,11 @@ _RECOVERY_JITTER: Final = 0.25
 MAX_DELAY_SECONDS: Final = 30.0
 
 _BASE_BACKOFF_SECONDS: Final = 0.5
+
+# NOTE:
+# How far back the activity reports the client's own requests: a minute holds six recovery periods, and at most a
+# hundred and twenty requests at the budget's pace.
+_RECENT_SECONDS: Final = 60.0
 
 # NOTE:
 # How long the client leaves the provider alone after a 429 that names no wait it can use: one second, doubling with
@@ -487,6 +495,22 @@ class WaitCause(
     TRIAL = auto()
 
 
+class RequestOutcome(
+    UnorderedStrEnum,
+):
+    """
+    How a request the client sent came back, as the client saw it: answered,
+    found or not; refused with a 429; or failed, by a server error, a timeout,
+    a connection that failed, or an answer it could not read.
+    """
+
+    ANSWERED = auto()
+
+    REFUSED = auto()
+
+    FAILED = auto()
+
+
 class ProviderObserver(
     Protocol,
 ):
@@ -581,6 +605,23 @@ class LookupActivity:
     slots=True,
 )
 @final
+class RecentRequest:
+    """
+    A request the client sent whose outcome came back in the last minute: how
+    many seconds ago, and how.
+    """
+
+    seconds: float
+
+    outcome: RequestOutcome
+
+
+@dataclass(
+    frozen=True,
+    kw_only=True,
+    slots=True,
+)
+@final
 class ProviderActivity:
     """
     What the client is doing at one moment: the circuit, the request budget,
@@ -595,6 +636,16 @@ class ProviderActivity:
     `consecutive_failures` is the breaker's own count of requests that failed
     in a row toward `failure_threshold`, unlike any count of unanswered words,
     and both are `None` where the activity does not report them.
+
+    `failed_trials` is how many trials failed since the circuit last opened
+    from closed, and `opened_by` why the request that opened or last reopened
+    it failed, while it is open or half-open; both are `None` where the
+    activity does not report them.
+
+    `recent` is each of the client's own requests whose outcome came back in
+    the last minute, oldest first, and `last_answer_seconds` how long ago one
+    was last answered, `None` when none has been; both say what the client saw
+    of its own requests, and nothing of what the provider did otherwise.
     """
 
     circuit: BreakerState
@@ -620,6 +671,14 @@ class ProviderActivity:
     lookups: tuple[LookupActivity, ...]
 
     retries: MappingProxyType[FailureReason, int]
+
+    failed_trials: int | None = None
+
+    opened_by: FailureReason | None = None
+
+    recent: tuple[RecentRequest, ...] = ()
+
+    last_answer_seconds: float | None = None
 
 
 @dataclass(
@@ -732,6 +791,17 @@ class FreeDictionaryClient:
             "-inf",
         )
 
+        # NOTE:
+        # When each of the last minute's requests came back, and how, and when one was last answered.
+        self._requests: Final[deque[tuple[float, RequestOutcome]]] = deque()
+
+        self._answered_at: float | None = None
+
+        # NOTE:
+        # Why the request that opened the circuit, or a trial that reopened it, failed, for an operator asking why the
+        # client stopped; nothing while the circuit is closed.
+        self._opened_by: FailureReason | None = None
+
     def activity(
         self,
     ) -> ProviderActivity:
@@ -740,6 +810,11 @@ class FreeDictionaryClient:
         """
 
         now = self._clock()
+
+        # NOTE:
+        # A lookup waiting for a token waits for the end of the provider's pause while one is in force, because the
+        # paused budget issues nothing before it, and for the rate once it is over, whichever it began waiting for.
+        paused = self._cooldown_until > now
 
         return ProviderActivity(
             circuit=self._breaker.state,
@@ -755,7 +830,11 @@ class FreeDictionaryClient:
             lookups=tuple(
                 LookupActivity(
                     lemma=key,
-                    waiting_for=phase.waiting_for,
+                    waiting_for=(
+                        (WaitCause.COOLDOWN if paused else WaitCause.BUDGET)
+                        if phase.waiting_for is WaitCause.BUDGET or phase.waiting_for is WaitCause.COOLDOWN
+                        else phase.waiting_for
+                    ),
                     attempt=phase.attempt,
                     seconds=now - phase.since,
                     delay_seconds=phase.delay_seconds,
@@ -772,6 +851,20 @@ class FreeDictionaryClient:
                     self._retries,
                 ),
             ),
+            failed_trials=self._breaker.failed_trials,
+            opened_by=None if self._breaker.state is BreakerState.CLOSED else self._opened_by,
+            recent=tuple(
+                RecentRequest(
+                    seconds=now - at,
+                    outcome=outcome,
+                )
+                for (
+                    at,
+                    outcome,
+                ) in self._requests
+                if now - at <= _RECENT_SECONDS
+            ),
+            last_answer_seconds=None if self._answered_at is None else now - self._answered_at,
         )
 
     async def look_up(
@@ -977,6 +1070,10 @@ class FreeDictionaryClient:
                 ),
             )
 
+            self._observed(
+                result,
+            )
+
             if isinstance(
                 result,
                 DictionaryLookup,
@@ -1172,6 +1269,39 @@ class FreeDictionaryClient:
                 delay_seconds=delay,
                 reason=result.reason,
             )
+
+    def _observed(
+        self,
+        result: DictionaryLookup | _Retry,
+        /,
+    ) -> None:
+        now = self._clock()
+
+        if isinstance(
+            result,
+            DictionaryLookup,
+        ):
+            answered = result.outcome is not LookupOutcome.UNAVAILABLE
+
+            outcome = RequestOutcome.ANSWERED if answered else RequestOutcome.FAILED
+
+        else:
+            refused = result.reason is FailureReason.RATE_LIMITED
+
+            outcome = RequestOutcome.REFUSED if refused else RequestOutcome.FAILED
+
+        if outcome is RequestOutcome.ANSWERED:
+            self._answered_at = now
+
+        self._requests.append(
+            (
+                now,
+                outcome,
+            ),
+        )
+
+        while self._requests and now - self._requests[0][0] > _RECENT_SECONDS:
+            self._requests.popleft()
 
     def _throttle(
         self,
@@ -1461,6 +1591,11 @@ class FreeDictionaryClient:
             )
 
         after = self._breaker.state
+
+        if after is BreakerState.OPEN and failure_reason is not None and (before is BreakerState.CLOSED or trial):
+            self._opened_by = FailureReason(
+                value=failure_reason,
+            )
 
         # NOTE:
         # One warning per outage: the circuit opening from closed is the event an operator needs, while a failed trial

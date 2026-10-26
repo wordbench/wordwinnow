@@ -54,6 +54,8 @@ from wordwinnow.domain.dictionary import (
 )
 from wordwinnow.infrastructure.dictionary.free_dictionary import (
     FreeDictionaryClient,
+    ProviderActivity,
+    WaitCause,
 )
 from wordwinnow.infrastructure.dictionary.resilience import (
     BreakerState,
@@ -420,6 +422,74 @@ class TestThePauseTheProviderAsksFor:
                 after,
             )
         )
+
+    def test_a_lookup_waiting_for_a_token_is_shown_waiting_out_the_pause_while_it_lasts_and_for_the_rate_after(
+        self,
+    ) -> None:
+        # NOTE:
+        # Two answers in each ten seconds: the burst's third and fourth requests are refused, naming the rest of the
+        # window, so the words queued for a token wait for the pause's end at second 10.1, and then for the rate,
+        # which is what the activity says at second 3 and at second 10.3.
+        async def scenario() -> tuple[ProviderActivity, ProviderActivity, tuple[DictionaryLookup, ...]]:
+            provider = _Provider(
+                answer=_limited(
+                    answers_per_window=2,
+                    window_seconds=10.0,
+                    names_the_wait=True,
+                ),
+                latency_seconds=0.1,
+            )
+
+            client = _client_for(
+                provider,
+            )
+
+            looking = create_task(
+                coro=_look_up_all(
+                    client,
+                    _STORY_WORDS,
+                ),
+            )
+
+            await asyncio_sleep(
+                delay=3.0,
+            )
+
+            during = client.activity()
+
+            await asyncio_sleep(
+                delay=7.3,
+            )
+
+            after = client.activity()
+
+            return (
+                during,
+                after,
+                await looking,
+            )
+
+        (
+            during,
+            after,
+            lookups,
+        ) = run_in_virtual_time(
+            main=scenario,
+        )
+
+        assert during.cooldown_seconds is not None
+
+        assert all(lookup.waiting_for is not WaitCause.BUDGET for lookup in during.lookups)
+
+        assert any(lookup.waiting_for is WaitCause.COOLDOWN for lookup in during.lookups)
+
+        assert after.cooldown_seconds is None
+
+        assert all(lookup.waiting_for is not WaitCause.COOLDOWN for lookup in after.lookups)
+
+        assert any(lookup.waiting_for is WaitCause.BUDGET for lookup in after.lookups)
+
+        assert all(lookup.outcome is LookupOutcome.FOUND for lookup in lookups)
 
     def test_a_429_that_names_no_wait_costs_no_word(
         self,

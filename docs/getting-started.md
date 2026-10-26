@@ -123,8 +123,9 @@ the analysis if it is still running then; `wordwinnow show ID` shows it once it
 is done.
 
 `--view operator` shows, under the progress line, what the enrichment service's
-dictionary is doing meanwhile: the lookups in flight, the request budget, the
-answers that came from the cache, and the circuit.
+dictionary is doing meanwhile: whether the provider is answering,
+rate-limited, or failing, the last minute of the client's requests, and the
+lookups in flight.
 
 `WORDWINNOW_DICTIONARY=wordnet` in `.env` before `make up-full` answers from WordNet
 instead, and the same analysis then took about five seconds, observed once on

@@ -648,6 +648,76 @@ class TestCircuitBreaker:
 
         assert await breaker.permit() is Permit.TRIAL
 
+    async def test_the_failed_trials_count_from_the_opening_and_start_again_when_a_trial_closes_the_circuit(
+        self,
+    ) -> None:
+        clock = FakeMonotonicClock()
+
+        breaker = CircuitBreaker(
+            failure_threshold=1,
+            recovery_seconds=10.0,
+            clock=clock,
+        )
+
+        assert await breaker.permit() is Permit.CALL
+
+        breaker.record_failure(
+            trial=False,
+        )
+
+        counts = [
+            breaker.failed_trials,
+        ]
+
+        for _ in range(
+            2,
+        ):
+            clock.advance(
+                seconds=10.0,
+            )
+
+            assert await breaker.permit() is Permit.TRIAL
+
+            breaker.record_failure(
+                trial=True,
+            )
+
+            counts.append(
+                breaker.failed_trials,
+            )
+
+        clock.advance(
+            seconds=10.0,
+        )
+
+        assert await breaker.permit() is Permit.TRIAL
+
+        breaker.record_success(
+            trial=True,
+        )
+
+        counts.append(
+            breaker.failed_trials,
+        )
+
+        assert await breaker.permit() is Permit.CALL
+
+        breaker.record_failure(
+            trial=False,
+        )
+
+        counts.append(
+            breaker.failed_trials,
+        )
+
+        assert counts == [
+            0,
+            1,
+            2,
+            0,
+            0,
+        ]
+
     async def test_the_random_share_of_a_period_only_shortens_it(
         self,
     ) -> None:

@@ -29,6 +29,8 @@ from wordwinnow.infrastructure.dictionary.cache import (
 from wordwinnow.infrastructure.dictionary.free_dictionary import (
     LookupActivity,
     ProviderActivity,
+    RecentRequest,
+    RequestOutcome,
     WaitCause,
 )
 from wordwinnow.infrastructure.dictionary.resilience import (
@@ -120,6 +122,18 @@ class LookupActivityPayload(
     trial: bool = False
 
 
+class RecentRequestPayload(
+    BaseModel,
+):
+    """
+    One of the last minute's requests on the wire.
+    """
+
+    seconds: float
+
+    outcome: RequestOutcome
+
+
 class ProviderActivityPayload(
     BaseModel,
 ):
@@ -127,7 +141,8 @@ class ProviderActivityPayload(
     The provider client's activity on the wire, with the circuit's state named
     as the metrics name it.
 
-    The breaker's failure count and threshold are absent from what a service
+    The breaker's failure count and threshold, its failed trials, why it
+    opened, and the last minute's requests are absent from what a service
     older than them sends, and are then read as not reported.
     """
 
@@ -154,6 +169,14 @@ class ProviderActivityPayload(
     lookups: list[LookupActivityPayload]
 
     retries: dict[FailureReason, int]
+
+    failed_trials: int | None = None
+
+    opened_by: FailureReason | None = None
+
+    recent: tuple[RecentRequestPayload, ...] = ()
+
+    last_answer_seconds: float | None = None
 
 
 class ActivityPayload(
@@ -213,6 +236,16 @@ def to_payload(
             retries=dict(
                 provider.retries,
             ),
+            failed_trials=provider.failed_trials,
+            opened_by=provider.opened_by,
+            recent=tuple(
+                RecentRequestPayload(
+                    seconds=request.seconds,
+                    outcome=request.outcome,
+                )
+                for request in provider.recent
+            ),
+            last_answer_seconds=provider.last_answer_seconds,
         ),
     )
 
@@ -266,5 +299,15 @@ def from_payload(
                     provider.retries,
                 ),
             ),
+            failed_trials=provider.failed_trials,
+            opened_by=provider.opened_by,
+            recent=tuple(
+                RecentRequest(
+                    seconds=request.seconds,
+                    outcome=request.outcome,
+                )
+                for request in provider.recent
+            ),
+            last_answer_seconds=provider.last_answer_seconds,
         ),
     )

@@ -317,6 +317,8 @@ class CircuitBreaker:
 
         self._random: Final = random
 
+        self._failed_trials = 0
+
         self._state = BreakerState.CLOSED
 
         self._failures = 0
@@ -412,6 +414,17 @@ class CircuitBreaker:
 
         return self._failure_threshold
 
+    @property
+    def failed_trials(
+        self,
+    ) -> int:
+        """
+        The trials that failed since the circuit last opened from closed, and
+        nought while it is closed.
+        """
+
+        return self._failed_trials
+
     async def permit(
         self,
     ) -> Permit:
@@ -462,6 +475,8 @@ class CircuitBreaker:
             self._failures = 0
 
             self._failure_run += 1
+
+            self._failed_trials = 0
 
             self._settle()
 
@@ -516,6 +531,8 @@ class CircuitBreaker:
         self._failures += 1
 
         if trial or self._failures >= self._failure_threshold:
+            self._failed_trials = self._failed_trials + 1 if trial else 0
+
             self._state = BreakerState.OPEN
 
             # NOTE:

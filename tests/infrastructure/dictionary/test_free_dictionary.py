@@ -67,6 +67,7 @@ from wordwinnow.infrastructure.dictionary.free_dictionary import (
     RETRYABLE_REASONS,
     FreeDictionaryClient,
     ProviderEntry,
+    RequestOutcome,
     WaitCause,
     translate_entries,
 )
@@ -814,6 +815,20 @@ class TestFreeDictionaryClient:
         )
 
         assert closed.circuit is BreakerState.CLOSED
+
+        # NOTE:
+        # Failed connections opened the circuit before any trial had failed, and once it closed it names no cause.
+        assert (
+            opened.failed_trials,
+            opened.opened_by,
+            closed.failed_trials,
+            closed.opened_by,
+        ) == (
+            0,
+            FailureReason.TRANSPORT_ERROR,
+            0,
+            None,
+        )
 
         # NOTE:
         # The first word retried twice and the second once before its second failure, the fifth in a row, opened the
@@ -1592,6 +1607,61 @@ class TestFreeDictionaryClient:
         )
 
         assert lookup.outcome is LookupOutcome.NOT_FOUND
+
+    async def test_a_failed_trial_is_counted_and_names_its_own_failure(
+        self,
+    ) -> None:
+        steps: list[Step] = [
+            ConnectError(
+                message="connection refused",
+            ),
+        ]
+
+        harness = Harness(
+            handler=_answering(
+                steps,
+            ),
+        )
+
+        for lemma in (
+            "photograph",
+            "mask",
+        ):
+            await harness.client.look_up(
+                lemma=lemma,
+            )
+
+        harness.clock.advance(
+            seconds=10.0,
+        )
+
+        steps[:] = [
+            503,
+        ]
+
+        trial = await harness.client.look_up(
+            lemma="groom",
+        )
+
+        activity = harness.client.activity()
+
+        assert trial.failure_reason == "provider_error"
+
+        assert (
+            activity.circuit,
+            activity.failed_trials,
+            activity.opened_by,
+        ) == (
+            BreakerState.OPEN,
+            1,
+            FailureReason.PROVIDER_ERROR,
+        )
+
+        # NOTE:
+        # After a failed trial the circuit stays open another ten seconds, less a random quarter at most.
+        assert activity.retry_in_seconds is not None
+
+        assert 7.5 <= activity.retry_in_seconds <= 10.0
 
     async def test_the_breaker_opens_after_five_failed_requests_and_admits_one_trial_after_recovery(
         self,
@@ -2707,6 +2777,83 @@ class TestFreeDictionaryClient:
         assert lookup.outcome is LookupOutcome.UNAVAILABLE
 
         assert lookup.failure_reason == "transport_error"
+
+    async def test_the_activity_reports_the_last_minutes_requests_and_the_last_answer(
+        self,
+    ) -> None:
+        steps: list[Step] = [
+            200,
+            503,
+        ]
+
+        harness = Harness(
+            handler=_answering(
+                steps,
+            ),
+        )
+
+        await harness.client.look_up(
+            lemma="photograph",
+        )
+
+        await harness.client.look_up(
+            lemma="mask",
+        )
+
+        failing = harness.client.activity()
+
+        harness.clock.advance(
+            seconds=61.0,
+        )
+
+        quiet = harness.client.activity()
+
+        steps[:] = [
+            Response(
+                status_code=429,
+                headers={
+                    "Retry-After": "1",
+                },
+            ),
+            200,
+        ]
+
+        await harness.client.look_up(
+            lemma="groom",
+        )
+
+        answered = harness.client.activity()
+
+        # NOTE:
+        # The word answered, then the three attempts that failed, oldest first; a minute later none is reported, and
+        # the last answer is a minute old; then a refusal and the answer after the pause it asked for.
+        assert tuple(request.outcome for request in failing.recent) == (
+            RequestOutcome.ANSWERED,
+            RequestOutcome.FAILED,
+            RequestOutcome.FAILED,
+            RequestOutcome.FAILED,
+        )
+
+        assert failing.last_answer_seconds is not None
+
+        assert (
+            quiet.recent,
+            quiet.last_answer_seconds is not None and quiet.last_answer_seconds > 60.0,
+        ) == (
+            (),
+            True,
+        )
+
+        assert (
+            tuple(request.outcome for request in answered.recent),
+            answered.last_answer_seconds,
+        ) == (
+            (
+                RequestOutcome.REFUSED,
+                RequestOutcome.ANSWERED,
+            ),
+            0.0,
+        )
 
 
 @final

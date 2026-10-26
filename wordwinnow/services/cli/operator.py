@@ -2,12 +2,21 @@
 What the command line shows an operator while an analysis runs: the learner's
 line, and under it what the dictionary is doing.
 
-Under the line stand the circuit, the breaker's count of requests that failed
-in a row, any pause the provider asked for, the request budget, how the
-analysis's lookups have been answered so far, the ones left unanswered and the
-retries, and each lookup in flight with what it is waiting for: a request has
-a bar against its timeout, and a pause before a retry a bar against the
-pause's length.
+Under the line stands one panel, whose border and title say at a glance how
+the provider has been answering the client: answering, rate-limited, or
+failing.
+
+In it stand the circuit, with why it opened; when the client next sends a
+request, whenever something holds its requests back; the last minute of the
+client's own requests, one mark a second, and when one was last answered if
+that was longer ago; how the dictionary's lookups have been answered since the
+view began, the ones it turned away and the retries; the request budget; and
+the lookups in flight, counted by what they wait for, with each one asking the
+provider or pausing before a retry on a row of its own, a bar against its
+timeout or its pause.
+
+Every row is what the client saw of its own requests or what it decided; none
+says what the provider did otherwise, which the client cannot see.
 
 Like the learner's line, the view is drawn on standard error, only at an
 interactive terminal, and disappears when the analysis ends.
@@ -16,6 +25,9 @@ interactive terminal, and disappears when the analysis ends.
 from collections.abc import (
     Mapping,
     Sequence,
+)
+from math import (
+    ceil,
 )
 from time import (
     monotonic,
@@ -38,8 +50,8 @@ from rich.console import (
 from rich.live import (
     Live,
 )
-from rich.padding import (
-    Padding,
+from rich.panel import (
+    Panel,
 )
 from rich.progress_bar import (
     ProgressBar,
@@ -66,6 +78,7 @@ from wordwinnow.infrastructure.dictionary.activity import (
 from wordwinnow.infrastructure.dictionary.free_dictionary import (
     LookupActivity,
     ProviderActivity,
+    RequestOutcome,
     WaitCause,
 )
 from wordwinnow.infrastructure.dictionary.resilience import (
@@ -80,21 +93,29 @@ from wordwinnow.services.cli.progress import (
 )
 
 # NOTE:
-# The most lookups in flight drawn one to a row: the eight the defaults allow at once, and room for a second worker's
-# at the enrichment service.
-_ROWS: Final = 12
+# The most lookups asking the provider or pausing before a retry drawn one to a row: the eight the defaults allow an
+# analysis at once; the lookups waiting for anything else are only counted, because a row each would say one thing
+# many times.
+_ROWS: Final = 8
+
+_ON_A_ROW: Final = frozenset(
+    (
+        WaitCause.PROVIDER,
+        WaitCause.RETRY,
+    ),
+)
 
 # NOTE:
-# The widths that keep a row of a lookup in flight, its longest description included, within 110 columns.
-_LEMMA_WIDTH: Final = 14
+# The widths that keep a row of a lookup in flight within 80 columns, its longest description but one included.
+_LEMMA_WIDTH: Final = 10
 
-_BAR_WIDTH: Final = 16
+_BAR_WIDTH: Final = 10
 
 # NOTE:
 # What each reason a lookup went unanswered for, or was asked again for, is called in the view.
 _REASONS: Final[MappingProxyType[str, str]] = MappingProxyType(
     mapping={
-        FailureReason.CIRCUIT_OPEN: "circuit open",
+        FailureReason.CIRCUIT_OPEN: "held back",
         FailureReason.TIMED_OUT: "timed out",
         FailureReason.TRANSPORT_ERROR: "connection failed",
         FailureReason.RATE_LIMITED: "rate limited",
@@ -103,7 +124,51 @@ _REASONS: Final[MappingProxyType[str, str]] = MappingProxyType(
     },
 )
 
+# NOTE:
+# What the lookups in flight wait for, in the order the view counts them: the ones at the provider first, and then the
+# ones held back, nearest the provider first; short enough that all but one fit on a row of 80 columns.
+_WAITING: Final = MappingProxyType(
+    mapping={
+        WaitCause.PROVIDER: "asking",
+        WaitCause.RETRY: "retrying",
+        WaitCause.TRIAL: "behind the trial",
+        WaitCause.COOLDOWN: "paused",
+        WaitCause.BUDGET: "queued for a token",
+    },
+)
+
 _READING: Final = "reading what the dictionary is doing"
+
+# NOTE:
+# The last minute of the client's own requests, one mark a second, the newest on the right: the worst outcome that
+# came back in that second, a failure over a refusal over an answer, or a dot when none did; a minute holds six of the
+# trials an open circuit sends, so their rhythm shows.
+_MINUTE: Final = 60
+
+_MARKS: Final = MappingProxyType(
+    mapping={
+        RequestOutcome.ANSWERED: (
+            "✓",
+            "green",
+            1,
+        ),
+        RequestOutcome.REFUSED: (
+            "!",
+            "yellow",
+            2,
+        ),
+        RequestOutcome.FAILED: (
+            "✗",
+            "red",
+            3,
+        ),
+    },
+)
+
+# NOTE:
+# The widest the panel grows: its longest row fits within it, and on a wider terminal the eye still reads each row
+# from its label in one sweep.
+_PANEL_WIDTH: Final = 100
 
 
 @final
@@ -115,8 +180,9 @@ class OperatorProgress:
     `DictionaryWatch` structurally, and shows nothing unless its console is an
     interactive terminal.
 
-    The counts are the analysis's own: the first activity it hears is what
-    every later one is counted from.
+    The counts are the dictionary's since the first activity the view hears,
+    which every later one is counted from: the analysis's own while the
+    dictionary serves no other.
     """
 
     def __init__(
@@ -129,6 +195,8 @@ class OperatorProgress:
         self._line: Final = TerminalProgress(
             console=console,
         )
+
+        self._console: Final = console
 
         self._clock: Final = clock
 
@@ -268,24 +336,40 @@ class OperatorProgress:
     ) -> RenderableType:
         return Group(
             self._line.line,
-            # WARN:
-            # Padding widens every row to the terminal's width unless told not to, and a row that fills the last
-            # column makes some terminals wrap before the line ends, so each redraw starts a line too low.
-            Padding(
-                renderable=self._mechanics(),
-                pad=(
-                    0,
-                    0,
-                    0,
-                    2,
-                ),
-                expand=False,
-            ),
+            self._panel(),
         )
 
-    def _mechanics(
+    def _panel(
         self,
     ) -> RenderableType:
+        read = self._read
+
+        unwatched = self._unwatched
+
+        if unwatched is not None or read is None:
+            return _framed(
+                Text(
+                    text=unwatched or _READING,
+                ),
+                "dictionary",
+                "dim",
+                self._console.width,
+            )
+
+        (
+            activity,
+            read_at,
+        ) = read
+
+        # NOTE:
+        # Between two reads, each wait goes on growing at the pace of the clock, so a bar never stands still and a
+        # countdown counts down.
+        since = self._clock() - read_at
+
+        provider = activity.provider
+
+        baseline = self._baseline or activity
+
         grid = Table.grid(
             padding=(
                 0,
@@ -295,70 +379,52 @@ class OperatorProgress:
 
         grid.add_column(
             style="dim",
+            no_wrap=True,
         )
 
         grid.add_column()
-
-        read = self._read
-
-        unwatched = self._unwatched
-
-        if unwatched is not None or read is None:
-            grid.add_row(
-                "dictionary",
-                unwatched or _READING,
-            )
-
-            return grid
-
-        (
-            activity,
-            read_at,
-        ) = read
-
-        # NOTE:
-        # Between two reads, each wait goes on growing at the pace of the clock, so a bar never stands still.
-        since = self._clock() - read_at
-
-        provider = activity.provider
 
         grid.add_row(
             "circuit",
             _circuit(
                 provider,
+            ),
+        )
+
+        # NOTE:
+        # The next request stands apart from the circuit because a pause the provider asked for holds the trial too:
+        # it is the later of the two, and the row is there only while something holds the requests back.
+        next_try = _next_try(
+            provider,
+            since,
+        )
+
+        if next_try is not None:
+            grid.add_row(
+                "next try",
+                next_try,
+            )
+
+        grid.add_row(
+            "last minute",
+            _last_minute(
+                provider,
                 since,
             ),
         )
 
         # NOTE:
-        # The breaker's own count stands apart from the unanswered words below, which add up every reason, the open
-        # circuit's refusals included, and never start again, so the two are never read as one number.
-        grid.add_row(
-            "in a row",
-            _in_a_row(
-                provider,
-            ),
-        )
-
-        # NOTE:
-        # The provider's own pause stands apart from the circuit: it is a request the provider made of every lookup,
-        # with an end it named, while the circuit is the client's judgment of the provider.
-        grid.add_row(
-            "pause",
-            _pause(
-                provider,
-                since,
-            ),
-        )
-
-        grid.add_row(
-            "budget",
-            _budget(
-                provider,
-            ),
-        )
-
-        baseline = self._baseline or activity
+        # How long ago a request was last answered says how long the provider has not answered the client, once that
+        # is longer than the minute above shows.
+        if provider.last_answer_seconds is not None and provider.last_answer_seconds + since >= _MINUTE:
+            grid.add_row(
+                "last answer",
+                f"{
+                    _ago(
+                        provider.last_answer_seconds + since,
+                    )
+                } ago",
+            )
 
         grid.add_row(
             "answered",
@@ -368,8 +434,11 @@ class OperatorProgress:
             ),
         )
 
+        # NOTE:
+        # A word the dictionary turned away may be asked again and answered, so the row counts refusals, not words
+        # left without a definition, which the report counts.
         grid.add_row(
-            "unavailable",
+            "turned away",
             _by_reason(
                 activity.counts.unavailable,
                 baseline.counts.unavailable,
@@ -385,6 +454,11 @@ class OperatorProgress:
         )
 
         grid.add_row(
+            "budget",
+            f"{provider.tokens:.1f} of {provider.burst} tokens, {provider.requests_per_second:g} a second",
+        )
+
+        grid.add_row(
             "in flight",
             _in_flight(
                 provider.lookups,
@@ -393,115 +467,350 @@ class OperatorProgress:
             ),
         )
 
-        return grid
+        (
+            health,
+            color,
+        ) = _health(
+            provider,
+            since,
+        )
+
+        return _framed(
+            grid,
+            f"dictionary: {health}",
+            color,
+            self._console.width,
+        )
+
+
+def _framed(
+    renderable: RenderableType,
+    title: str,
+    color: str,
+    width: int,
+    /,
+) -> Panel:
+    # WARN:
+    # The panel stops a column short of a narrower terminal's edge: a row that fills the last column makes some
+    # terminals wrap before the line ends, so each redraw would start a line too low.
+    return Panel(
+        renderable=renderable,
+        title=Text(
+            text=title,
+            style=f"bold {color}",
+        ),
+        title_align="left",
+        border_style=color,
+        padding=(
+            0,
+            1,
+        ),
+        width=max(
+            min(
+                width - 1,
+                _PANEL_WIDTH,
+            ),
+            40,
+        ),
+    )
+
+
+def _health(
+    provider: ProviderActivity,
+    since: float,
+    /,
+) -> tuple[str, str]:
+    """
+    How the provider has been answering the client, in a word and a color:
+    failing while the circuit is not closed, rate-limited while a pause it
+    asked for holds, failing while requests fail in a row, and answering
+    otherwise.
+    """
+
+    if provider.circuit is not BreakerState.CLOSED:
+        return (
+            "failing",
+            "red",
+        )
+
+    if (
+        _left(
+            provider.cooldown_seconds,
+            since,
+        )
+        is not None
+    ):
+        return (
+            "rate-limited",
+            "yellow",
+        )
+
+    if provider.consecutive_failures:
+        return (
+            "failing",
+            "yellow",
+        )
+
+    return (
+        "answering",
+        "green",
+    )
+
+
+def _left(
+    seconds: float | None,
+    since: float,
+    /,
+) -> float | None:
+    """
+    What is left of a wait of `seconds` at the last read, `since` seconds
+    later, or `None` when there was none or it is over.
+    """
+
+    if seconds is None or seconds - since <= 0:
+        return None
+
+    return seconds - since
 
 
 def _circuit(
     provider: ProviderActivity,
-    since: float,
     /,
 ) -> Text:
     match provider.circuit:
         case BreakerState.CLOSED:
+            count = provider.consecutive_failures
+
+            threshold = provider.failure_threshold
+
+            # NOTE:
+            # The breaker's own count stands apart from the turned away below, which adds up every reason, the open
+            # circuit's refusals included, and never starts again, so the two are never read as one number.
+            if not count or threshold is None:
+                return Text.from_markup(
+                    text="[green]closed[/green]",
+                )
+
             return Text.from_markup(
-                text="[green]closed[/green]: lookups ask the provider",
+                text=(
+                    f"[green]closed[/green], [yellow]{count} of {threshold} requests failed in a row[/yellow]; it "
+                    f"opens at {threshold}"
+                ),
             )
 
         case BreakerState.OPEN:
-            remaining = max(
-                0.0,
-                (provider.retry_in_seconds or 0.0) - since,
-            )
-
             # NOTE:
-            # A request already on its way when the circuit opened still gets its answer, as the rows under it show,
-            # but no lookup sends another until the trial.
+            # What opened the circuit, and which trial failed last, say whether the provider is newly down or still
+            # down; a request already on its way when the circuit opened still gets its answer, but no lookup sends
+            # another until the trial.
+            if provider.failed_trials is None:
+                return Text.from_markup(
+                    text="[red]open[/red]",
+                )
+
             return Text.from_markup(
-                text=f"[red]open[/red]: no lookup asks the provider for {remaining:.0f} s more",
+                text=f"[red]open[/red] after {
+                    _opening(
+                        provider,
+                    )
+                }",
             )
 
         case BreakerState.HALF_OPEN:
             waiting = sum(1 for lookup in provider.lookups if lookup.waiting_for is WaitCause.TRIAL)
 
+            trial = _trial(
+                provider,
+            )
+
             if any(lookup.trial for lookup in provider.lookups):
                 # NOTE:
                 # The trial is one request, and every other lookup waits for its answer.
                 return Text.from_markup(
-                    text=f"[yellow]half-open[/yellow]: one lookup is the trial, and {waiting} {
+                    text=f"[yellow]half-open[/yellow]: {trial} is in flight, {waiting} {
                         _plural(
                             waiting,
                             'lookup waits',
                             'lookups wait',
                         )
-                    } for its outcome",
+                    } for it",
                 )
 
             return Text.from_markup(
-                text="[yellow]half-open[/yellow]: the next lookup tries the provider",
+                text=f"[yellow]half-open[/yellow]: the next lookup is {trial}",
             )
 
 
-def _pause(
+def _trial(
+    provider: ProviderActivity,
+    /,
+) -> str:
+    if provider.failed_trials is None:
+        return "the trial"
+
+    return f"trial {provider.failed_trials + 1}"
+
+
+def _opening(
+    provider: ProviderActivity,
+    /,
+) -> str:
+    cause = (
+        f"{provider.failure_threshold or ''} failed requests".lstrip()
+        if not provider.failed_trials
+        else f"trial {provider.failed_trials} failed"
+    )
+
+    if provider.opened_by is None:
+        return cause
+
+    return f"{cause} ({
+        _REASONS.get(
+            provider.opened_by,
+            provider.opened_by,
+        )
+    })"
+
+
+def _next_try(
+    provider: ProviderActivity,
+    since: float,
+    /,
+) -> str | None:
+    """
+    When the client next sends a request, while the circuit or a pause the
+    provider asked for holds its requests back, and `None` otherwise.
+    """
+
+    pause = _left(
+        provider.cooldown_seconds,
+        since,
+    )
+
+    held = (
+        ""
+        if pause is None
+        else f"in {
+            _seconds(
+                pause,
+            )
+        }, when the provider's pause ends"
+    )
+
+    trial = _trial(
+        provider,
+    )
+
+    match provider.circuit:
+        case BreakerState.CLOSED:
+            return held or None
+
+        case BreakerState.OPEN:
+            due = (
+                _left(
+                    provider.retry_in_seconds,
+                    since,
+                )
+                or 0.0
+            )
+
+            if pause is not None and pause > due:
+                return f"{trial} {held}"
+
+            return f"{trial} in {
+                _seconds(
+                    due,
+                )
+            }"
+
+        case BreakerState.HALF_OPEN:
+            if held:
+                return f"{trial} {held}"
+
+            if any(lookup.trial for lookup in provider.lookups):
+                return f"when {trial} is answered"
+
+            return f"{trial}, with the next lookup"
+
+
+def _last_minute(
     provider: ProviderActivity,
     since: float,
     /,
 ) -> Text:
-    if provider.cooldown_seconds is None:
-        return Text(
-            text="none: the provider has not asked the client to slow down",
+    worst: list[RequestOutcome | None] = [
+        None,
+    ] * _MINUTE
+
+    for request in provider.recent:
+        age = request.seconds + since
+
+        if age >= _MINUTE:
+            continue
+
+        whole = int(
+            age,
         )
 
-    remaining = max(
-        0.0,
-        provider.cooldown_seconds - since,
-    )
+        slot = _MINUTE - 1 - whole
 
-    return Text.from_markup(
-        text=(
-            f"[yellow]the provider asked the client to slow down[/yellow]: no lookup asks for {remaining:.0f} s more"
-        ),
-    )
+        held = worst[slot]
 
+        if held is None or _MARKS[request.outcome][2] > _MARKS[held][2]:
+            worst[slot] = request.outcome
 
-def _in_a_row(
-    provider: ProviderActivity,
-    /,
-) -> str:
-    count = provider.consecutive_failures
+    strip = Text()
 
-    threshold = provider.failure_threshold
-
-    if count is None or threshold is None:
-        return "not reported by this dictionary"
-
-    if provider.circuit is not BreakerState.CLOSED:
-        return "not counted while the circuit is open: the trial decides"
-
-    return f"{count} of {threshold} requests failed since the last answer; at {threshold} the circuit opens"
-
-
-def _budget(
-    provider: ProviderActivity,
-    /,
-) -> str:
-    waiting = provider.waiting_for_budget
-
-    queue = (
-        f"; {waiting} {
-            _plural(
-                waiting,
-                'lookup',
-                'lookups',
+    for outcome in worst:
+        if outcome is None:
+            strip.append(
+                text="·",
+                style="dim",
             )
-        } waiting for one"
-        if waiting
-        else ""
+
+        else:
+            (
+                mark,
+                color,
+                _,
+            ) = _MARKS[outcome]
+
+            strip.append(
+                text=mark,
+                style=color,
+            )
+
+    return strip
+
+
+def _ago(
+    seconds: float,
+    /,
+) -> str:
+    (
+        minutes,
+        rest,
+    ) = divmod(
+        int(
+            seconds,
+        ),
+        60,
     )
 
-    return (
-        f"{provider.tokens:.1f} of {provider.burst} tokens, refilled at {provider.requests_per_second:g} a second"
-        f"{queue}"
-    )
+    return f"{minutes} min {rest} s" if minutes else f"{rest} s"
+
+
+def _seconds(
+    seconds: float,
+    /,
+) -> str:
+    # NOTE:
+    # Rounded up, as the learner's line rounds its times, so the two name the same second for the same moment.
+    return f"{
+        ceil(
+            seconds,
+        )
+    } s"
 
 
 def _answered(
@@ -513,27 +822,33 @@ def _answered(
 
     before = baseline.counts
 
-    return (
-        f"{counts.cached - before.cached} from the cache, {counts.found - before.found} found and "
-        f"{counts.not_found - before.not_found} not found by the provider"
-    )
+    cached = counts.cached - before.cached
+
+    found = counts.found - before.found
+
+    not_found = counts.not_found - before.not_found
+
+    return f"{cached + found + not_found:,}: {cached:,} from the cache, {found:,} found, {not_found:,} not found"
 
 
 def _by_reason[K: str](
     now: Mapping[K, int],
     before: Mapping[K, int],
     /,
-) -> str:
+) -> Text:
     grown = _grown(
         now,
         before,
     )
 
     if not grown:
-        return "none"
+        return Text(
+            text="none",
+            style="dim",
+        )
 
     reasons = ", ".join(
-        f"{count} {
+        f"{count:,} {
             _REASONS.get(
                 reason,
                 reason,
@@ -548,11 +863,13 @@ def _by_reason[K: str](
         )
     )
 
-    return f"{
-        sum(
-            grown.values(),
-        )
-    } ({reasons})"
+    total = sum(
+        grown.values(),
+    )
+
+    return Text(
+        text=f"{total:,}: {reasons}",
+    )
 
 
 def _largest_first[K: str](
@@ -613,10 +930,26 @@ def _in_flight(
             style="dim",
         )
 
+    counts = ", ".join(
+        f"{count} {label}"
+        for (
+            cause,
+            label,
+        ) in _WAITING.items()
+        if (count := sum(1 for lookup in lookups if lookup.waiting_for is cause))
+    )
+
+    shown = tuple(lookup for lookup in lookups if lookup.waiting_for in _ON_A_ROW)
+
+    if not shown:
+        return Text(
+            text=counts,
+        )
+
     rows = Table.grid(
         padding=(
             0,
-            2,
+            1,
         ),
     )
 
@@ -628,6 +961,7 @@ def _in_flight(
 
     rows.add_column(
         no_wrap=True,
+        overflow="ellipsis",
     )
 
     rows.add_column(
@@ -639,12 +973,12 @@ def _in_flight(
         no_wrap=True,
     )
 
-    for lookup in lookups[:_ROWS]:
+    for lookup in shown[:_ROWS]:
         seconds = lookup.seconds + since
 
         rows.add_row(
             lookup.lemma,
-            _waiting_for(
+            _doing(
                 lookup,
             ),
             _bar(
@@ -657,7 +991,7 @@ def _in_flight(
 
     hidden = (
         len(
-            lookups,
+            shown,
         )
         - _ROWS
     )
@@ -670,39 +1004,33 @@ def _in_flight(
             ),
         )
 
-    return rows
+    return Group(
+        Text(
+            text=counts,
+        ),
+        rows,
+    )
 
 
-def _waiting_for(
+def _doing(
     lookup: LookupActivity,
     /,
 ) -> str:
-    match lookup.waiting_for:
-        case WaitCause.TRIAL:
-            return "waiting for the trial's outcome"
-
-        case WaitCause.BUDGET:
-            return "waiting for a token"
-
-        case WaitCause.COOLDOWN:
-            return "waiting out the provider's pause"
-
-        case WaitCause.PROVIDER:
-            trial = ", the trial" if lookup.trial else ""
-
-            return f"asking the provider, attempt {lookup.attempt}{trial}"
-
-        case WaitCause.RETRY:
-            reason = (
-                _REASONS.get(
-                    lookup.reason,
-                    lookup.reason,
-                )
-                if lookup.reason is not None
-                else "failed"
+    if lookup.waiting_for is WaitCause.RETRY:
+        reason = (
+            _REASONS.get(
+                lookup.reason,
+                lookup.reason,
             )
+            if lookup.reason is not None
+            else "failed"
+        )
 
-            return f"pausing {lookup.delay_seconds or 0.0:.1f} s before attempt {lookup.attempt} ({reason})"
+        return f"attempt {lookup.attempt} in {lookup.delay_seconds or 0.0:.1f} s, {reason}"
+
+    trial = ", the trial" if lookup.trial else ""
+
+    return f"asking, attempt {lookup.attempt}{trial}"
 
 
 def _bar(
@@ -711,13 +1039,7 @@ def _bar(
     seconds: float,
     /,
 ) -> RenderableType:
-    total = (
-        timeout_seconds
-        if lookup.waiting_for is WaitCause.PROVIDER
-        else lookup.delay_seconds
-        if lookup.waiting_for is WaitCause.RETRY
-        else None
-    )
+    total = timeout_seconds if lookup.waiting_for is WaitCause.PROVIDER else lookup.delay_seconds
 
     if not total:
         return Text()

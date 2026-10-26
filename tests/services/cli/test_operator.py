@@ -39,6 +39,8 @@ from wordwinnow.infrastructure.dictionary.cache import (
 from wordwinnow.infrastructure.dictionary.free_dictionary import (
     LookupActivity,
     ProviderActivity,
+    RecentRequest,
+    RequestOutcome,
     WaitCause,
 )
 from wordwinnow.infrastructure.dictionary.resilience import (
@@ -241,19 +243,28 @@ class TestOperatorProgress:
 
         for expected in (
             "looking the words up in the dictionary",
-            "half-open: one lookup is the trial, and 1 lookup waits for its outcome",
-            "1.4 of 4 tokens, refilled at 2 a second; 3 lookups waiting for one",
-            "12 from the cache, 5 found and 1 not found by the provider",
-            "unavailable  2 (2 circuit open)",
-            "retries      1 (1 server error)",
-            "asking the provider, attempt 1, the trial",
+            "dictionary: failing",
+            "circuit      half-open: the trial is in flight, 1 lookup waits for it",
+            "next try     when the trial is answered",
+            "answered     18: 12 from the cache, 5 found, 1 not found",
+            "turned away  2: 2 held back",
+            "retries      1: 1 server error",
+            "budget       1.4 of 4 tokens, 2 a second",
+            "1 asking, 1 retrying, 1 behind the trial, 1 queued for a token",
+            "asking, attempt 1, the trial",
             "19.2 s",
-            "waiting for the trial's outcome",
-            "pausing 1.7 s before attempt 2 (server error)",
+            "attempt 2 in 1.7 s, server error",
             "1.9 s",
-            "waiting for a token",
         ):
             assert expected in drawn, expected
+
+        # NOTE:
+        # The lookups waiting for the trial or for a token are counted, not drawn a row each.
+        for unexpected in (
+            "mask",
+            "rocket",
+        ):
+            assert unexpected not in drawn, unexpected
 
     def test_an_open_circuit_counts_down_to_the_next_trial(
         self,
@@ -297,9 +308,122 @@ class TestOperatorProgress:
             stream,
         )
 
-        assert "open: no lookup asks the provider for 20 s more" in drawn
+        for expected in (
+            "dictionary: failing",
+            "circuit      open",
+            "next try     the trial in 21 s",
+            "in flight    nothing",
+        ):
+            assert expected in drawn, expected
 
-        assert "in flight    nothing" in drawn
+    def test_an_open_circuit_says_what_opened_it_and_which_trial_comes_next(
+        self,
+    ) -> None:
+        def drawn_for(
+            failed_trials: int,
+            opened_by: FailureReason,
+            /,
+        ) -> str:
+            stream = StringIO()
+
+            with OperatorProgress(
+                console=_terminal(
+                    stream,
+                ),
+                refresh_per_second=1,
+                clock=FakeMonotonicClock(),
+            ) as progress:
+                progress.watched(
+                    activity=DictionaryActivity(
+                        counts=_BEFORE.counts,
+                        provider=ProviderActivity(
+                            circuit=BreakerState.OPEN,
+                            retry_in_seconds=9.2,
+                            cooldown_seconds=None,
+                            consecutive_failures=0,
+                            failure_threshold=5,
+                            tokens=4.0,
+                            burst=4,
+                            requests_per_second=2.0,
+                            waiting_for_budget=0,
+                            timeout_seconds=30.0,
+                            lookups=(),
+                            retries=_BEFORE.provider.retries,
+                            failed_trials=failed_trials,
+                            opened_by=opened_by,
+                        ),
+                    ),
+                )
+
+            return _drawn(
+                stream,
+            )
+
+        opened = drawn_for(
+            0,
+            FailureReason.PROVIDER_ERROR,
+        )
+
+        reopened = drawn_for(
+            2,
+            FailureReason.TIMED_OUT,
+        )
+
+        for (
+            drawn,
+            expected,
+        ) in (
+            (
+                opened,
+                "circuit      open after 5 failed requests (server error)",
+            ),
+            (
+                opened,
+                "next try     trial 1 in 10 s",
+            ),
+            (
+                reopened,
+                "circuit      open after trial 2 failed (timed out)",
+            ),
+            (
+                reopened,
+                "next try     trial 3 in 10 s",
+            ),
+        ):
+            assert expected in drawn, expected
+
+    def test_a_half_open_circuit_names_the_trial_in_flight(
+        self,
+    ) -> None:
+        stream = StringIO()
+
+        with OperatorProgress(
+            console=_terminal(
+                stream,
+            ),
+            refresh_per_second=1,
+            clock=FakeMonotonicClock(),
+        ) as progress:
+            progress.watched(
+                activity=DictionaryActivity(
+                    counts=_DURING.counts,
+                    provider=replace(
+                        _DURING.provider,
+                        failed_trials=2,
+                        opened_by=FailureReason.TIMED_OUT,
+                    ),
+                ),
+            )
+
+        drawn = _drawn(
+            stream,
+        )
+
+        for expected in (
+            "circuit      half-open: trial 3 is in flight, 1 lookup waits for it",
+            "next try     when trial 3 is answered",
+        ):
+            assert expected in drawn, expected
 
     def test_a_pause_the_provider_asked_for_counts_down_for_every_lookup(
         self,
@@ -351,12 +475,13 @@ class TestOperatorProgress:
         )
 
         for expected in (
-            "pause        the provider asked the client to slow down: no lookup asks for 7 s more",
-            "waiting out the provider's pause",
+            "dictionary: rate-limited",
+            "next try     in 7 s, when the provider's pause ends",
+            "in flight    1 paused",
         ):
             assert expected in drawn, expected
 
-    def test_without_a_pause_the_row_says_none_was_asked_for(
+    def test_a_pause_that_outlasts_the_open_circuit_holds_the_trial_until_it_ends(
         self,
     ) -> None:
         stream = StringIO()
@@ -369,12 +494,63 @@ class TestOperatorProgress:
             clock=FakeMonotonicClock(),
         ) as progress:
             progress.watched(
-                activity=_BEFORE,
+                activity=replace(
+                    _BEFORE,
+                    provider=replace(
+                        _BEFORE.provider,
+                        circuit=BreakerState.OPEN,
+                        retry_in_seconds=3.0,
+                        cooldown_seconds=18.0,
+                        consecutive_failures=0,
+                        failed_trials=1,
+                        opened_by=FailureReason.TIMED_OUT,
+                    ),
+                ),
             )
 
-        assert "pause        none: the provider has not asked the client to slow down" in _drawn(
+        drawn = _drawn(
             stream,
         )
+
+        for expected in (
+            "dictionary: failing",
+            "next try     trial 2 in 18 s, when the provider's pause ends",
+        ):
+            assert expected in drawn, expected
+
+    def test_a_provider_that_answers_has_no_next_try_row(
+        self,
+    ) -> None:
+        stream = StringIO()
+
+        with OperatorProgress(
+            console=_terminal(
+                stream,
+            ),
+            refresh_per_second=1,
+            clock=FakeMonotonicClock(),
+        ) as progress:
+            progress.watched(
+                activity=replace(
+                    _BEFORE,
+                    provider=replace(
+                        _BEFORE.provider,
+                        consecutive_failures=0,
+                    ),
+                ),
+            )
+
+        drawn = _drawn(
+            stream,
+        )
+
+        for expected in (
+            "dictionary: answering",
+            "circuit      closed",
+        ):
+            assert expected in drawn, expected
+
+        assert "next try" not in drawn
 
     def test_the_breakers_run_of_failures_stands_apart_from_the_unanswered_total(
         self,
@@ -414,12 +590,13 @@ class TestOperatorProgress:
         )
 
         for expected in (
-            "in a row     3 of 5 requests failed since the last answer; at 5 the circuit opens",
-            "unavailable  6 (4 server error, 2 circuit open)",
+            "dictionary: failing",
+            "circuit      closed, 3 of 5 requests failed in a row; it opens at 5",
+            "turned away  6: 4 server error, 2 held back",
         ):
             assert expected in drawn, expected
 
-    def test_while_the_circuit_is_open_the_trial_decides_rather_than_a_count(
+    def test_while_the_circuit_is_open_no_count_of_failures_in_a_row_is_shown(
         self,
     ) -> None:
         stream = StringIO()
@@ -443,7 +620,7 @@ class TestOperatorProgress:
                 ),
             )
 
-        assert "in a row     not counted while the circuit is open: the trial decides" in _drawn(
+        assert "in a row" not in _drawn(
             stream,
         )
 
@@ -469,9 +646,13 @@ class TestOperatorProgress:
                 ),
             )
 
-        assert "in a row     not reported by this dictionary" in _drawn(
+        drawn = _drawn(
             stream,
         )
+
+        assert "circuit      closed" in drawn
+
+        assert "in a row" not in drawn
 
     def test_a_dictionary_it_cannot_read_is_named_with_the_reason(
         self,
@@ -488,6 +669,191 @@ class TestOperatorProgress:
                 reason="the enrichment service does not answer at http://enrichment.invalid",
             )
 
-        assert "dictionary  the enrichment service does not answer at http://enrichment.invalid" in _drawn(
+        drawn = _drawn(
             stream,
         )
+
+        for expected in (
+            "─ dictionary ─",
+            "the enrichment service does not answer at http://enrichment.invalid",
+        ):
+            assert expected in drawn, expected
+
+    def test_on_an_80_column_terminal_every_row_of_the_panel_is_drawn_whole(
+        self,
+    ) -> None:
+        stream = StringIO()
+
+        with OperatorProgress(
+            console=Console(
+                force_terminal=True,
+                force_interactive=True,
+                file=stream,
+                width=80,
+            ),
+            refresh_per_second=1,
+            clock=FakeMonotonicClock(),
+        ) as progress:
+            progress.watched(
+                activity=replace(
+                    _DURING,
+                    provider=replace(
+                        _DURING.provider,
+                        failed_trials=2,
+                        opened_by=FailureReason.TIMED_OUT,
+                    ),
+                ),
+            )
+
+        drawn = _drawn(
+            stream,
+        )
+
+        panel = [
+            line
+            for line in drawn.splitlines()
+            if line.startswith(
+                (
+                    "╭",
+                    "│",
+                    "╰",
+                ),
+            )
+        ]
+
+        assert panel
+
+        assert all(
+            len(
+                line,
+            )
+            < 80
+            for line in panel
+        )
+
+        for expected in (
+            "half-open: trial 3 is in flight, 1 lookup waits for it",
+            "1 asking, 1 retrying, 1 behind the trial, 1 queued for a token",
+            "attempt 2 in 1.7 s, server error",
+        ):
+            assert expected in drawn, expected
+
+    def test_the_last_minute_shows_the_worst_outcome_of_each_second_newest_on_the_right(
+        self,
+    ) -> None:
+        stream = StringIO()
+
+        clock = FakeMonotonicClock()
+
+        with OperatorProgress(
+            console=_terminal(
+                stream,
+            ),
+            refresh_per_second=1,
+            clock=clock,
+        ) as progress:
+            progress.watched(
+                activity=replace(
+                    _BEFORE,
+                    provider=replace(
+                        _BEFORE.provider,
+                        recent=tuple(
+                            RecentRequest(
+                                seconds=seconds,
+                                outcome=outcome,
+                            )
+                            for (
+                                seconds,
+                                outcome,
+                            ) in (
+                                (
+                                    65.0,
+                                    RequestOutcome.FAILED,
+                                ),
+                                (
+                                    58.6,
+                                    RequestOutcome.ANSWERED,
+                                ),
+                                (
+                                    29.5,
+                                    RequestOutcome.REFUSED,
+                                ),
+                                (
+                                    9.8,
+                                    RequestOutcome.FAILED,
+                                ),
+                                (
+                                    9.6,
+                                    RequestOutcome.ANSWERED,
+                                ),
+                                (
+                                    0.2,
+                                    RequestOutcome.ANSWERED,
+                                ),
+                            )
+                        ),
+                        last_answer_seconds=0.2,
+                    ),
+                ),
+            )
+
+            # NOTE:
+            # Half a second after the read, every request is half a second older.
+            clock.advance(
+                seconds=0.5,
+            )
+
+        drawn = _drawn(
+            stream,
+        )
+
+        # NOTE:
+        # From the oldest second on the left: the answer 59.1 s old, nothing until the refusal 30 s old, nothing until
+        # the second 10 to 11 s old, where a failure outweighs an answer, then the answer 0.7 s old; the failure 65.5
+        # s old has left the minute.
+        strip = "✓" + "·" * 28 + "!" + "·" * 19 + "✗" + "·" * 9 + "✓"
+
+        assert f"last minute  {strip}" in drawn
+
+        assert "last answer" not in drawn
+
+    def test_an_answer_older_than_the_minute_says_how_long_ago_it_came(
+        self,
+    ) -> None:
+        stream = StringIO()
+
+        with OperatorProgress(
+            console=_terminal(
+                stream,
+            ),
+            refresh_per_second=1,
+            clock=FakeMonotonicClock(),
+        ) as progress:
+            progress.watched(
+                activity=replace(
+                    _BEFORE,
+                    provider=replace(
+                        _BEFORE.provider,
+                        circuit=BreakerState.OPEN,
+                        retry_in_seconds=4.0,
+                        consecutive_failures=0,
+                        recent=(
+                            RecentRequest(
+                                seconds=8.4,
+                                outcome=RequestOutcome.FAILED,
+                            ),
+                        ),
+                        last_answer_seconds=130.4,
+                    ),
+                ),
+            )
+
+        drawn = _drawn(
+            stream,
+        )
+
+        for expected in (
+            "last minute  " + "·" * 51 + "✗" + "·" * 8,
+            "last answer  2 min 10 s ago",
+        ):
+            assert expected in drawn, expected

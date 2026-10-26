@@ -23,6 +23,8 @@ from wordwinnow.infrastructure.dictionary.cache import (
 from wordwinnow.infrastructure.dictionary.free_dictionary import (
     LookupActivity,
     ProviderActivity,
+    RecentRequest,
+    RequestOutcome,
     WaitCause,
 )
 from wordwinnow.infrastructure.dictionary.resilience import (
@@ -34,7 +36,7 @@ from wordwinnow.infrastructure.dictionary.wire import (
 
 # NOTE:
 # A trial in flight with a lookup waiting for it, and a lookup pausing before its second attempt: every field of a
-# lookup set in one of them.
+# lookup set in one of them; and the last minute's requests, one of each outcome.
 _ACTIVITY: Final = DictionaryActivity(
     counts=LookupCounts(
         cached=34,
@@ -86,6 +88,23 @@ _ACTIVITY: Final = DictionaryActivity(
                 FailureReason.RATE_LIMITED: 1,
             },
         ),
+        failed_trials=2,
+        opened_by=FailureReason.TIMED_OUT,
+        recent=(
+            RecentRequest(
+                seconds=41.5,
+                outcome=RequestOutcome.ANSWERED,
+            ),
+            RecentRequest(
+                seconds=30.2,
+                outcome=RequestOutcome.FAILED,
+            ),
+            RecentRequest(
+                seconds=0.9,
+                outcome=RequestOutcome.REFUSED,
+            ),
+        ),
+        last_answer_seconds=41.5,
     ),
 )
 
@@ -153,6 +172,68 @@ class TestActivityPayload:
             provider.failure_threshold,
         ) == (
             None,
+            None,
+        )
+
+    def test_a_payload_without_the_failed_trials_or_why_the_circuit_opened_reads_as_not_reported(
+        self,
+    ) -> None:
+        # NOTE:
+        # What an enrichment service older than the two sends.
+        written = to_payload(
+            activity=_ACTIVITY,
+        ).model_dump(
+            mode="json",
+        )
+
+        for field in (
+            "failed_trials",
+            "opened_by",
+        ):
+            del written["provider"][field]
+
+        provider = from_payload(
+            payload=ActivityPayload.model_validate(
+                obj=written,
+            ),
+        ).provider
+
+        assert (
+            provider.failed_trials,
+            provider.opened_by,
+        ) == (
+            None,
+            None,
+        )
+
+    def test_a_payload_without_the_last_minutes_requests_reads_as_not_reported(
+        self,
+    ) -> None:
+        # NOTE:
+        # What an enrichment service older than the two sends.
+        written = to_payload(
+            activity=_ACTIVITY,
+        ).model_dump(
+            mode="json",
+        )
+
+        for field in (
+            "recent",
+            "last_answer_seconds",
+        ):
+            del written["provider"][field]
+
+        provider = from_payload(
+            payload=ActivityPayload.model_validate(
+                obj=written,
+            ),
+        ).provider
+
+        assert (
+            provider.recent,
+            provider.last_answer_seconds,
+        ) == (
+            (),
             None,
         )
 

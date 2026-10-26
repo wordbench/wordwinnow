@@ -495,11 +495,11 @@ not reported when it changes, because the circuit becomes half-open when its
 recovery period ends, a moment at which nothing in the client runs.
 
 The client also says what it is doing at any moment: each lookup in flight and
-what it waits for, the request budget, any pause the provider asked for, and
-the circuit with the breaker's count of failures in a row; the enrichment
-service serves that at `GET /activity`, and `analyze --view operator` reads it
-there in the distributed mode and from the client in its own process in the
-local mode.
+what it waits for, the request budget, any pause the provider asked for, the
+circuit with the breaker's count of failures in a row, and how each of its own
+requests of the last minute came back; the enrichment service serves that at
+`GET /activity`, and `analyze --view operator` reads it there in the distributed
+mode and from the client in its own process in the local mode.
 
 Traces cross process boundaries through W3C trace context in HTTP headers and
 Kafka headers, so one analysis is one trace from the request to the facts.
