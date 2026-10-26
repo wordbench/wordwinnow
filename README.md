@@ -142,9 +142,10 @@ Start at [`docs/README.md`](docs/README.md), which says which document owns whic
 
 ## Status
 
-Wordwinnow is feature-complete at v1.0.0, and an error found in it may still
-be corrected; my later work on the same problem is Wordbench, a separate
-project, as [`docs/product.md`](docs/product.md) explains.
+Wordwinnow has been public since v1.0.0 and is maintained intermittently, on
+no fixed schedule: an error found in it may still be corrected, and a later
+release may still add to what it does; my later work on the same problem is
+Wordbench, a separate project, as [`docs/product.md`](docs/product.md) explains.
 
 Its license does not permit changing the code, so it takes no pull requests;
 an issue is the way to report an error.
