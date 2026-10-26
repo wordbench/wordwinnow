@@ -113,7 +113,7 @@ Without `--local`, the command posts the text to intake, waits for a worker to
 finish, and shows the result; `wordwinnow stats` then summarizes every completed
 analysis from ClickHouse.
 
-The story's 1,509 vocabulary items come to 1,401 requests to the provider, one
+The story's 1,508 vocabulary items come to 1,400 requests to the provider, one
 per distinct lemma, and the enrichment service keeps to two requests a second
 against the Free Dictionary API, so the first analysis takes about twelve
 minutes at the least, and later ones reuse the cache.

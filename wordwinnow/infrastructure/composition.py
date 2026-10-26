@@ -73,6 +73,9 @@ from wordwinnow.application.use_cases.process_an_analysis import (
 from wordwinnow.application.use_cases.purge_expired_analyses import (
     purge_expired_analyses,
 )
+from wordwinnow.domain.language import (
+    PartOfSpeech,
+)
 from wordwinnow.infrastructure.analytics.clickhouse import (
     ClickHouseClient,
     ClickHouseVocabularyFacts,
@@ -325,13 +328,19 @@ def build_linguistic_adapters(
     before any request is accepted when a corpus is missing.
     """
 
+    reference_lexicon = CsvReferenceLexicon.from_directory(
+        directory=settings.reference_lists_dir,
+    )
+
     return LinguisticAdapters(
-        linguistics=NltkLinguisticAnalyzer(),
+        linguistics=NltkLinguisticAnalyzer(
+            reference_nouns=frozenset(
+                entry.lemma for entry in reference_lexicon.entries() if entry.part_of_speech is PartOfSpeech.NOUN
+            ),
+        ),
         frequency=WordfreqFrequency(),
         lexical_semantics=WordNetLexicalSemantics(),
-        reference_lexicon=CsvReferenceLexicon.from_directory(
-            directory=settings.reference_lists_dir,
-        ),
+        reference_lexicon=reference_lexicon,
         level_estimator=build_level_estimator(
             settings=settings,
         ),

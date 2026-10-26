@@ -142,6 +142,50 @@ class TestNltkLinguisticAnalyzer:
 
         assert lemmas["felt"] == "feel"
 
+    def test_a_plural_that_is_also_a_noun_of_its_own_takes_the_singular_the_reference_lists_know(
+        self,
+    ) -> None:
+        listed = NltkLinguisticAnalyzer(
+            reference_nouns=frozenset(
+                (
+                    "man",
+                    "tooth",
+                    "data",
+                ),
+            ),
+        )
+
+        (sentence,) = listed.analyze(
+            text="The men bared their teeth over the data.",
+        )
+
+        lemmas = MappingProxyType(
+            mapping={token.surface: token.lemma for token in sentence.tokens},
+        )
+
+        assert lemmas["men"] == "man"
+
+        assert lemmas["teeth"] == "tooth"
+
+        assert lemmas["data"] == "data"
+
+    def test_without_the_reference_lists_a_tied_plural_stays_as_it_was(
+        self,
+        *,
+        analyzer: NltkLinguisticAnalyzer,
+    ) -> None:
+        (sentence,) = analyzer.analyze(
+            text="The men bared their teeth over the data.",
+        )
+
+        lemmas = MappingProxyType(
+            mapping={token.surface: token.lemma for token in sentence.tokens},
+        )
+
+        assert lemmas["men"] == "men"
+
+        assert lemmas["data"] == "data"
+
     def test_function_words_come_from_the_stopword_list(
         self,
         *,

@@ -15,6 +15,10 @@ a partition, which [`architecture.md`](architecture.md) describes, and the versi
 services the stack runs; the throughput numbers, the only ones that involve
 Kafka, were measured before both and not repeated.
 
+The lemmatizer is newer as well: it now reads the plural *men* as *man*, so the
+story has 1,508 items and 1,400 distinct lemmas, one fewer of each than the
+measurements count.
+
 ## In short
 
 | Question | Answer | Kind |

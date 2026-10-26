@@ -178,7 +178,7 @@ for 15, where the default heuristic answers C2 for 207.
 It recalls 0.058 of those 190 C2 words, 11 of them, against the default
 heuristic's 0.495, which is why its macro-F1 is the lower of the two.
 
-On the sample story, the model levels the 402 of its 1,509 vocabulary items
+On the sample story, the model levels the 401 of its 1,508 vocabulary items
 that the lists do not cover and gives C2 to 2 of them, where the heuristic
 would give it to 84.
 

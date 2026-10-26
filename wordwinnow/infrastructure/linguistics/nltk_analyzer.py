@@ -74,6 +74,12 @@ _PAST_TAGS: Final = frozenset(
 )
 
 # NOTE:
+# The plural tag of a common noun: a noun carrying it is seldom in its base form.
+_PLURAL_TAGS: Final = frozenset(
+    ("NNS",),
+)
+
+# NOTE:
 # Adverb tags that are not adverbs a learner studies: `RP` is a particle (`up` in `give up`) and `WRB` a question word
 # (`where`).
 _NOT_ADVERB_TAGS: Final = frozenset(
@@ -106,15 +112,22 @@ class NltkLinguisticAnalyzer:
     Analyzes English text with NLTK's Punkt segmenter, Treebank tokenizer,
     averaged perceptron tagger, and WordNet lemmatizer.
 
+    `reference_nouns` are the nouns the reference lists know, which settle a
+    plural that WordNet reads two ways.
+
     Satisfies `LinguisticAnalyzer` structurally.
     """
 
     def __init__(
         self,
+        *,
+        reference_nouns: frozenset[str] = frozenset(),
     ) -> None:
         ensure_resources()
 
         self._lemmatizer: Final = WordNetLemmatizer()
+
+        self._reference_nouns: Final = reference_nouns
 
         self._function_words: Final = frozenset(
             stopwords.words(
@@ -238,7 +251,27 @@ class NltkLinguisticAnalyzer:
                     key=len,
                 )
 
-        return self._lemmatizer.lemmatize(
+        lemma = self._lemmatizer.lemmatize(
             word=lowered,
             pos=wordnet_pos,
         )
+
+        # HACK:
+        # On a tie the lemmatizer keeps the word itself as well, so `men` and `teeth`, which WordNet also lists as
+        # nouns of their own, would stay unlemmatized; a plural tag says the word is not the base form, yet `data` is
+        # a plural the reference lists know as a word of its own, so another candidate wins only when the lists know
+        # it and not the word.
+        if tag in _PLURAL_TAGS and lemma == lowered and lowered not in self._reference_nouns:
+            listed = tuple(
+                candidate
+                for candidate in self._lemmatizer._morphy(
+                    form=lowered,
+                    pos=wordnet_pos,
+                )
+                if candidate in self._reference_nouns
+            )
+
+            if listed:
+                return listed[0]
+
+        return lemma
