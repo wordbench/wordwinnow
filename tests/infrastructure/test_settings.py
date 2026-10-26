@@ -10,8 +10,12 @@ from typing import (
     final,
 )
 
+from pydantic import (
+    ValidationError,
+)
 from pytest import (
     MonkeyPatch,
+    raises,
 )
 
 from wordwinnow.infrastructure.dictionary.free_dictionary import (
@@ -68,6 +72,67 @@ class TestSettings:
         retries = MAX_ATTEMPTS * settings.dictionary_timeout_seconds + (MAX_ATTEMPTS - 1) * MAX_DELAY_SECONDS
 
         assert settings.enrichment_timeout_seconds > retries
+
+    def test_the_dictionary_pace_is_left_to_the_provider_unless_the_environment_names_one(
+        self,
+        *,
+        monkeypatch: MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.chdir(
+            path=tmp_path,
+        )
+
+        unset = Settings()
+
+        monkeypatch.setenv(
+            name="WORDWINNOW_DICTIONARY_REQUESTS_PER_SECOND",
+            value="0.5",
+        )
+
+        monkeypatch.setenv(
+            name="WORDWINNOW_DICTIONARY_BURST",
+            value="1",
+        )
+
+        named = Settings()
+
+        assert (
+            unset.dictionary_requests_per_second,
+            unset.dictionary_burst,
+            named.dictionary_requests_per_second,
+            named.dictionary_burst,
+        ) == (
+            None,
+            None,
+            0.5,
+            1,
+        )
+
+    def test_a_pace_that_would_admit_no_request_is_refused(
+        self,
+        *,
+        monkeypatch: MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.chdir(
+            path=tmp_path,
+        )
+
+        for name in (
+            "WORDWINNOW_DICTIONARY_REQUESTS_PER_SECOND",
+            "WORDWINNOW_DICTIONARY_BURST",
+        ):
+            with monkeypatch.context() as scoped:
+                scoped.setenv(
+                    name=name,
+                    value="0",
+                )
+
+                with raises(
+                    expected_exception=ValidationError,
+                ):
+                    Settings()
 
     def test_an_empty_key_is_no_key(
         self,

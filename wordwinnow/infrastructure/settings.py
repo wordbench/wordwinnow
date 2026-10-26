@@ -124,13 +124,15 @@ class Settings(
         ge=1,
     )
 
-    dictionary_requests_per_second: float = Field(
-        default=2.0,
+    # NOTE:
+    # A pace for the provider's requests in place of the one its adapter keeps, which holds while these are unset.
+    dictionary_requests_per_second: float | None = Field(
+        default=None,
         gt=0,
     )
 
-    dictionary_burst: int = Field(
-        default=4,
+    dictionary_burst: int | None = Field(
+        default=None,
         ge=1,
     )
 

@@ -18,6 +18,7 @@ from asyncio import (
 )
 from collections.abc import (
     Callable,
+    Sequence,
 )
 from contextlib import (
     suppress,
@@ -53,6 +54,8 @@ from wordwinnow.domain.dictionary import (
     LookupOutcome,
 )
 from wordwinnow.infrastructure.dictionary.free_dictionary import (
+    DEFAULT_BURST,
+    DEFAULT_REQUESTS_PER_SECOND,
     FreeDictionaryClient,
     ProviderActivity,
     WaitCause,
@@ -217,12 +220,12 @@ def _client_for(
     provider: _Provider,
     /,
     *,
-    requests_per_second: float = 2.0,
-    burst: int = 4,
+    requests_per_second: float | None = None,
+    burst: int | None = None,
 ) -> FreeDictionaryClient:
     """
-    A client over `provider`, paced as the project paces the real one, on the
-    running loop's clock.
+    A client over `provider`, paced as the project paces the real one unless
+    given a pace, on the running loop's clock.
     """
 
     async def handler(
@@ -268,6 +271,20 @@ def _failing(
         )
 
     return answer
+
+
+def _answering(
+    arrived: float,
+    /,
+) -> Response:
+    """
+    An answer to every request.
+    """
+
+    return Response(
+        status_code=200,
+        json=_FOUND_PAYLOAD,
+    )
 
 
 def _limited(
@@ -347,6 +364,239 @@ async def _look_up_all(
             ),
         ),
     )
+
+
+def _offsets(
+    provider: _Provider,
+    /,
+) -> tuple[float, ...]:
+    """
+    When each request reached `provider`, in seconds after the first, to the
+    microsecond.
+    """
+
+    return tuple(
+        round(
+            number=request.at - provider.sent[0].at,
+            ndigits=6,
+        )
+        for request in provider.sent
+    )
+
+
+@final
+class TestThePace:
+    def test_a_client_given_no_pace_keeps_the_providers_own(
+        self,
+    ) -> None:
+        async def scenario() -> tuple[_Provider, ProviderActivity]:
+            provider = _Provider(
+                answer=_answering,
+                latency_seconds=0.1,
+            )
+
+            client = _client_for(
+                provider,
+            )
+
+            await _look_up_all(
+                client,
+                _STORY_WORDS,
+            )
+
+            return (
+                provider,
+                client.activity(),
+            )
+
+        (
+            provider,
+            activity,
+        ) = run_in_virtual_time(
+            main=scenario,
+        )
+
+        # NOTE:
+        # Two requests a second after a burst of four, the pace the settings set before the adapter kept its own: the
+        # burst leaves at once, and the other five words one every half second.
+        assert (
+            DEFAULT_REQUESTS_PER_SECOND,
+            DEFAULT_BURST,
+        ) == (
+            2.0,
+            4,
+        )
+
+        assert (
+            activity.requests_per_second,
+            activity.burst,
+        ) == (
+            DEFAULT_REQUESTS_PER_SECOND,
+            DEFAULT_BURST,
+        )
+
+        assert _offsets(
+            provider,
+        ) == (
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.5,
+            1.0,
+            1.5,
+            2.0,
+            2.5,
+        )
+
+    def test_a_pace_given_to_the_client_holds_whether_faster_or_slower_than_the_providers_own(
+        self,
+    ) -> None:
+        # NOTE:
+        # The provider's own pace is no ceiling and no floor: twenty a second sends the five words after the burst
+        # within a quarter of a second, and one every two seconds after a burst of one takes sixteen.
+        def last_request(
+            requests_per_second: float,
+            burst: int,
+            /,
+        ) -> float:
+            async def scenario() -> _Provider:
+                provider = _Provider(
+                    answer=_answering,
+                    latency_seconds=0.1,
+                )
+
+                await _look_up_all(
+                    _client_for(
+                        provider,
+                        requests_per_second=requests_per_second,
+                        burst=burst,
+                    ),
+                    _STORY_WORDS,
+                )
+
+                return provider
+
+            return _offsets(
+                run_in_virtual_time(
+                    main=scenario,
+                ),
+            )[-1]
+
+        assert (
+            last_request(
+                20.0,
+                4,
+            ),
+            last_request(
+                0.5,
+                1,
+            ),
+        ) == (
+            0.25,
+            16.0,
+        )
+
+    def test_clients_in_two_processes_each_wait_out_only_the_refusals_they_received(
+        self,
+    ) -> None:
+        # NOTE:
+        # Two processes behind one address share the provider's window and nothing else: the second starts while the
+        # first waits out a refusal and is refused at once, and each client keeps its own pace and its own pauses, so
+        # only the provider's refusals hold the two back together.
+        async def scenario() -> tuple[_Provider, _Provider, tuple[DictionaryLookup, ...]]:
+            answer = _limited(
+                answers_per_window=8,
+                window_seconds=10.0,
+                names_the_wait=True,
+            )
+
+            first = _Provider(
+                answer=answer,
+                latency_seconds=0.1,
+            )
+
+            second = _Provider(
+                answer=answer,
+                latency_seconds=0.1,
+            )
+
+            looking = create_task(
+                coro=_look_up_all(
+                    _client_for(
+                        first,
+                    ),
+                    _STORY_WORDS,
+                ),
+            )
+
+            await asyncio_sleep(
+                delay=5.0,
+            )
+
+            later = await _look_up_all(
+                _client_for(
+                    second,
+                ),
+                _STORY_WORDS,
+            )
+
+            return (
+                first,
+                second,
+                (
+                    *await looking,
+                    *later,
+                ),
+            )
+
+        (
+            first,
+            second,
+            lookups,
+        ) = run_in_virtual_time(
+            main=scenario,
+        )
+
+        def inside(
+            requests: Sequence[_Sent],
+            waits: Sequence[tuple[float, float]],
+            /,
+        ) -> int:
+            return sum(
+                any(
+                    start < request.at < end
+                    for (
+                        start,
+                        end,
+                    ) in waits
+                )
+                for request in requests
+            )
+
+        assert all(lookup.outcome is LookupOutcome.FOUND for lookup in lookups)
+
+        assert (
+            inside(
+                first.sent,
+                first.asked,
+            ),
+            inside(
+                second.sent,
+                second.asked,
+            ),
+        ) == (
+            0,
+            0,
+        )
+
+        assert (
+            inside(
+                second.sent,
+                first.asked,
+            )
+            > 0
+        )
 
 
 @final

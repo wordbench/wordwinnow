@@ -116,6 +116,18 @@ MAX_ATTEMPTS: Final = 3
 FAILURE_THRESHOLD: Final = 5
 
 # PERF:
+# The pace the client keeps unless it is given another: two requests a second after a burst of four.
+#
+# The provider documents no limit, its source limits each address to 450 requests in five minutes, and measured once
+# it answered 20 requests in each 20 s window and refused the rest until the window ended.
+#
+# Simulated against that window, the story's first analysis takes 1,504 s with 75 refusals at this pace and 1,507 s
+# with one at one request a second, and against a provider that allows more, half as long at this pace.
+DEFAULT_REQUESTS_PER_SECOND: Final = 2.0
+
+DEFAULT_BURST: Final = 4
+
+# PERF:
 # When it asks again, with one request: ten seconds after it stopped, and ten after each such request that fails, each
 # wait up to a quarter shorter at random, or as long as the provider asked when that is longer.
 #
@@ -731,6 +743,9 @@ class FreeDictionaryClient:
     """
     Looks words up at the Free Dictionary API.
 
+    Without `requests_per_second` or `burst`, it keeps the provider's own
+    pace, `DEFAULT_REQUESTS_PER_SECOND` after a burst of `DEFAULT_BURST`.
+
     Satisfies `Dictionary` structurally.
     """
 
@@ -739,8 +754,8 @@ class FreeDictionaryClient:
         *,
         base_url: str,
         timeout_seconds: float,
-        requests_per_second: float,
-        burst: int,
+        requests_per_second: float | None = None,
+        burst: int | None = None,
         client: AsyncClient,
         sleep: Sleep = asyncio_sleep,
         clock: MonotonicClock = monotonic,
@@ -761,8 +776,8 @@ class FreeDictionaryClient:
         self._observer: Final = observer if observer is not None else _UNOBSERVED
 
         self._bucket: Final = TokenBucket(
-            rate_per_second=requests_per_second,
-            burst=burst,
+            rate_per_second=requests_per_second if requests_per_second is not None else DEFAULT_REQUESTS_PER_SECOND,
+            burst=burst if burst is not None else DEFAULT_BURST,
             clock=clock,
             sleep=sleep,
         )

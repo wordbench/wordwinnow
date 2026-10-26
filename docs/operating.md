@@ -261,7 +261,7 @@ and the model.
 | `WORDWINNOW_DICTIONARY` | `free_dictionary` | `wordnet` answers from WordNet, locally, without the provider |
 | `WORDWINNOW_DICTIONARY_BASE_URL` | `https://api.dictionaryapi.dev/api/v2/entries/en` | Where the Free Dictionary API answers |
 | `WORDWINNOW_DICTIONARY_CONCURRENCY` | 8 | Lookups in flight per analysis |
-| `WORDWINNOW_DICTIONARY_REQUESTS_PER_SECOND`, `WORDWINNOW_DICTIONARY_BURST` | 2, 4 | The provider budget |
+| `WORDWINNOW_DICTIONARY_REQUESTS_PER_SECOND`, `WORDWINNOW_DICTIONARY_BURST` | unset | The provider budget in place of the provider's own, which for the Free Dictionary API is 2 a second after a burst of 4 |
 | `WORDWINNOW_DICTIONARY_TIMEOUT_SECONDS` | 30 | How long one request to the provider may take |
 | `WORDWINNOW_DICTIONARY_PATIENCE_SECONDS` | 180 | How long an analysis waits, in all, for a provider that stopped answering, before WordNet stands in for the words still waiting; 0 fails fast |
 | `WORDWINNOW_ENRICHMENT_TIMEOUT_SECONDS` | 180 | How long a worker waits for one lookup from the enrichment service |

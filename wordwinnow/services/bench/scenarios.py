@@ -79,6 +79,7 @@ from wordwinnow.infrastructure.dictionary.disabled import (
     DisabledDictionary,
 )
 from wordwinnow.infrastructure.dictionary.free_dictionary import (
+    DEFAULT_BURST,
     FreeDictionaryClient,
 )
 from wordwinnow.infrastructure.settings import (
@@ -416,7 +417,7 @@ async def measure_enrichment(
                             timeout_seconds=settings.dictionary_timeout_seconds,
                             requests_per_second=requests_per_second,
                             burst=max(
-                                settings.dictionary_burst,
+                                value if (value := settings.dictionary_burst) is not None else DEFAULT_BURST,
                                 concurrency,
                             ),
                             client=client,

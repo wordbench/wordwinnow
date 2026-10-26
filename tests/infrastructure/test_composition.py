@@ -35,6 +35,10 @@ from wordwinnow.infrastructure.dictionary.cache import (
     CachingDictionary,
     InMemoryDictionaryCache,
 )
+from wordwinnow.infrastructure.dictionary.free_dictionary import (
+    DEFAULT_BURST,
+    DEFAULT_REQUESTS_PER_SECOND,
+)
 from wordwinnow.infrastructure.dictionary.resilience import (
     BreakerState,
 )
@@ -127,6 +131,62 @@ class TestBuildProviderDictionary:
             BreakerState.CLOSED,
             (),
         )
+
+    async def test_the_free_dictionary_keeps_its_own_pace_unless_the_settings_name_another(
+        self,
+        *,
+        monkeypatch: MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.chdir(
+            path=tmp_path,
+        )
+
+        def pace(
+            settings: Settings,
+            client: AsyncClient,
+            /,
+        ) -> tuple[float, int]:
+            provided = build_provider_dictionary(
+                settings=settings,
+                client=client,
+                cache=InMemoryDictionaryCache(),
+                on_lookup=None,
+                observer=None,
+            )
+
+            assert provided.activity is not None
+
+            provider = provided.activity().provider
+
+            return (
+                provider.requests_per_second,
+                provider.burst,
+            )
+
+        async with AsyncClient() as client:
+            assert (
+                pace(
+                    Settings(),
+                    client,
+                ),
+                pace(
+                    Settings(
+                        dictionary_requests_per_second=0.5,
+                        dictionary_burst=1,
+                    ),
+                    client,
+                ),
+            ) == (
+                (
+                    DEFAULT_REQUESTS_PER_SECOND,
+                    DEFAULT_BURST,
+                ),
+                (
+                    0.5,
+                    1,
+                ),
+            )
 
     async def test_wordnet_is_chosen_by_name_and_answers_without_the_cache(
         self,
