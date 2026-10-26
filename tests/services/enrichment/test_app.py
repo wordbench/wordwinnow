@@ -355,7 +355,10 @@ class TestProviderObserver:
 
         assert 'wordwinnow_dictionary_retries_total{reason="provider_error"} 1.0' in answered
 
-        assert 'wordwinnow_dictionary_retries_total{reason="transport_error"} 10.0' in failing
+        # NOTE:
+        # The first failing word retries twice and the second once, before its second failure, the fifth failed
+        # request in a row, opens the circuit; the other three are refused without a request.
+        assert 'wordwinnow_dictionary_retries_total{reason="transport_error"} 3.0' in failing
 
 
 @final
@@ -464,8 +467,8 @@ class TestActivity:
             not_found=0,
             unavailable=MappingProxyType(
                 mapping={
-                    "transport_error": 5,
-                    "circuit_open": 1,
+                    "transport_error": 2,
+                    "circuit_open": 4,
                 },
             ),
         )

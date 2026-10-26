@@ -45,24 +45,24 @@ until that first report, it says whether a worker has taken the analysis.
 
 With `--view operator`, the line stays, and under it the dictionary's mechanics
 appear while the analysis runs: the circuit and the breaker's own count of
-failures in a row, the request budget's tokens and the lookups waiting for
-one, how the lookups so far were answered, from the cache or by the provider,
-the ones left unanswered and the retries, each by reason, and every lookup in
-flight.
+failures in a row, any pause the provider asked for, the request budget's
+tokens and the lookups waiting for one, how the lookups so far were answered,
+from the cache or by the provider, the ones left unanswered and the retries,
+each by reason, and every lookup in flight.
 
-The row `in a row` counts the lookups that failed in a row since the last
-answer, against the five that open the circuit; any answer starts it again,
-and while the circuit is open it is not counted, because the trial decides
-instead.
+The row `in a row` counts the requests that failed in a row since the last
+answer, against the five that open the circuit; any answer starts it again, a
+request to slow down included, and while the circuit is open it is not
+counted, because the trial decides instead.
 
 The row `unavailable` is a different number, a total by reason since the
 analysis began, the words the open circuit refused without asking included, so
 it can pass five while `in a row` stays below it and the circuit stays closed.
 
-Each lookup in flight shows what it is waiting for: a token, the provider's
-answer, with a bar against the request's timeout, the pause before another
-attempt, with a bar against the pause, or the outcome of the trial after an
-outage.
+Each lookup in flight shows what it is waiting for: a token, the end of the
+provider's pause, the provider's answer, with a bar against the request's
+timeout, the pause before another attempt, with a bar against the pause, or
+the outcome of the trial after an outage.
 
 In the local mode the view reads the dictionary in its own process, whose
 cache lasts only as long as the command; in the distributed mode it reads
@@ -299,8 +299,9 @@ One analysis is one `correlation_id` across intake, the worker, and enrichment,
 and one trace in Tempo from the request to the facts.
 
 The dashboard's dictionary panels show the circuit's state, how many lookups
-are waiting for the request budget, for the provider, before a retry, or for a
-trial's answer, and the retries by reason.
+are waiting for the request budget, for the end of the provider's pause, for
+the provider, before a retry, or for a trial's answer, and the retries by
+reason.
 
 While an analysis processes, `GET /analyses/{id}` on intake carries the worker's
 last report as `progress`: the stage, the count, the words left unanswered, and
@@ -308,10 +309,33 @@ whether the dictionary is paused.
 
 ## Recovering
 
-The dictionary client asks again after a timeout, a failed connection, or an
-answer a retry can change, such as a server error or a request to slow down,
-at most twice per word, after a wait that doubles each time and is partly
-random, or as long as the provider asks, up to thirty seconds.
+The dictionary client asks again after a timeout, a failed connection, or a
+server error a retry can change, at most twice per word, after a wait that
+doubles each time and is partly random, or as long as the provider asks, up to
+thirty seconds.
+
+A request to slow down, HTTP 429, is about the client rather than the word:
+the whole client pauses, for every lookup and every analysis it serves, as
+long as the provider's `Retry-After` says or, without a usable one, for a second
+that doubles with each refusal in a row, up to a minute.
+
+Requests already on their way when the provider began refusing come back
+refused too and count as one refusal: only a request sent after the last
+refusal counted is refused in a row, and an earlier one's `Retry-After` still
+holds the client as long as it says.
+
+The refused word is asked again after the pause without spending one of its
+attempts, and a word refused five times goes unanswered as rate limited.
+
+A pause ends with one request and then the usual two a second, so the lookups
+that waited for it never leave together.
+
+A lookup waits out a pause of up to thirty seconds; a longer one sends it away
+unanswered as rate limited, while the pause stands for every other lookup.
+
+`Retry-After` counts only as whole seconds or a date, as HTTP defines it: a
+fraction, a sign, or a word is no wait the provider named, and the client then
+decides the wait itself.
 
 A provider that asks for a longer wait is not asked about that word again, and
 the word gets WordNet's gloss at once rather than holding one of the lookups
@@ -321,28 +345,37 @@ The Free Dictionary API asks for two minutes when its own server cannot be
 reached: the network in front of it still answers the words it has cached, and
 answers every other word after about twenty seconds with HTTP 522.
 
-After five words in a row go unanswered it stops asking for thirty seconds and
-then tries one word; the words in between get WordNet's gloss instead, and the
-report counts them as unavailable.
+After five requests in a row fail, it stops asking, and tries one word with a
+single request ten seconds later, and again ten seconds after each such
+request that fails, each wait up to a quarter shorter at random, or, when that
+is later, until every wait the provider named has ended, whichever request
+named it; the words in between get WordNet's gloss instead, and the report
+counts them as unavailable.
+
+Ten seconds keeps a long outage to six to eight trial requests a minute, and
+asks a provider that came back within ten seconds unless it asked for longer;
+the random quarter spreads the trials of several clients a little, and never
+moves one later than the period or sooner than a wait the provider named.
 
 Every word asked while that one word is tried waits for its outcome, and is
 then asked as usual or, when the trial went unanswered, gets WordNet's gloss,
 so the first analysis after an outage keeps every definition a recovered
 provider gives.
 
-The circuit counts as half-open from the moment the thirty seconds are over,
-because the next word asked is the trial; the dashboard and the operator view
-show it so on an idle stack, and starting the next analysis is how to find out
-whether the provider answers again.
+The circuit counts as half-open from the moment that wait is over, because the
+next word asked is the trial; the dashboard and the operator view show it so
+on an idle stack, and starting the next analysis is how to find out whether
+the provider answers again.
 
-A word already being asked when the client stops still makes its remaining
-attempts, and when they fail, the thirty seconds start again from then, so
-against a provider that answers nothing at all, the dictionary stage can end
-up to a minute after the client stopped asking.
+A word whose request is already on its way when the client stops keeps that
+request's answer, but makes no further attempt, and a word waiting for the
+budget or for its next attempt makes none either; a request already sent that
+fails leaves the trial where it was, because only the trial decides, unless it
+asks for a longer wait, which moves the trial to the end of it.
 
-When such a word is answered instead, the client still waits out the thirty
-seconds, because only the word tried closes the circuit, and a word that ends
-while that one is being tried leaves the outcome to it.
+When such a word is answered instead, the client still waits for the trial,
+because only the word tried closes the circuit, and a word that ends while
+that one is being tried leaves the outcome to it.
 
 Each step is a log event:
 
@@ -350,8 +383,9 @@ Each step is a log event:
 | --- | --- | --- |
 | `dictionary.retry` | `DEBUG` | A request is about to be sent again, with its reason, the provider's status, and its wait |
 | `dictionary.retry.declined` | `DEBUG` | The provider asked for a longer wait than thirty seconds, and the word goes unanswered |
-| `dictionary.circuit.opened` | `WARNING` | Five words in a row went unanswered, and the client stops asking |
-| `dictionary.circuit.trial` | `DEBUG` | The thirty seconds are over, and one word is tried |
+| `dictionary.cooldown` | `DEBUG` | A 429 paused the whole client, with the wait the provider named, the wait the client chose, and the refusals in a row |
+| `dictionary.circuit.opened` | `WARNING` | Five requests in a row failed, and the client stops asking |
+| `dictionary.circuit.trial` | `DEBUG` | The wait is over, and one word is tried with a single request |
 | `dictionary.circuit.reopened` | `INFO` | The word tried went unanswered too |
 | `dictionary.circuit.closed` | `INFO` | The word tried was answered, and the client asks as usual again |
 

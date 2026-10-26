@@ -96,9 +96,9 @@ without `--local` sends the text there.
 
 While it works, `analyze` says on standard error what it is doing, and
 `--view operator` adds under that line what the dictionary is doing: the lookups
-in flight and what each waits for, the request budget, the answers that came
-from the cache, the retries, the circuit, and the breaker's count of failures
-in a row.
+in flight and what each waits for, the request budget, any pause the provider
+asked for, the answers that came from the cache, the retries, the circuit, and
+the breaker's count of failures in a row.
 
 ![The operator's view of a request limit, an outage, and a recovery](docs/images/operator.gif)
 

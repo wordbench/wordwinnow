@@ -479,9 +479,9 @@ nothing behind; the other PostgreSQL tests build their tables from the models.
 Each long-running process exposes twelve Prometheus metrics: analyses
 requested and finished, stage duration, queue wait, dictionary lookups by
 outcome and cache, provider round trips by status class, the seconds
-dictionary lookups spend waiting for the request budget, the provider, a
-retry, or a trial's answer, retries by reason, the dictionary circuit's state,
-consumer lag, skipped records, and facts recorded.
+dictionary lookups spend waiting for the request budget, the provider's pause,
+the provider, a retry, or a trial's answer, retries by reason, the dictionary
+circuit's state, consumer lag, skipped records, and facts recorded.
 
 The dictionary client knows nothing of Prometheus: it tells an observer where
 its lookups wait and when it retries, and the enrichment service turns what it
@@ -492,10 +492,11 @@ not reported when it changes, because the circuit becomes half-open when its
 recovery period ends, a moment at which nothing in the client runs.
 
 The client also says what it is doing at any moment: each lookup in flight and
-what it waits for, the request budget, and the circuit with the breaker's
-count of failures in a row; the enrichment service serves that at
-`GET /activity`, and `analyze --view operator` reads it there in the distributed
-mode and from the client in its own process in the local mode.
+what it waits for, the request budget, any pause the provider asked for, and
+the circuit with the breaker's count of failures in a row; the enrichment
+service serves that at `GET /activity`, and `analyze --view operator` reads it
+there in the distributed mode and from the client in its own process in the
+local mode.
 
 Traces cross process boundaries through W3C trace context in HTTP headers and
 Kafka headers, so one analysis is one trace from the request to the facts.

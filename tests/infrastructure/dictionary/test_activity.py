@@ -50,6 +50,7 @@ _ACTIVITY: Final = DictionaryActivity(
     provider=ProviderActivity(
         circuit=BreakerState.HALF_OPEN,
         retry_in_seconds=None,
+        cooldown_seconds=None,
         consecutive_failures=0,
         failure_threshold=5,
         tokens=1.5,

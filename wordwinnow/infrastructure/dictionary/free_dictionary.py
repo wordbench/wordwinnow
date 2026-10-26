@@ -106,13 +106,23 @@ from wordwinnow.infrastructure.user_agent import (
 )
 
 # NOTE:
-# How hard the client leans on a provider that is failing: three attempts per lookup, and five failed lookups in a row
-# before it stops asking for half a minute.
+# How hard the client leans on a provider that is failing: three attempts per lookup, and five failed requests in a
+# row before it stops asking.
 MAX_ATTEMPTS: Final = 3
 
 FAILURE_THRESHOLD: Final = 5
 
-RECOVERY_SECONDS: Final = 30.0
+# PERF:
+# When it asks again, with one request: ten seconds after it stopped, and ten after each such request that fails, each
+# wait up to a quarter shorter at random, or as long as the provider asked when that is longer.
+#
+# Simulated against outages of one second to ten minutes, with the provider failing at once, the first answer after
+# the provider came back arrived 4 to 5 s after it on average, where a fixed half minute took 13 to 25 s and a wait of
+# five seconds doubling to fifteen took 5 to 7 s, for 19 trial requests in a three-minute outage rather than 5 or 13;
+# when the provider hangs until the timeout instead, the trials take the time and the three differ little.
+RECOVERY_SECONDS: Final = 10.0
+
+_RECOVERY_JITTER: Final = 0.25
 
 # NOTE:
 # The longest wait between two attempts: the backoff stays far below it, and a provider that asks for a longer one is
@@ -120,6 +130,29 @@ RECOVERY_SECONDS: Final = 30.0
 MAX_DELAY_SECONDS: Final = 30.0
 
 _BASE_BACKOFF_SECONDS: Final = 0.5
+
+# NOTE:
+# How long the client leaves the provider alone after a 429 that names no wait it can use: one second, doubling with
+# each refusal in a row, to a minute at most, half of each wait fixed and half random so that several clients do not
+# come back together.
+_BASE_THROTTLE_SECONDS: Final = 1.0
+
+_MAX_THROTTLE_SECONDS: Final = 60.0
+
+# NOTE:
+# How many 429s in a row the provider's own Retry-After is trusted for: after that many, every wait it named was
+# waited out and the refusals go on, so the doubling wait applies on top of the one it names.
+_TRUSTED_THROTTLES: Final = 3
+
+# NOTE:
+# How many 429s one word may draw before it goes unanswered as rate limited: each one pauses the whole client, so a
+# word refused that often is one the provider keeps refusing, and five bounds how long a lookup can circle.
+MAX_REFUSALS: Final = 5
+
+# NOTE:
+# The longest Retry-After read as a wait, a day; a longer one is not a wait anyone means, and counts as no header at
+# all.
+_MAX_RETRY_AFTER_SECONDS: Final = 86_400.0
 
 # NOTE:
 # The statuses a retry can fix: the provider is throttling, or something between the client and the provider is
@@ -436,12 +469,15 @@ class WaitCause(
     UnorderedStrEnum,
 ):
     """
-    What a lookup is waiting for: the request budget, the provider's answer,
-    the pause before another attempt, or the outcome of the trial request that
-    tests a provider the client had stopped asking.
+    What a lookup is waiting for: the request budget, the pause the provider
+    asked the client for, the provider's answer, the pause before another
+    attempt, or the outcome of the trial request that tests a provider the
+    client had stopped asking.
     """
 
     BUDGET = auto()
+
+    COOLDOWN = auto()
 
     PROVIDER = auto()
 
@@ -552,7 +588,10 @@ class ProviderActivity:
     `retry_in_seconds` is set while the circuit is open, and `timeout_seconds`
     is how long one request may take.
 
-    `consecutive_failures` is the breaker's own count of lookups that failed
+    `cooldown_seconds` is how long the pause the provider asked for has to
+    run, for every lookup, and is `None` when no pause is in force.
+
+    `consecutive_failures` is the breaker's own count of requests that failed
     in a row toward `failure_threshold`, unlike any count of unanswered words,
     and both are `None` where the activity does not report them.
     """
@@ -560,6 +599,8 @@ class ProviderActivity:
     circuit: BreakerState
 
     retry_in_seconds: float | None
+
+    cooldown_seconds: float | None
 
     consecutive_failures: int | None
 
@@ -669,6 +710,7 @@ class FreeDictionaryClient:
         self._breaker: Final = CircuitBreaker(
             failure_threshold=FAILURE_THRESHOLD,
             recovery_seconds=RECOVERY_SECONDS,
+            jitter=_RECOVERY_JITTER,
             clock=clock,
         )
 
@@ -677,6 +719,17 @@ class FreeDictionaryClient:
         self._phases: Final[dict[str, _Phase]] = {}
 
         self._retries: Final[dict[FailureReason, int]] = {}
+
+        self._cooldown_until = clock()
+
+        self._throttles = 0
+
+        # NOTE:
+        # When the last refusal counted toward the pause arrived, so that the refusals of requests already in flight
+        # then are counted once.
+        self._throttled_at = float(
+            "-inf",
+        )
 
     def activity(
         self,
@@ -690,6 +743,7 @@ class FreeDictionaryClient:
         return ProviderActivity(
             circuit=self._breaker.state,
             retry_in_seconds=self._breaker.retry_in_seconds,
+            cooldown_seconds=(cooldown if (cooldown := self._cooldown_until - now) > 0 else None),
             consecutive_failures=self._breaker.consecutive_failures,
             failure_threshold=self._breaker.failure_threshold,
             tokens=self._bucket.tokens,
@@ -808,6 +862,11 @@ class FreeDictionaryClient:
 
         trial = permit is Permit.TRIAL
 
+        # NOTE:
+        # The trial this lookup holds: a 429 makes the trial an ordinary lookup and closes the circuit, after which a
+        # later trial is another lookup's, and this one's cancellation or failure must leave that trial alone.
+        held = self._breaker.trial if trial else None
+
         try:
             if trial:
                 _logger.debug(
@@ -826,7 +885,7 @@ class FreeDictionaryClient:
             # WARN:
             # A trial canceled before its outcome would leave every later lookup waiting for it, so the breaker hears
             # that it was abandoned, and the next lookup is the trial.
-            if trial:
+            if held is not None and self._breaker.trial is held:
                 self._breaker.abandon()
 
             raise
@@ -839,7 +898,7 @@ class FreeDictionaryClient:
             return self._unexpected(
                 key,
                 exception,
-                trial,
+                held is not None and self._breaker.trial is held,
             )
 
     async def _ask(
@@ -850,16 +909,51 @@ class FreeDictionaryClient:
     ) -> DictionaryLookup:
         attempt = 0
 
+        failures = 0
+
+        refusals = 0
+
         while True:
             attempt += 1
 
-            await self._waiting(
+            # NOTE:
+            # The circuit can open while a lookup waits for its token or before another of its attempts, and only the
+            # trial asks a provider the breaker has stopped asking; the failures that opened the circuit are already
+            # counted, so this refusal is not counted again.
+            if not trial and self._breaker.state is not BreakerState.CLOSED:
+                return self._refused(
+                    key,
+                    attempt - 1,
+                )
+
+            # NOTE:
+            # A lookup waits out a pause of the provider's as long as it waits for a retry at most, so the client
+            # never holds one of the pipeline's lookups for longer than that at a time; a longer pause sends the word
+            # away unanswered as rate limited, and the pause stands for every other lookup.
+            admitted = self._cooldown_until - self._clock() <= MAX_DELAY_SECONDS and await self._waiting(
                 key=key,
-                cause=WaitCause.BUDGET,
+                cause=WaitCause.COOLDOWN if self._cooldown_until > self._clock() else WaitCause.BUDGET,
                 attempt=attempt,
                 trial=trial,
-                pending=self._bucket.acquire(),
+                pending=self._bucket.acquire(
+                    max_pause_seconds=MAX_DELAY_SECONDS,
+                ),
             )
+
+            if not admitted:
+                return self._waited_out(
+                    key,
+                    attempt - 1,
+                    trial,
+                )
+
+            if not trial and self._breaker.state is not BreakerState.CLOSED:
+                return self._refused(
+                    key,
+                    attempt - 1,
+                )
+
+            sent = self._clock()
 
             result = await self._waiting(
                 key=key,
@@ -875,6 +969,9 @@ class FreeDictionaryClient:
                 result,
                 DictionaryLookup,
             ):
+                if result.outcome is not LookupOutcome.UNAVAILABLE:
+                    self._throttles = 0
+
                 return self._settle(
                     key,
                     result,
@@ -882,17 +979,86 @@ class FreeDictionaryClient:
                     trial,
                 )
 
-            if attempt >= MAX_ATTEMPTS:
-                return self._settle(
+            # NOTE:
+            # A 429 is about the client, not the word: the provider asks every lookup to slow down, so the whole
+            # client pauses, as long as the provider asked or, without a usable Retry-After, a wait that doubles with
+            # each refusal in a row; the refused word is asked again after the pause, without spending one of its
+            # attempts, and the refusal is no failure of the provider's.
+            if result.reason is FailureReason.RATE_LIMITED:
+                refusals += 1
+
+                self._throttle(
+                    key,
+                    attempt,
+                    result,
+                    sent,
+                )
+
+                # NOTE:
+                # A 429 is an answer from a provider that is up: the trial's closes the circuit, and any other starts
+                # the breaker's count of failures in a row again, as every other answer does.
+                if trial:
+                    self._record(
+                        True,
+                        None,
+                        trial,
+                        None,
+                    )
+
+                    trial = False
+
+                else:
+                    self._breaker.record_success(
+                        trial=False,
+                    )
+
+                if refusals >= MAX_REFUSALS:
+                    return self._waited_out(
+                        key,
+                        attempt,
+                        trial,
+                    )
+
+                self._observer.retried(
+                    reason=result.reason,
+                )
+
+                self._retries[result.reason] = (
+                    self._retries.get(
+                        result.reason,
+                        0,
+                    )
+                    + 1
+                )
+
+                continue
+
+            failures += 1
+
+            asked = result.retry_after_seconds
+
+            self._record(
+                False,
+                result.reason,
+                trial,
+                asked,
+            )
+
+            # NOTE:
+            # The trial is one request rather than a whole lookup: one answer says the provider is back, one failure
+            # that it is not, and a lookup that spent its attempts on a provider still down would only keep every
+            # other lookup waiting.
+            #
+            # A failure that opened the circuit, this one or another lookup's, ends the lookup with its own reason
+            # rather than waiting out a backoff only to be refused.
+            if trial or self._breaker.state is not BreakerState.CLOSED or failures >= MAX_ATTEMPTS:
+                return self._ended(
                     key,
                     unavailable(
                         reason=result.reason,
                     ),
                     attempt,
-                    trial,
                 )
-
-            asked = result.retry_after_seconds
 
             # NOTE:
             # A provider that asks for a longer wait than the client allows is not asked about the word again before
@@ -900,7 +1066,10 @@ class FreeDictionaryClient:
             # for an attempt the provider has said is too early.
             #
             # The case is not hypothetical: when the provider's own server is unreachable, its CDN answers every word
-            # it has not cached with HTTP 522 after about twenty seconds and asks for two minutes.
+            # it has not cached with HTTP 522 after about twenty seconds and asks for two minutes, while it still
+            # answers the words it has cached, which is why, while the circuit is closed, such a wait holds back only
+            # the word it was asked for; a failure that opens the circuit holds back the trial too, as every wait a
+            # failure names does.
             if asked is not None and asked > MAX_DELAY_SECONDS:
                 _logger.debug(
                     msg="dictionary.retry.declined",
@@ -913,17 +1082,16 @@ class FreeDictionaryClient:
                     },
                 )
 
-                return self._settle(
+                return self._ended(
                     key,
                     unavailable(
                         reason=result.reason,
                     ),
                     attempt,
-                    trial,
                 )
 
             delay = _delay_before(
-                attempt + 1,
+                failures + 1,
                 result,
             )
 
@@ -968,6 +1136,128 @@ class FreeDictionaryClient:
                 delay_seconds=delay,
                 reason=result.reason,
             )
+
+    def _throttle(
+        self,
+        key: str,
+        attempt: int,
+        refusal: _Retry,
+        sent: float,
+        /,
+    ) -> None:
+        asked = refusal.retry_after_seconds
+
+        # NOTE:
+        # Every request in flight when the provider began refusing comes back refused too, and those refusals are one
+        # refusal: only a request sent after the last refusal counted is refused in a row, so only it doubles the wait
+        # and wears down the trust in the provider's Retry-After.
+        #
+        # An earlier request's refusal still holds the client for as long as it names, which is the provider's own
+        # statement, and adds nothing when it names no wait.
+        seconds: float | None = asked
+
+        if sent > self._throttled_at:
+            self._throttles += 1
+
+            self._throttled_at = self._clock()
+
+            base = min(
+                _BASE_THROTTLE_SECONDS * 2 ** (self._throttles - 1),
+                _MAX_THROTTLE_SECONDS,
+            )
+
+            doubling = base / 2 + random() * base / 2
+
+            seconds = (
+                doubling
+                if asked is None
+                else max(
+                    asked,
+                    doubling,
+                )
+                if self._throttles > _TRUSTED_THROTTLES
+                else asked
+            )
+
+        if seconds is not None:
+            until = self._clock() + seconds
+
+            if until > self._cooldown_until:
+                self._cooldown_until = until
+
+                self._bucket.pause(
+                    until=until,
+                )
+
+        _logger.debug(
+            msg="dictionary.cooldown",
+            extra={
+                "lemma": key,
+                "attempt": attempt,
+                "retry_after_seconds": asked,
+                "cooldown_seconds": None
+                if seconds is None
+                else round(
+                    number=seconds,
+                    ndigits=3,
+                ),
+                "in_a_row": self._throttles,
+            },
+        )
+
+    def _refused(
+        self,
+        key: str,
+        attempts: int,
+        /,
+    ) -> DictionaryLookup:
+        return self._ended(
+            key,
+            unavailable(
+                reason=FailureReason.CIRCUIT_OPEN,
+            ),
+            attempts,
+        )
+
+    def _ended(
+        self,
+        key: str,
+        lookup: DictionaryLookup,
+        attempts: int,
+        /,
+    ) -> DictionaryLookup:
+        _log(
+            key,
+            lookup,
+            attempts,
+        )
+
+        return lookup
+
+    def _waited_out(
+        self,
+        key: str,
+        attempts: int,
+        trial: bool,
+        /,
+    ) -> DictionaryLookup:
+        # WARN:
+        # A trial that ends without an outcome would leave every later lookup waiting for it, so the breaker hears
+        # that it was abandoned, and the next lookup is the trial.
+        if trial:
+            self._breaker.abandon()
+
+        lookup = unavailable(
+            reason=FailureReason.RATE_LIMITED,
+        )
+
+        _log(
+            key,
+            lookup,
+            attempts,
+        )
+
+        return lookup
 
     async def _waiting[T](
         self,
@@ -1047,6 +1337,7 @@ class FreeDictionaryClient:
             lookup.outcome is not LookupOutcome.UNAVAILABLE,
             lookup.failure_reason,
             trial,
+            None,
         )
 
         _log(
@@ -1068,6 +1359,7 @@ class FreeDictionaryClient:
             False,
             FailureReason.TRANSPORT_ERROR,
             trial,
+            None,
         )
 
         kind = type(
@@ -1092,6 +1384,7 @@ class FreeDictionaryClient:
         answered: bool,
         failure_reason: str | None,
         trial: bool,
+        retry_after_seconds: float | None,
         /,
     ) -> None:
         before = self._breaker.state
@@ -1104,6 +1397,15 @@ class FreeDictionaryClient:
         else:
             self._breaker.record_failure(
                 trial=trial,
+                retry_after_seconds=retry_after_seconds,
+            )
+
+        # NOTE:
+        # The tokens saved while the circuit was open are not kept: the lookups that waited for the trial go on one
+        # token at a time, not together.
+        if trial and answered:
+            self._bucket.pause(
+                until=self._clock(),
             )
 
         after = self._breaker.state
@@ -1119,7 +1421,7 @@ class FreeDictionaryClient:
                 msg="dictionary.circuit.opened",
                 extra={
                     "failure_reason": failure_reason,
-                    "recovery_seconds": RECOVERY_SECONDS,
+                    "recovery_seconds": self._breaker.retry_in_seconds,
                 },
             )
 
@@ -1128,7 +1430,7 @@ class FreeDictionaryClient:
                 msg="dictionary.circuit.reopened",
                 extra={
                     "failure_reason": failure_reason,
-                    "recovery_seconds": RECOVERY_SECONDS,
+                    "recovery_seconds": self._breaker.retry_in_seconds,
                 },
             )
 
@@ -1220,21 +1522,29 @@ def _retry_after(
     if header is None:
         return None
 
-    try:
+    value = header.strip()
+
+    # NOTE:
+    # HTTP defines the header as whole seconds or a date, and anything else, a fraction, a sign, or a word, is no wait
+    # the provider named, so the client decides the wait itself.
+    if value.isascii() and value.isdigit():
         seconds = float(
-            header,
+            value,
         )
 
-    except ValueError:
+    else:
         try:
-            seconds = (
-                parsedate_to_datetime(
-                    data=header,
-                )
-                - datetime.now(
-                    tz=UTC,
-                )
-            ).total_seconds()
+            seconds = max(
+                0.0,
+                (
+                    parsedate_to_datetime(
+                        data=value,
+                    )
+                    - datetime.now(
+                        tz=UTC,
+                    )
+                ).total_seconds(),
+            )
 
         except (
             TypeError,
@@ -1242,10 +1552,10 @@ def _retry_after(
         ):
             return None
 
-    return max(
-        0.0,
-        seconds,
-    )
+    if seconds > _MAX_RETRY_AFTER_SECONDS:
+        return None
+
+    return seconds
 
 
 def _delay_before(

@@ -224,10 +224,17 @@ namespace-modules = [
 # carries on without the listener.
 #
 # Scanned on its own, the module reports those two signatures and nothing else, so the exclusion hides exactly that.
+#
+# `tests/fakes/jumping_selector.py` overrides `selectors.SelectSelector.select`, whose parameter the standard library
+# declares positional-or-keyword and asyncio passes positionally: a keyword-only override breaks the loop, and a
+# positional-only one breaks substitution, which the type checker proves.
+#
+# Scanned on its own, the module reports that signature and nothing else, so the exclusion hides exactly that.
 exclude = [
   "data/reference/ATTRIBUTION.md",
   "wordwinnow/infrastructure/log_formatters.py",
   "wordwinnow/infrastructure/messaging/handoff.py",
+  "tests/fakes/jumping_selector.py",
 ]
 
 [tool.pytest.ini_options]

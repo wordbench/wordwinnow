@@ -135,6 +135,8 @@ class ProviderActivityPayload(
 
     retry_in_seconds: float | None = None
 
+    cooldown_seconds: float | None = None
+
     consecutive_failures: int | None = None
 
     failure_threshold: int | None = None
@@ -188,6 +190,7 @@ def to_payload(
         provider=ProviderActivityPayload(
             circuit=_CIRCUIT_NAMES[provider.circuit],
             retry_in_seconds=provider.retry_in_seconds,
+            cooldown_seconds=provider.cooldown_seconds,
             consecutive_failures=provider.consecutive_failures,
             failure_threshold=provider.failure_threshold,
             tokens=provider.tokens,
@@ -238,6 +241,7 @@ def from_payload(
         provider=ProviderActivity(
             circuit=_CIRCUITS[provider.circuit],
             retry_in_seconds=provider.retry_in_seconds,
+            cooldown_seconds=provider.cooldown_seconds,
             consecutive_failures=provider.consecutive_failures,
             failure_threshold=provider.failure_threshold,
             tokens=provider.tokens,

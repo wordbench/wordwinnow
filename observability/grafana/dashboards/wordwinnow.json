@@ -272,7 +272,7 @@
       "id": 11,
       "type": "state-timeline",
       "title": "Dictionary circuit",
-      "description": "Red for the thirty seconds after five lookups in a row, or a trial, went unanswered, while the client does not ask the provider; yellow from then until a lookup is answered, even while nothing is looked up, because the next lookup is the trial; green while lookups ask as usual.",
+      "description": "Red after five requests in a row, or a trial, failed, while the client does not ask the provider: ten seconds, up to a quarter less at random, or as long as the provider asked when that is longer; yellow from then until a trial is answered, even while nothing is looked up, because the next lookup is the trial; green while lookups ask as usual.",
       "gridPos": {
         "x": 0,
         "y": 24,

@@ -93,6 +93,7 @@ _IDLE: Final = DictionaryActivity(
     provider=ProviderActivity(
         circuit=BreakerState.CLOSED,
         retry_in_seconds=None,
+        cooldown_seconds=None,
         consecutive_failures=0,
         failure_threshold=5,
         tokens=4.0,

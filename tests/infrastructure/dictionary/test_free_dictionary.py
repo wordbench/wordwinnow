@@ -18,6 +18,14 @@ from collections.abc import (
     Callable,
     Coroutine,
 )
+from datetime import (
+    UTC,
+    datetime,
+    timedelta,
+)
+from email.utils import (
+    format_datetime,
+)
 from logging import (
     DEBUG,
 )
@@ -789,13 +797,13 @@ class TestFreeDictionaryClient:
 
         closed = harness.client.activity()
 
-        assert (
-            opened.circuit,
-            opened.retry_in_seconds,
-        ) == (
-            BreakerState.OPEN,
-            30.0,
-        )
+        # NOTE:
+        # The recovery period is ten seconds, of which a quarter is random.
+        assert opened.circuit is BreakerState.OPEN
+
+        assert opened.retry_in_seconds is not None
+
+        assert 7.5 <= opened.retry_in_seconds <= 10.0
 
         assert (
             recovered.circuit,
@@ -807,15 +815,18 @@ class TestFreeDictionaryClient:
 
         assert closed.circuit is BreakerState.CLOSED
 
+        # NOTE:
+        # The first word retried twice and the second once before its second failure, the fifth in a row, opened the
+        # circuit; the four words after it were refused without a request, and the trial was answered.
         assert closed.retries == {
-            FailureReason.TRANSPORT_ERROR: 10,
+            FailureReason.TRANSPORT_ERROR: 3,
         }
 
         assert (
             len(
                 harness.observer.retries,
             )
-            == 10
+            == 3
         )
 
     async def test_lookups_that_arrive_during_the_trial_wait_for_it_and_are_answered_when_it_succeeds(
@@ -865,7 +876,7 @@ class TestFreeDictionaryClient:
             _HOLMES_WORDS,
         )
 
-        assert tuple(request.url.path for request in harness.requests[15:]) == tuple(
+        assert tuple(request.url.path for request in harness.requests[5:]) == tuple(
             f"/api/v2/entries/en/{lemma}" for lemma in _HOLMES_WORDS
         )
 
@@ -909,11 +920,13 @@ class TestFreeDictionaryClient:
             "circuit_open",
         )
 
+        # NOTE:
+        # Five failed requests opened the circuit, and the trial is one request.
         assert (
             len(
                 harness.requests,
             )
-            == 18
+            == 6
         )
 
         assert harness.client.activity().circuit is BreakerState.OPEN
@@ -1254,12 +1267,254 @@ class TestFreeDictionaryClient:
 
         assert lookup.failure_reason == "rate_limited"
 
+        # NOTE:
+        # A provider that refuses with 429 and names no wait is left alone for a wait that doubles with each refusal,
+        # half of it random, and the word is asked again without spending an attempt, until its fifth refusal.
+        pauses = harness.sleep.delays
+
         assert (
             len(
                 harness.requests,
             )
-            == 3
+            == 5
         )
+
+        assert (
+            len(
+                pauses,
+            )
+            == 4
+        )
+
+        assert harness.observer.retries == [
+            "rate_limited",
+            "rate_limited",
+            "rate_limited",
+            "rate_limited",
+        ]
+
+        assert all(
+            2.0 ** (index - 1) <= pause <= 2.0**index
+            for (
+                index,
+                pause,
+            ) in enumerate(
+                iterable=pauses,
+            )
+        )
+
+    async def test_a_retry_after_that_is_neither_whole_seconds_nor_a_date_names_no_wait(
+        self,
+    ) -> None:
+        for value in (
+            "1.5",
+            "-1",
+            "soon",
+        ):
+            harness = Harness(
+                handler=_answering(
+                    [
+                        Response(
+                            status_code=429,
+                            headers={
+                                "Retry-After": value,
+                            },
+                        ),
+                        200,
+                    ],
+                ),
+            )
+
+            lookup = await harness.client.look_up(
+                lemma="photograph",
+            )
+
+            assert lookup.outcome is LookupOutcome.FOUND
+
+            # NOTE:
+            # Without a wait it can use, the client waits the first doubling step, half a second to a second.
+            (pause,) = harness.sleep.delays
+
+            assert 0.5 <= pause <= 1.0, value
+
+    async def test_a_retry_after_date_is_waited_for_as_the_time_until_it(
+        self,
+    ) -> None:
+        asked_until = datetime.now(
+            tz=UTC,
+        ) + timedelta(
+            seconds=120,
+        )
+
+        harness = Harness(
+            handler=_answering(
+                [
+                    Response(
+                        status_code=429,
+                        headers={
+                            "Retry-After": format_datetime(
+                                dt=asked_until,
+                                usegmt=True,
+                            ),
+                        },
+                    ),
+                    200,
+                ],
+            ),
+        )
+
+        lookup = await harness.client.look_up(
+            lemma="photograph",
+        )
+
+        cooldown = harness.client.activity().cooldown_seconds
+
+        # NOTE:
+        # Two minutes is longer than a lookup waits for the provider's pause, so the word goes unanswered at once, and
+        # the pause stands for every other lookup.
+        assert lookup.failure_reason == "rate_limited"
+
+        assert (
+            len(
+                harness.requests,
+            )
+            == 1
+        )
+
+        assert cooldown is not None
+
+        assert 110.0 <= cooldown <= 120.0
+
+    async def test_a_trial_refused_with_429_closes_the_circuit(
+        self,
+    ) -> None:
+        steps: list[Step] = [
+            ConnectError(
+                message="connection refused",
+            ),
+        ]
+
+        harness = Harness(
+            handler=_answering(
+                steps,
+            ),
+        )
+
+        for _ in range(
+            5,
+        ):
+            await harness.client.look_up(
+                lemma="photograph",
+            )
+
+        harness.clock.advance(
+            seconds=31.0,
+        )
+
+        steps[:] = [
+            Response(
+                status_code=429,
+                headers={
+                    "Retry-After": "1",
+                },
+            ),
+            200,
+        ]
+
+        trial = await harness.client.look_up(
+            lemma="photograph",
+        )
+
+        # NOTE:
+        # A refusal to go faster is an answer: the provider is up, so the trial closes the circuit, and the word is
+        # asked again once the pause the refusal named is over.
+        assert trial.outcome is LookupOutcome.FOUND
+
+        assert harness.client.activity().circuit is BreakerState.CLOSED
+
+        assert harness.sleep.delays[-1:] == [
+            1.0,
+        ]
+
+    async def test_the_activity_shows_the_providers_pause_and_the_lookups_waiting_out_it(
+        self,
+    ) -> None:
+        clock = FakeMonotonicClock()
+
+        released = Event()
+
+        # NOTE:
+        # The pause holds until the test releases it, so the lookup can be seen waiting out the provider's pause.
+        async def sleep(
+            delay: float,
+            /,
+        ) -> None:
+            await released.wait()
+
+            clock.advance(
+                seconds=delay,
+            )
+
+        answers: list[Response] = [
+            Response(
+                status_code=429,
+                headers={
+                    "Retry-After": "9",
+                },
+            ),
+            Response(
+                status_code=200,
+                json=_PAYLOAD,
+            ),
+        ]
+
+        def handler(
+            request: Request,
+            /,
+        ) -> Response:
+            return answers.pop(
+                0,
+            )
+
+        client = FreeDictionaryClient(
+            base_url=_BASE_URL,
+            timeout_seconds=5.0,
+            requests_per_second=1_000.0,
+            burst=100,
+            client=AsyncClient(
+                transport=MockTransport(
+                    handler=handler,
+                ),
+            ),
+            sleep=sleep,
+            clock=clock,
+        )
+
+        looking = create_task(
+            coro=client.look_up(
+                lemma="photograph",
+            ),
+        )
+
+        await _until(
+            client,
+            "photograph",
+            WaitCause.COOLDOWN,
+        )
+
+        paused = client.activity()
+
+        released.set()
+
+        lookup = await looking
+
+        assert paused.cooldown_seconds == 9.0
+
+        assert paused.tokens == 0.0
+
+        assert lookup.outcome is LookupOutcome.FOUND
+
+        assert client.activity().cooldown_seconds is None
 
     async def test_other_statuses_are_not_retried(
         self,
@@ -1338,7 +1593,7 @@ class TestFreeDictionaryClient:
 
         assert lookup.outcome is LookupOutcome.NOT_FOUND
 
-    async def test_the_breaker_opens_after_five_failed_lookups_and_admits_one_trial_after_recovery(
+    async def test_the_breaker_opens_after_five_failed_requests_and_admits_one_trial_after_recovery(
         self,
     ) -> None:
         steps: list[Step] = [
@@ -1353,20 +1608,30 @@ class TestFreeDictionaryClient:
             ),
         )
 
-        for _ in range(
-            5,
-        ):
-            lookup = await harness.client.look_up(
-                lemma="photograph",
-            )
+        # NOTE:
+        # The first word fails all three attempts and the second fails twice: the fifth failed request in a row opens
+        # the circuit, and the second word ends there with its own reason rather than a third attempt.
+        first = await harness.client.look_up(
+            lemma="photograph",
+        )
 
-            assert lookup.failure_reason == "transport_error"
+        second = await harness.client.look_up(
+            lemma="mask",
+        )
+
+        assert (
+            first.failure_reason,
+            second.failure_reason,
+        ) == (
+            "transport_error",
+            "transport_error",
+        )
 
         assert (
             len(
                 harness.requests,
             )
-            == 15
+            == 5
         )
 
         refused = await harness.client.look_up(
@@ -1379,7 +1644,7 @@ class TestFreeDictionaryClient:
             len(
                 harness.requests,
             )
-            == 15
+            == 5
         )
 
         harness.clock.advance(
@@ -1400,7 +1665,7 @@ class TestFreeDictionaryClient:
             len(
                 harness.requests,
             )
-            == 16
+            == 6
         )
 
         again = await harness.client.look_up(
@@ -1413,7 +1678,62 @@ class TestFreeDictionaryClient:
             len(
                 harness.requests,
             )
-            == 17
+            == 7
+        )
+
+    async def test_a_circuit_opened_by_failures_that_name_a_wait_tries_again_no_sooner(
+        self,
+    ) -> None:
+        # NOTE:
+        # The provider's network answers with 522 and asks for two minutes when the provider's own server is
+        # unreachable: each word ends after one request, and once five have failed, the trial waits the two minutes
+        # rather than the ten seconds the client would choose itself.
+        harness = Harness(
+            handler=_answering(
+                [
+                    Response(
+                        status_code=522,
+                        headers={
+                            "Retry-After": "120",
+                        },
+                    ),
+                ],
+            ),
+        )
+
+        for lemma in (
+            *_HOLMES_WORDS,
+            "egria",
+        ):
+            await harness.client.look_up(
+                lemma=lemma,
+            )
+
+        opened = harness.client.activity()
+
+        harness.clock.advance(
+            seconds=60.0,
+        )
+
+        refused = await harness.client.look_up(
+            lemma="photograph",
+        )
+
+        assert (
+            opened.circuit,
+            opened.retry_in_seconds,
+        ) == (
+            BreakerState.OPEN,
+            120.0,
+        )
+
+        assert refused.failure_reason == "circuit_open"
+
+        assert (
+            len(
+                harness.requests,
+            )
+            == 5
         )
 
     async def test_an_outage_is_logged_once_as_a_warning_and_its_course_below(
@@ -1467,13 +1787,14 @@ class TestFreeDictionaryClient:
         retries = tuple(record for record in caplog.records if record.getMessage() == "dictionary.retry")
 
         # NOTE:
-        # Two retries for each of the five failed lookups and for the failed trial; a first retry waits between a
-        # quarter and a half of a second, half of its backoff step fixed and half random.
+        # Two retries for the first word and one for the second, whose second failure was the fifth in a row and
+        # opened the circuit; the trial is one request and is never retried; a first retry waits between a quarter and
+        # a half of a second, half of its backoff step fixed and half random.
         assert (
             len(
                 retries,
             )
-            == 12
+            == 3
         )
 
         first = vars(
@@ -1526,7 +1847,7 @@ class TestFreeDictionaryClient:
             ),
         )
 
-    async def test_four_failed_lookups_in_a_row_leave_the_circuit_closed_and_the_fifth_opens_it(
+    async def test_four_failed_requests_in_a_row_leave_the_circuit_closed_and_the_fifth_opens_it(
         self,
     ) -> None:
         harness = Harness(
@@ -1757,13 +2078,18 @@ class TestFreeDictionaryClient:
 
         assert (
             activity.circuit,
-            activity.retry_in_seconds,
             refused.failure_reason,
         ) == (
             BreakerState.OPEN,
-            30.0,
             "circuit_open",
         )
+
+        # NOTE:
+        # The late answer left the trial where the opening put it: ten seconds after it, less a random quarter at
+        # most.
+        assert activity.retry_in_seconds is not None
+
+        assert 7.5 <= activity.retry_in_seconds <= 10.0
 
         assert asked == [
             "photograph",
@@ -1976,13 +2302,15 @@ class TestFreeDictionaryClient:
             "circuit_open",
         )
 
-        assert (
-            client.activity().circuit,
-            client.activity().retry_in_seconds,
-        ) == (
-            BreakerState.OPEN,
-            30.0,
-        )
+        # NOTE:
+        # The trial failed, so the circuit stays open another ten seconds, less a random quarter at most.
+        retry_in_seconds = client.activity().retry_in_seconds
+
+        assert client.activity().circuit is BreakerState.OPEN
+
+        assert retry_in_seconds is not None
+
+        assert 7.5 <= retry_in_seconds <= 10.0
 
     async def test_only_a_failed_trial_is_logged_as_reopening_the_circuit(
         self,
@@ -2048,7 +2376,8 @@ class TestFreeDictionaryClient:
 
             # NOTE:
             # The word admitted before the circuit opened fails once the recovery period is over, when the state alone
-            # would have taken its failure for a failed trial's.
+            # would have taken its failure for a failed trial's; it neither reopens the circuit nor moves the trial,
+            # which is due.
             release.set()
 
             await late
@@ -2077,8 +2406,8 @@ class TestFreeDictionaryClient:
             after_the_late_failure.circuit,
             after_the_late_failure.retry_in_seconds,
         ) == (
-            BreakerState.OPEN,
-            30.0,
+            BreakerState.HALF_OPEN,
+            None,
         )
 
         assert _circuit_events(

@@ -67,6 +67,7 @@ _BEFORE: Final = DictionaryActivity(
     provider=ProviderActivity(
         circuit=BreakerState.CLOSED,
         retry_in_seconds=None,
+        cooldown_seconds=None,
         consecutive_failures=1,
         failure_threshold=5,
         tokens=4.0,
@@ -101,6 +102,7 @@ _DURING: Final = DictionaryActivity(
     provider=ProviderActivity(
         circuit=BreakerState.HALF_OPEN,
         retry_in_seconds=None,
+        cooldown_seconds=None,
         consecutive_failures=0,
         failure_threshold=5,
         tokens=1.4,
@@ -128,7 +130,7 @@ _DURING: Final = DictionaryActivity(
                 attempt=2,
                 seconds=0.9,
                 delay_seconds=1.7,
-                reason=FailureReason.RATE_LIMITED,
+                reason=FailureReason.PROVIDER_ERROR,
             ),
             LookupActivity(
                 lemma="rocket",
@@ -140,7 +142,7 @@ _DURING: Final = DictionaryActivity(
         retries=MappingProxyType(
             mapping={
                 FailureReason.TIMED_OUT: 3,
-                FailureReason.RATE_LIMITED: 1,
+                FailureReason.PROVIDER_ERROR: 1,
             },
         ),
     ),
@@ -243,11 +245,11 @@ class TestOperatorProgress:
             "1.4 of 4 tokens, refilled at 2 a second; 3 lookups waiting for one",
             "12 from the cache, 5 found and 1 not found by the provider",
             "unavailable  2 (2 circuit open)",
-            "retries      1 (1 rate limited)",
+            "retries      1 (1 server error)",
             "asking the provider, attempt 1, the trial",
             "19.2 s",
             "waiting for the trial's outcome",
-            "pausing 1.7 s before attempt 2 (rate limited)",
+            "pausing 1.7 s before attempt 2 (server error)",
             "1.9 s",
             "waiting for a token",
         ):
@@ -273,6 +275,7 @@ class TestOperatorProgress:
                     provider=ProviderActivity(
                         circuit=BreakerState.OPEN,
                         retry_in_seconds=23.4,
+                        cooldown_seconds=None,
                         consecutive_failures=0,
                         failure_threshold=5,
                         tokens=4.0,
@@ -294,9 +297,84 @@ class TestOperatorProgress:
             stream,
         )
 
-        assert "open: no new lookup asks the provider for 20 s more" in drawn
+        assert "open: no lookup asks the provider for 20 s more" in drawn
 
         assert "in flight    nothing" in drawn
+
+    def test_a_pause_the_provider_asked_for_counts_down_for_every_lookup(
+        self,
+    ) -> None:
+        stream = StringIO()
+
+        clock = FakeMonotonicClock()
+
+        with OperatorProgress(
+            console=_terminal(
+                stream,
+            ),
+            refresh_per_second=1,
+            clock=clock,
+        ) as progress:
+            progress.watched(
+                activity=DictionaryActivity(
+                    counts=_BEFORE.counts,
+                    provider=ProviderActivity(
+                        circuit=BreakerState.CLOSED,
+                        retry_in_seconds=None,
+                        cooldown_seconds=9.0,
+                        consecutive_failures=0,
+                        failure_threshold=5,
+                        tokens=0.0,
+                        burst=4,
+                        requests_per_second=2.0,
+                        waiting_for_budget=2,
+                        timeout_seconds=30.0,
+                        lookups=(
+                            LookupActivity(
+                                lemma="photograph",
+                                waiting_for=WaitCause.COOLDOWN,
+                                attempt=2,
+                                seconds=1.5,
+                            ),
+                        ),
+                        retries=_BEFORE.provider.retries,
+                    ),
+                ),
+            )
+
+            clock.advance(
+                seconds=2.0,
+            )
+
+        drawn = _drawn(
+            stream,
+        )
+
+        for expected in (
+            "pause        the provider asked the client to slow down: no lookup asks for 7 s more",
+            "waiting out the provider's pause",
+        ):
+            assert expected in drawn, expected
+
+    def test_without_a_pause_the_row_says_none_was_asked_for(
+        self,
+    ) -> None:
+        stream = StringIO()
+
+        with OperatorProgress(
+            console=_terminal(
+                stream,
+            ),
+            refresh_per_second=1,
+            clock=FakeMonotonicClock(),
+        ) as progress:
+            progress.watched(
+                activity=_BEFORE,
+            )
+
+        assert "pause        none: the provider has not asked the client to slow down" in _drawn(
+            stream,
+        )
 
     def test_the_breakers_run_of_failures_stands_apart_from_the_unanswered_total(
         self,
@@ -336,7 +414,7 @@ class TestOperatorProgress:
         )
 
         for expected in (
-            "in a row     3 of 5 lookups failed since the last answer; at 5 the circuit opens",
+            "in a row     3 of 5 requests failed since the last answer; at 5 the circuit opens",
             "unavailable  6 (4 server error, 2 circuit open)",
         ):
             assert expected in drawn, expected
@@ -359,6 +437,7 @@ class TestOperatorProgress:
                         _BEFORE.provider,
                         circuit=BreakerState.OPEN,
                         retry_in_seconds=12.0,
+                        cooldown_seconds=None,
                         consecutive_failures=0,
                     ),
                 ),

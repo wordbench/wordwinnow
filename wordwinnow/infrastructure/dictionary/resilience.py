@@ -21,6 +21,9 @@ from enum import (
     Enum,
     auto,
 )
+from random import (
+    random as uniform_random,
+)
 from time import (
     monotonic,
 )
@@ -33,6 +36,11 @@ type MonotonicClock = Callable[[], float]
 
 type Sleep = Callable[[float], Awaitable[None]]
 
+# WARN:
+# A wait shorter than this is no wait: a clock compared with a moment computed from it can stop a hair short of it,
+# and sleeping that hair again and again would never reach the token.
+_NEGLIGIBLE_SECONDS: Final = 1e-6
+
 
 @final
 class TokenBucket:
@@ -41,6 +49,10 @@ class TokenBucket:
 
     A caller that finds the bucket empty waits for the next token rather than
     being refused.
+
+    A pause, which a provider's request to slow down starts, holds every
+    caller until it ends and then admits them one at a time at the rate, so
+    its end never releases a burst.
     """
 
     def __init__(
@@ -106,16 +118,16 @@ class TokenBucket:
         included.
         """
 
-        elapsed = max(
-            0.0,
-            self._clock() - self._refilled_at,
-        )
+        now = self._clock()
+
+        if now < self._refilled_at:
+            return 0.0
 
         return max(
             0.0,
             min(
                 self._capacity,
-                self._tokens + elapsed * self._rate,
+                self._tokens + (now - self._refilled_at) * self._rate,
             ),
         )
 
@@ -131,9 +143,16 @@ class TokenBucket:
 
     async def acquire(
         self,
-    ) -> None:
+        *,
+        max_pause_seconds: float | None = None,
+    ) -> bool:
         """
-        Take one token, waiting for it when none is available.
+        Take one token, waiting for it when none is available, and say whether
+        one was taken.
+
+        With `max_pause_seconds`, a caller that a pause would hold longer than
+        that takes nothing and is told so at once, while a wait for the rate
+        alone is always waited out.
         """
 
         self._waiting += 1
@@ -142,33 +161,72 @@ class TokenBucket:
             # NOTE:
             # The lock is held across the wait, so waiters are served in arrival order and never race for one token.
             async with self._lock:
-                self._refill()
-
-                if self._tokens < 1.0:
-                    await self._sleep(
-                        (1.0 - self._tokens) / self._rate,
-                    )
-
+                while True:
                     self._refill()
 
-                self._tokens -= 1.0
+                    now = self._clock()
+
+                    wait = (
+                        max(
+                            0.0,
+                            self._refilled_at - now,
+                        )
+                        + max(
+                            0.0,
+                            1.0 - self._tokens,
+                        )
+                        / self._rate
+                    )
+
+                    if wait < _NEGLIGIBLE_SECONDS:
+                        self._tokens -= 1.0
+
+                        return True
+
+                    if max_pause_seconds is not None and self._refilled_at - now > max_pause_seconds:
+                        return False
+
+                    await self._sleep(
+                        wait,
+                    )
 
         finally:
             self._waiting -= 1
+
+    def pause(
+        self,
+        *,
+        until: float,
+    ) -> None:
+        """
+        Issue no token before `until`, one at `until`, and then the usual
+        rate.
+
+        Tokens that would have refilled meanwhile are not kept, because the
+        provider has said it is getting more than it can take; a pause that
+        ends sooner than one already in force changes nothing.
+        """
+
+        if until <= self._refilled_at:
+            return
+
+        self._tokens = 1.0
+
+        self._refilled_at = until
 
     def _refill(
         self,
     ) -> None:
         now = self._clock()
 
-        elapsed = max(
-            0.0,
-            now - self._refilled_at,
-        )
+        # NOTE:
+        # During a pause nothing refills, and the tokens stand as they will be when it ends.
+        if now <= self._refilled_at:
+            return
 
         self._tokens = min(
             self._capacity,
-            self._tokens + elapsed * self._rate,
+            self._tokens + (now - self._refilled_at) * self._rate,
         )
 
         self._refilled_at = now
@@ -207,7 +265,11 @@ class Permit(
 class CircuitBreaker:
     """
     Stops calls after `failure_threshold` consecutive failures and lets one
-    trial call through once `recovery_seconds` have passed.
+    trial call through once `recovery_seconds` have passed and every wait a
+    failure named has ended, whichever is later.
+
+    `jitter` is the share of each recovery period that is random, which
+    shortens the period and never lengthens it.
 
     A successful trial closes the circuit again; a failed one reopens it for
     another recovery period.
@@ -224,8 +286,12 @@ class CircuitBreaker:
         *,
         failure_threshold: int,
         recovery_seconds: float,
+        jitter: float = 0.0,
         clock: MonotonicClock = monotonic,
+        random: Callable[[], float] = uniform_random,
     ) -> None:
+        # TEST:
+        # The random draw is injected so a test can fix where in its range each period falls.
         if failure_threshold < 1:
             raise ValueError(
                 f"a circuit breaker requires a threshold of at least one, got {failure_threshold}",
@@ -236,17 +302,30 @@ class CircuitBreaker:
                 f"a circuit breaker requires a positive recovery period, got {recovery_seconds}",
             )
 
+        if not 0 <= jitter < 1:
+            raise ValueError(
+                f"a circuit breaker requires a random share from nought to below one, got {jitter}",
+            )
+
         self._failure_threshold: Final = failure_threshold
 
         self._recovery_seconds: Final = recovery_seconds
 
+        self._jitter: Final = jitter
+
         self._clock: Final = clock
+
+        self._random: Final = random
 
         self._state = BreakerState.CLOSED
 
         self._failures = 0
 
-        self._opened_at = 0.0
+        # NOTE:
+        # When the latest wait a failure named ends, whichever failure named it, since no trial may come before it.
+        self._named_until = 0.0
+
+        self._trial_at = 0.0
 
         self._trial: Future[None] | None = None
 
@@ -268,6 +347,18 @@ class CircuitBreaker:
         return self._state
 
     @property
+    def trial(
+        self,
+    ) -> object | None:
+        """
+        The trial in flight, the same object for its whole course, or `None`
+        when there is none, so a call that held it can tell whether it still
+        does.
+        """
+
+        return self._trial
+
+    @property
     def retry_in_seconds(
         self,
     ) -> float | None:
@@ -278,7 +369,7 @@ class CircuitBreaker:
         if self.state is not BreakerState.OPEN:
             return None
 
-        return self._recovery_seconds - (self._clock() - self._opened_at)
+        return self._trial_at - self._clock()
 
     @property
     def consecutive_failures(
@@ -362,27 +453,57 @@ class CircuitBreaker:
         self,
         *,
         trial: bool,
+        retry_after_seconds: float | None = None,
     ) -> None:
         """
-        Note that a permitted call failed.
+        Note that a permitted call failed, with how long the provider asked to
+        be left alone, when it said.
 
         The circuit opens at the threshold, and at once when the call was the
-        trial.
+        trial, until the recovery period has passed and every wait a failure
+        named has ended, whichever is later.
 
-        Another call that fails while the circuit is open starts the recovery
-        period again, and one that fails during the trial leaves the trial to
-        decide.
+        Another call that fails while the circuit is open, having been
+        admitted before it opened, leaves the trial where it is unless the
+        provider now asks for a longer wait, because only the trial decides;
+        one that fails during the trial leaves the trial to decide, and the
+        wait it names holds back the trial after it.
         """
+
+        now = self._clock()
+
+        # NOTE:
+        # A wait the provider named is the least time before the next trial whenever a failure named it: before the
+        # circuit opened, as it opened, while it was open, or during the trial.
+        if retry_after_seconds is not None:
+            self._named_until = max(
+                self._named_until,
+                now + retry_after_seconds,
+            )
 
         if self._state is BreakerState.HALF_OPEN and not trial:
             return
 
+        if self._state is BreakerState.OPEN and not trial:
+            self._trial_at = max(
+                self._trial_at,
+                self._named_until,
+            )
+
+            return
+
         self._failures += 1
 
-        if trial or self._state is not BreakerState.CLOSED or self._failures >= self._failure_threshold:
+        if trial or self._failures >= self._failure_threshold:
             self._state = BreakerState.OPEN
 
-            self._opened_at = self._clock()
+            # NOTE:
+            # The random share shortens the period and never lengthens it, and the provider's own waits are the least
+            # the circuit stays open, whatever the draw.
+            self._trial_at = max(
+                now + self._recovery_seconds * (1.0 - self._jitter * self._random()),
+                self._named_until,
+            )
 
             self._failures = 0
 
@@ -406,7 +527,10 @@ class CircuitBreaker:
     def _recovered(
         self,
     ) -> bool:
-        return self._clock() - self._opened_at >= self._recovery_seconds
+        # NOTE:
+        # The moment of the trial is a sum the clock reaches by other sums, which can fall a hair short of it, and a
+        # refusal for that hair would name a wait of nought.
+        return self._trial_at - self._clock() < _NEGLIGIBLE_SECONDS
 
     def _settle(
         self,

@@ -2,11 +2,12 @@
 What the command line shows an operator while an analysis runs: the learner's
 line, and under it what the dictionary is doing.
 
-Under the line stand the circuit, the breaker's count of lookups that failed
-in a row, the request budget, how the analysis's lookups have been answered so
-far, the ones left unanswered and the retries, and each lookup in flight with
-what it is waiting for: a request has a bar against its timeout, and a pause
-before a retry a bar against the pause's length.
+Under the line stand the circuit, the breaker's count of requests that failed
+in a row, any pause the provider asked for, the request budget, how the
+analysis's lookups have been answered so far, the ones left unanswered and the
+retries, and each lookup in flight with what it is waiting for: a request has
+a bar against its timeout, and a pause before a retry a bar against the
+pause's length.
 
 Like the learner's line, the view is drawn on standard error, only at an
 interactive terminal, and disappears when the analysis ends.
@@ -328,6 +329,17 @@ class OperatorProgress:
             ),
         )
 
+        # NOTE:
+        # The provider's own pause stands apart from the circuit: it is a request the provider made of every lookup,
+        # with an end it named, while the circuit is the client's judgment of the provider.
+        grid.add_row(
+            "pause",
+            _pause(
+                provider,
+                since,
+            ),
+        )
+
         grid.add_row(
             "budget",
             _budget(
@@ -391,10 +403,10 @@ def _circuit(
             )
 
             # NOTE:
-            # A lookup the circuit admitted before it opened still makes its remaining attempts, as the rows under it
-            # show, so only a new lookup is kept from the provider.
+            # A request already on its way when the circuit opened still gets its answer, as the rows under it show,
+            # but no lookup sends another until the trial.
             return Text.from_markup(
-                text=f"[red]open[/red]: no new lookup asks the provider for {remaining:.0f} s more",
+                text=f"[red]open[/red]: no lookup asks the provider for {remaining:.0f} s more",
             )
 
         case BreakerState.HALF_OPEN:
@@ -402,8 +414,7 @@ def _circuit(
 
             if any(lookup.trial for lookup in provider.lookups):
                 # NOTE:
-                # The trial is a lookup, which may take all its attempts, and the others wait for its outcome rather
-                # than for one request's answer.
+                # The trial is one request, and every other lookup waits for its answer.
                 return Text.from_markup(
                     text=f"[yellow]half-open[/yellow]: one lookup is the trial, and {waiting} {
                         _plural(
@@ -417,6 +428,28 @@ def _circuit(
             return Text.from_markup(
                 text="[yellow]half-open[/yellow]: the next lookup tries the provider",
             )
+
+
+def _pause(
+    provider: ProviderActivity,
+    since: float,
+    /,
+) -> Text:
+    if provider.cooldown_seconds is None:
+        return Text(
+            text="none: the provider has not asked the client to slow down",
+        )
+
+    remaining = max(
+        0.0,
+        provider.cooldown_seconds - since,
+    )
+
+    return Text.from_markup(
+        text=(
+            f"[yellow]the provider asked the client to slow down[/yellow]: no lookup asks for {remaining:.0f} s more"
+        ),
+    )
 
 
 def _in_a_row(
@@ -433,7 +466,7 @@ def _in_a_row(
     if provider.circuit is not BreakerState.CLOSED:
         return "not counted while the circuit is open: the trial decides"
 
-    return f"{count} of {threshold} lookups failed since the last answer; at {threshold} the circuit opens"
+    return f"{count} of {threshold} requests failed since the last answer; at {threshold} the circuit opens"
 
 
 def _budget(
@@ -639,6 +672,9 @@ def _waiting_for(
 
         case WaitCause.BUDGET:
             return "waiting for a token"
+
+        case WaitCause.COOLDOWN:
+            return "waiting out the provider's pause"
 
         case WaitCause.PROVIDER:
             trial = ", the trial" if lookup.trial else ""
