@@ -114,9 +114,10 @@ finish, and shows the result; `wordwinnow stats` then summarizes every completed
 analysis from ClickHouse.
 
 The story's 1,508 vocabulary items come to 1,400 requests to the provider, one
-per distinct lemma, and the enrichment service keeps to two requests a second
-against the Free Dictionary API, so the first analysis takes about twelve
-minutes at the least, and later ones reuse the cache.
+per distinct lemma, and the enrichment service sends them at up to two a
+second, but when last measured the Free Dictionary API answered about one a
+second and refused the rest until each 20-second window ended, so the first
+analysis took over twenty-two minutes, and later ones reuse the cache.
 
 The command waits up to fifteen minutes, which `--timeout` changes, and the
 analysis goes on whether or not it waits: when the wait ends, or Ctrl-C stops

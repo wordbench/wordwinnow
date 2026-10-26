@@ -26,7 +26,7 @@ measurements count.
 | How long does the whole 8,530-word sample story take without the dictionary, analyzed again in the same process? | 0.29 s, or 0.31 s with the level model | Measured |
 | What grows with the text? | Tagging grows with the words; WordNet grows with the distinct words, which grow more slowly | Measured |
 | What does the dictionary cost? | One network round trip per distinct word: 1,401 for the story, 19 s with eight in flight against a provider that answers in 0.1 s | Measured |
-| And against the Free Dictionary API? | About 700 s at the least for the story's first analysis, because its budget is two requests a second | Worked out |
+| And against the Free Dictionary API? | About 1,350 s for the story's first analysis, because the provider answered about 20 requests in each 20-second window | Measured once |
 | And a second time? | About 0.015 s: a warm cache answers every lookup | Measured |
 | What do more workers buy? | 116, 180, and 274 analyses per minute with one, two, and four workers | Measured |
 
@@ -110,9 +110,14 @@ divided by the lookups in flight; with a budget it cannot go below the
 requests divided by the budget, 70 s for 1,401 requests at 20 a second, and
 more lookups in flight buy nothing past that.
 
-The Free Dictionary API's own budget in Wordwinnow is two requests a second
-after a burst of four, so the story's first analysis against it takes about
-700 s at the least; that is worked out from the budget, not measured.
+The Free Dictionary API's budget in Wordwinnow is two requests a second after
+a burst of four, but when measured once the provider answered 20 requests in
+each 20-second window and refused the rest until the window ended, so the
+story's first analysis took 1,354 s, with 1,466 requests of which 65 were
+refused: the provider's refusals, not the budget, set that length.
+
+That window is what the provider did then, not a limit it publishes, and it
+may change.
 
 A real provider's latency also varies: one cold analysis of a 731-word text
 against the Free Dictionary API, observed once, took about 21 minutes, with
