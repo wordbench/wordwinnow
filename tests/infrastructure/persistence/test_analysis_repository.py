@@ -519,6 +519,69 @@ class TestListing:
             loaded=by_id[interrupted.id],
         )
 
+    async def test_a_processing_analysis_whose_worker_reported_since_the_threshold_is_not_stale(
+        self,
+        *,
+        new_unit_of_work: NewUnitOfWork,
+    ) -> None:
+        reporting = processing_analysis()
+
+        quiet = processing_analysis()
+
+        for analysis in (
+            reporting,
+            quiet,
+        ):
+            await store_analysis(
+                analysis=analysis,
+                new_unit_of_work=new_unit_of_work,
+            )
+
+        # NOTE:
+        # Both started before the threshold; one worker has reported since it, the other only before it.
+        for (
+            analysis,
+            seconds,
+        ) in (
+            (
+                reporting,
+                10,
+            ),
+            (
+                quiet,
+                1,
+            ),
+        ):
+            async with new_unit_of_work() as uow:
+                await uow.analyses.record_progress(
+                    analysis_id=analysis.id,
+                    progress=ProcessingProgress(
+                        stage=Stage.DICTIONARY_ENRICHMENT,
+                        steps=2,
+                        done=1,
+                        unavailable=0,
+                        dictionary_paused=False,
+                        reported_at=EPOCH
+                        + timedelta(
+                            seconds=seconds,
+                        ),
+                    ),
+                )
+
+                await uow.commit()
+
+        async with new_unit_of_work() as uow:
+            stale = await uow.analyses.list_stale(
+                stale_before=EPOCH
+                + timedelta(
+                    seconds=5,
+                ),
+            )
+
+        assert frozenset(analysis.id for analysis in stale) == {
+            quiet.id,
+        }
+
 
 @final
 class TestExpiry:

@@ -22,6 +22,9 @@ from tests.fakes.ports import (
     RaisingPublisher,
     RecordingPublisher,
 )
+from wordwinnow.application.dto import (
+    ProcessingProgress,
+)
 from wordwinnow.application.errors import (
     MessagingUnavailableError,
 )
@@ -35,6 +38,7 @@ from wordwinnow.domain.analysis import (
     AnalysisOptions,
     AnalysisRequested,
     AnalysisStatus,
+    Stage,
 )
 from wordwinnow.domain.cefr import (
     CefrLevel,
@@ -99,6 +103,28 @@ async def _started(
         await uow.commit()
 
     return analysis.id
+
+
+async def _reported(
+    storage: InMemoryStorage,
+    analysis_id: AnalysisId,
+    reported_at: datetime,
+    /,
+) -> None:
+    async with storage.new_unit_of_work() as uow:
+        await uow.analyses.record_progress(
+            analysis_id=analysis_id,
+            progress=ProcessingProgress(
+                stage=Stage.DICTIONARY_ENRICHMENT,
+                steps=2,
+                done=1,
+                unavailable=0,
+                dictionary_paused=False,
+                reported_at=reported_at,
+            ),
+        )
+
+        await uow.commit()
 
 
 @final
@@ -237,6 +263,84 @@ class TestRequeueStaleAnalyses:
         assert publisher.published == []
 
         assert storage.analyses[analysis_id].status is AnalysisStatus.PROCESSING
+
+    async def test_a_processing_analysis_whose_worker_still_reports_is_not_stale(
+        self,
+    ) -> None:
+        storage = InMemoryStorage()
+
+        analysis_id = await _started(
+            storage,
+            requested_at=EPOCH,
+            started_at=EPOCH,
+        )
+
+        await _reported(
+            storage,
+            analysis_id,
+            EPOCH
+            + timedelta(
+                minutes=55,
+            ),
+        )
+
+        publisher = RecordingPublisher()
+
+        requeued = await requeue_stale_analyses(
+            older_than_seconds=600,
+            new_unit_of_work=storage.new_unit_of_work,
+            publisher=publisher,
+            clock=FakeClock(
+                at=EPOCH
+                + timedelta(
+                    hours=1,
+                ),
+            ),
+        )
+
+        assert requeued == ()
+
+        assert publisher.published == []
+
+        assert storage.analyses[analysis_id].status is AnalysisStatus.PROCESSING
+
+    async def test_a_processing_analysis_whose_worker_went_quiet_is_stale(
+        self,
+    ) -> None:
+        storage = InMemoryStorage()
+
+        analysis_id = await _started(
+            storage,
+            requested_at=EPOCH,
+            started_at=EPOCH,
+        )
+
+        await _reported(
+            storage,
+            analysis_id,
+            EPOCH
+            + timedelta(
+                minutes=40,
+            ),
+        )
+
+        publisher = RecordingPublisher()
+
+        requeued = await requeue_stale_analyses(
+            older_than_seconds=600,
+            new_unit_of_work=storage.new_unit_of_work,
+            publisher=publisher,
+            clock=FakeClock(
+                at=EPOCH
+                + timedelta(
+                    hours=1,
+                ),
+            ),
+        )
+
+        assert requeued == (analysis_id,)
+
+        assert storage.analyses[analysis_id].status is AnalysisStatus.REQUESTED
 
     async def test_the_store_is_committed_before_anything_is_published(
         self,

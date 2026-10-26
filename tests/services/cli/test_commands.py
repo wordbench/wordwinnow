@@ -104,12 +104,14 @@ from wordwinnow.services.cli import (
 )
 from wordwinnow.services.cli.commands import (
     AnalysisTimedOutError,
+    AnalysisWaitInterruptedError,
     analyze_locally,
     analyze_remotely,
     doctor,
     list_recent,
     requeue,
     show,
+    wait_remotely,
 )
 from wordwinnow.services.cli.intake_client import (
     IntakeUnavailableError,
@@ -316,11 +318,15 @@ class TestLocalFlow:
 
         assert all(study_item.dictionary is None for study_item in analysis.items)
 
-        stored = await show(
+        watched = await show(
             analysis_id=analysis.id,
             settings=settings,
             local=True,
         )
+
+        stored = watched.analysis
+
+        assert watched.progress is None
 
         assert stored == analysis
 
@@ -499,6 +505,235 @@ class TestRemoteFlow:
                 timeout_seconds=0.5,
                 transport=transport,
             )
+
+    async def test_a_wait_that_ends_leaves_the_analysis_going_and_says_how_to_wait_again(
+        self,
+        *,
+        settings: Settings,
+        intake: tuple[InMemoryStorage, ASGITransport],
+    ) -> None:
+        (
+            storage,
+            transport,
+        ) = intake
+
+        with raises(
+            expected_exception=AnalysisTimedOutError,
+        ) as caught:
+            await analyze_remotely(
+                request=_request(),
+                settings=settings,
+                wait=True,
+                timeout_seconds=0.5,
+                transport=transport,
+            )
+
+        (analysis_id,) = storage.analyses
+
+        assert "goes on without this command" in str(
+            object=caught.value,
+        )
+
+        assert f"`wordwinnow show {analysis_id} --wait` waits for it again" in str(
+            object=caught.value,
+        )
+
+        assert storage.analyses[analysis_id].status is AnalysisStatus.REQUESTED
+
+    async def test_waiting_again_takes_up_the_same_analysis_and_requests_nothing(
+        self,
+        *,
+        settings: Settings,
+        intake: tuple[InMemoryStorage, ASGITransport],
+    ) -> None:
+        (
+            storage,
+            transport,
+        ) = intake
+
+        with raises(
+            expected_exception=AnalysisTimedOutError,
+        ):
+            await analyze_remotely(
+                request=_request(),
+                settings=settings,
+                wait=True,
+                timeout_seconds=0.5,
+                transport=transport,
+            )
+
+        (analysis_id,) = storage.analyses
+
+        # NOTE:
+        # A worker that takes the analysis up only after the first command stopped waiting, and completes it while the
+        # second one waits.
+        async def work() -> None:
+            await asyncio_sleep(
+                delay=0.2,
+            )
+
+            async with storage.new_unit_of_work() as uow:
+                analysis = await uow.analyses.get(
+                    analysis_id=analysis_id,
+                )
+
+                assert analysis is not None
+
+                analysis.start(
+                    at=EPOCH,
+                )
+
+                await uow.analyses.save(
+                    analysis=analysis,
+                )
+
+                await uow.commit()
+
+            async with storage.new_unit_of_work() as uow:
+                analysis = await uow.analyses.get(
+                    analysis_id=analysis_id,
+                )
+
+                assert analysis is not None
+
+                analysis.complete(
+                    at=EPOCH,
+                    items=(),
+                    stage_timings=(),
+                )
+
+                await uow.analyses.save(
+                    analysis=analysis,
+                )
+
+                await uow.commit()
+
+        working = create_task(
+            coro=work(),
+        )
+
+        analysis = await wait_remotely(
+            analysis_id=analysis_id,
+            settings=settings,
+            timeout_seconds=5,
+            transport=transport,
+        )
+
+        await working
+
+        assert analysis.id == analysis_id
+
+        assert analysis.status is AnalysisStatus.COMPLETED
+
+        assert tuple(
+            storage.analyses,
+        ) == (analysis_id,)
+
+    async def test_an_interrupted_wait_names_the_analysis_and_how_to_wait_again(
+        self,
+        *,
+        settings: Settings,
+        intake: tuple[InMemoryStorage, ASGITransport],
+    ) -> None:
+        (
+            storage,
+            transport,
+        ) = intake
+
+        waiting = create_task(
+            coro=analyze_remotely(
+                request=_request(),
+                settings=settings,
+                wait=True,
+                timeout_seconds=60,
+                transport=transport,
+            ),
+        )
+
+        # NOTE:
+        # Ctrl-C reaches a command as the cancellation of its task, here once the analysis is requested.
+        while not storage.analyses:
+            await asyncio_sleep(
+                delay=0.01,
+            )
+
+        waiting.cancel()
+
+        with raises(
+            expected_exception=AnalysisWaitInterruptedError,
+        ) as caught:
+            await waiting
+
+        (analysis_id,) = storage.analyses
+
+        assert f"stopped waiting for analysis {analysis_id}, which goes on" in str(
+            object=caught.value,
+        )
+
+        assert storage.analyses[analysis_id].status is AnalysisStatus.REQUESTED
+
+    async def test_showing_an_analysis_in_progress_brings_its_workers_report(
+        self,
+        *,
+        settings: Settings,
+        intake: tuple[InMemoryStorage, ASGITransport],
+    ) -> None:
+        (
+            storage,
+            transport,
+        ) = intake
+
+        await analyze_remotely(
+            request=_request(),
+            settings=settings,
+            wait=False,
+            timeout_seconds=5,
+            transport=transport,
+        )
+
+        (analysis_id,) = storage.analyses
+
+        async with storage.new_unit_of_work() as uow:
+            analysis = await uow.analyses.get(
+                analysis_id=analysis_id,
+            )
+
+            assert analysis is not None
+
+            analysis.start(
+                at=EPOCH,
+            )
+
+            await uow.analyses.save(
+                analysis=analysis,
+            )
+
+            await uow.analyses.record_progress(
+                analysis_id=analysis_id,
+                progress=ProcessingProgress(
+                    stage=Stage.DICTIONARY_ENRICHMENT,
+                    steps=2,
+                    done=1,
+                    unavailable=0,
+                    dictionary_paused=False,
+                    reported_at=EPOCH,
+                ),
+            )
+
+            await uow.commit()
+
+        watched = await show(
+            analysis_id=analysis_id,
+            settings=settings,
+            local=False,
+            transport=transport,
+        )
+
+        assert watched.analysis.status is AnalysisStatus.PROCESSING
+
+        assert watched.progress is not None
+
+        assert watched.progress.done == 1
 
     async def test_while_it_waits_progress_says_what_the_service_last_reported(
         self,

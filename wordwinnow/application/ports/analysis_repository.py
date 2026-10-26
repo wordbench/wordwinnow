@@ -133,7 +133,8 @@ class AnalysisRepository(
     ) -> tuple[Analysis, ...]:
         """
         Analyses still requested that were requested before the instant given,
-        and analyses still processing that started before it.
+        and analyses still processing that started before it and whose worker
+        has not reported how far it has come since then.
         """
 
         ...

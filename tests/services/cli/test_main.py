@@ -7,6 +7,7 @@ These tests need the NLTK data `make nltk-data` installs.
 from datetime import (
     UTC,
     datetime,
+    timedelta,
 )
 from json import (
     loads,
@@ -16,6 +17,7 @@ from pathlib import (
 )
 from re import (
     match,
+    search,
 )
 from typing import (
     Final,
@@ -37,9 +39,14 @@ from typer.testing import (
     CliRunner,
 )
 
+from wordwinnow.application.dto import (
+    ProcessingProgress,
+)
 from wordwinnow.domain.analysis import (
     Analysis,
     AnalysisOptions,
+    AnalysisStatus,
+    Stage,
     request_an_analysis,
 )
 from wordwinnow.domain.cefr import (
@@ -48,6 +55,9 @@ from wordwinnow.domain.cefr import (
 from wordwinnow.domain.document import (
     Document,
     DocumentOrigin,
+)
+from wordwinnow.domain.identifiers import (
+    AnalysisId,
 )
 from wordwinnow.domain.learner import (
     LearnerProfile,
@@ -62,6 +72,9 @@ from wordwinnow.infrastructure.settings import (
 from wordwinnow.services.cli import (
     commands,
     main,
+)
+from wordwinnow.services.cli.intake_client import (
+    WatchedAnalysis,
 )
 from wordwinnow.services.cli.main import (
     SOURCE_TOPICS,
@@ -767,3 +780,316 @@ class TestCli:
             assert name in result.stdout
 
         assert "WORDWINNOW_NYT_API_KEY" in result.stdout
+
+
+def _processing() -> Analysis:
+    analysis = request_an_analysis(
+        document=Document(
+            title="a-scandal-in-bohemia",
+            text=_TEXT,
+            origin=DocumentOrigin.CUSTOM_TEXT,
+            reference="a-scandal-in-bohemia.txt",
+        ),
+        profile=LearnerProfile(
+            level=CefrLevel.B1,
+            target_level=CefrLevel.B2,
+        ),
+        options=AnalysisOptions(),
+        at=_EPOCH,
+    )
+
+    analysis.start(
+        at=_EPOCH,
+    )
+
+    return analysis
+
+
+def _reported(
+    reported_at: datetime,
+    /,
+) -> ProcessingProgress:
+    return ProcessingProgress(
+        stage=Stage.DICTIONARY_ENRICHMENT,
+        steps=2,
+        done=1,
+        unavailable=0,
+        dictionary_paused=False,
+        reported_at=reported_at,
+    )
+
+
+@final
+class TestShowingAnAnalysisInProgress:
+    def test_it_says_where_the_analysis_stands_and_how_to_wait_for_it(
+        self,
+        *,
+        workspace: Path,
+        monkeypatch: MonkeyPatch,
+    ) -> None:
+        analysis = _processing()
+
+        async def watched(
+            *,
+            analysis_id: AnalysisId,
+            settings: Settings,
+            local: bool,
+        ) -> WatchedAnalysis:
+            return WatchedAnalysis(
+                analysis=analysis,
+                progress=_reported(
+                    datetime.now(
+                        tz=UTC,
+                    )
+                    - timedelta(
+                        seconds=12,
+                    ),
+                ),
+            )
+
+        monkeypatch.setattr(
+            target=commands,
+            name="show",
+            value=watched,
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "show",
+                str(
+                    object=analysis.id,
+                ),
+            ],
+        )
+
+        assert result.exit_code == 0
+
+        output = " ".join(
+            result.output.split(),
+        )
+
+        assert search(
+            pattern=(
+                r"processing: looking the words up in the dictionary, 1 of 2; its worker last reported 1\d s ago;"
+            ),
+            string=output,
+        )
+
+        assert f"`wordwinnow show {analysis.id} --wait` waits for it" in output
+
+        assert "admin requeue" not in output
+
+    def test_a_worker_quiet_for_longer_than_the_requeue_allows_is_named_so(
+        self,
+        *,
+        workspace: Path,
+        monkeypatch: MonkeyPatch,
+    ) -> None:
+        analysis = _processing()
+
+        async def watched(
+            *,
+            analysis_id: AnalysisId,
+            settings: Settings,
+            local: bool,
+        ) -> WatchedAnalysis:
+            return WatchedAnalysis(
+                analysis=analysis,
+                progress=_reported(
+                    _EPOCH,
+                ),
+            )
+
+        monkeypatch.setattr(
+            target=commands,
+            name="show",
+            value=watched,
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "show",
+                str(
+                    object=analysis.id,
+                ),
+            ],
+        )
+
+        assert result.exit_code == 0
+
+        assert "longer than the 600 s after which `wordwinnow admin requeue` hands it to a worker again" in " ".join(
+            result.output.split(),
+        )
+
+    def test_the_json_carries_the_status_and_nothing_else(
+        self,
+        *,
+        workspace: Path,
+        monkeypatch: MonkeyPatch,
+    ) -> None:
+        analysis = _processing()
+
+        async def watched(
+            *,
+            analysis_id: AnalysisId,
+            settings: Settings,
+            local: bool,
+        ) -> WatchedAnalysis:
+            return WatchedAnalysis(
+                analysis=analysis,
+                progress=_reported(
+                    _EPOCH,
+                ),
+            )
+
+        monkeypatch.setattr(
+            target=commands,
+            name="show",
+            value=watched,
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "show",
+                str(
+                    object=analysis.id,
+                ),
+                "--json",
+            ],
+        )
+
+        assert result.exit_code == 0
+
+        assert (
+            loads(
+                s=result.stdout,
+            )["status"]
+            == "processing"
+        )
+
+    def test_waiting_takes_up_the_analysis_named_and_shows_it_when_done(
+        self,
+        *,
+        workspace: Path,
+        monkeypatch: MonkeyPatch,
+    ) -> None:
+        analysis = _processing()
+
+        analysis.fail(
+            at=_EPOCH,
+            reason="RuntimeError: the tagger was not there",
+        )
+
+        waited: list[AnalysisId] = []
+
+        async def wait_remotely(
+            *,
+            analysis_id: AnalysisId,
+            settings: Settings,
+            timeout_seconds: float,
+            progress: AnalysisProgress = UNWATCHED,
+            watch: DictionaryWatch | None = None,
+        ) -> Analysis:
+            waited.append(
+                analysis_id,
+            )
+
+            return analysis
+
+        monkeypatch.setattr(
+            target=commands,
+            name="wait_remotely",
+            value=wait_remotely,
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "show",
+                str(
+                    object=analysis.id,
+                ),
+                "--wait",
+                "--timeout",
+                "5",
+            ],
+        )
+
+        assert result.exit_code == 0
+
+        assert waited == [
+            analysis.id,
+        ]
+
+        assert analysis.status is AnalysisStatus.FAILED
+
+        assert "the tagger was not there" in result.output
+
+    def test_waiting_on_the_local_store_is_refused(
+        self,
+        *,
+        workspace: Path,
+    ) -> None:
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "show",
+                str(
+                    object=AnalysisId.new(),
+                ),
+                "--local",
+                "--wait",
+            ],
+        )
+
+        assert result.exit_code == 2
+
+        assert "--wait waits for the services" in result.output
+
+    def test_an_interrupted_wait_says_the_analysis_goes_on_and_ends_as_an_interrupt_does(
+        self,
+        *,
+        workspace: Path,
+        monkeypatch: MonkeyPatch,
+    ) -> None:
+        async def interrupted(
+            *,
+            analysis_id: AnalysisId,
+            settings: Settings,
+            timeout_seconds: float,
+            progress: AnalysisProgress = UNWATCHED,
+            watch: DictionaryWatch | None = None,
+        ) -> Analysis:
+            raise commands.AnalysisWaitInterruptedError(
+                f"stopped waiting for analysis {analysis_id}, which goes on without this command",
+            )
+
+        monkeypatch.setattr(
+            target=commands,
+            name="wait_remotely",
+            value=interrupted,
+        )
+
+        analysis_id = AnalysisId.new()
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "show",
+                str(
+                    object=analysis_id,
+                ),
+                "--wait",
+            ],
+        )
+
+        assert result.exit_code == 130
+
+        assert f"stopped waiting for analysis {analysis_id}, which goes on" in " ".join(
+            result.output.split(),
+        )
+
+        assert "error:" not in result.output

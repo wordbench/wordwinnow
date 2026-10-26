@@ -7,6 +7,7 @@ in the same domain objects and the same report.
 """
 
 from asyncio import (
+    CancelledError,
     sleep,
 )
 from collections.abc import (
@@ -127,6 +128,7 @@ from wordwinnow.services.cli.enrichment_client import (
 )
 from wordwinnow.services.cli.intake_client import (
     IntakeClient,
+    WatchedAnalysis,
 )
 from wordwinnow.services.enrichment.app import (
     EnrichmentDependencies,
@@ -182,6 +184,15 @@ _WAITING: Final = MappingProxyType(
     },
 )
 
+# NOTE:
+# The statuses at which the remote flow stops waiting.
+_FINISHED: Final = frozenset(
+    (
+        AnalysisStatus.COMPLETED,
+        AnalysisStatus.FAILED,
+    ),
+)
+
 _logger: Final = getLogger(
     name="wordwinnow.cli",
 )
@@ -194,7 +205,21 @@ class AnalysisTimedOutError(
     """
     Raised when a remote analysis did not finish within the wait.
 
-    Not an error of the analysis: `wordwinnow show` finds it later.
+    Not an error of the analysis, which goes on without the command:
+    `wordwinnow show` finds it later, and `wordwinnow show --wait` waits for
+    it again.
+    """
+
+
+@final
+class AnalysisWaitInterruptedError(
+    RuntimeError,
+):
+    """
+    Raised when an interrupt stops a command waiting for a remote analysis.
+
+    The analysis goes on without the command, as after a timeout, and the
+    message says how to take it up again.
     """
 
 
@@ -313,31 +338,13 @@ async def analyze_remotely(
     """
 
     async with AsyncExitStack() as stack:
-        client = IntakeClient(
-            base_url=settings.intake_url,
-            transport=transport,
+        client = await _intake(
+            stack,
+            settings,
+            transport,
+            watch,
+            enrichment_transport,
         )
-
-        stack.push_async_callback(
-            client.close,
-        )
-
-        if watch is not None:
-            enrichment = EnrichmentClient(
-                base_url=settings.enrichment_url or PUBLISHED_URL,
-                transport=enrichment_transport,
-            )
-
-            stack.push_async_callback(
-                enrichment.close,
-            )
-
-            await stack.enter_async_context(
-                cm=watching(
-                    read=enrichment.activity,
-                    watch=watch,
-                ),
-            )
 
         # NOTE:
         # Intake fetches a source's text before it answers, so a request naming a source says where the wait goes.
@@ -356,10 +363,109 @@ async def analyze_remotely(
             value=accepted.analysis_id,
         )
 
-        deadline = monotonic() + timeout_seconds
+        if not wait:
+            watched = await client.watch(
+                analysis_id=analysis_id,
+            )
 
-        reported: AnalysisStatus | None = None
+            return watched.analysis
 
+        return await _waited(
+            client,
+            analysis_id,
+            timeout_seconds,
+            progress,
+        )
+
+
+async def wait_remotely(
+    *,
+    analysis_id: AnalysisId,
+    settings: Settings,
+    timeout_seconds: float,
+    transport: AsyncBaseTransport | None = None,
+    progress: RemoteAnalysisProgress = UNWATCHED,
+    watch: DictionaryWatch | None = None,
+    enrichment_transport: AsyncBaseTransport | None = None,
+) -> Analysis:
+    """
+    Wait for an analysis the intake service already holds, as
+    `analyze_remotely` waits for one it has just requested, and request
+    nothing: a command that stopped waiting, or another terminal, takes up the
+    same analysis again.
+    """
+
+    async with AsyncExitStack() as stack:
+        client = await _intake(
+            stack,
+            settings,
+            transport,
+            watch,
+            enrichment_transport,
+        )
+
+        return await _waited(
+            client,
+            analysis_id,
+            timeout_seconds,
+            progress,
+        )
+
+
+async def _intake(
+    stack: AsyncExitStack,
+    settings: Settings,
+    transport: AsyncBaseTransport | None,
+    watch: DictionaryWatch | None,
+    enrichment_transport: AsyncBaseTransport | None,
+    /,
+) -> IntakeClient:
+    client = IntakeClient(
+        base_url=settings.intake_url,
+        transport=transport,
+    )
+
+    stack.push_async_callback(
+        client.close,
+    )
+
+    if watch is not None:
+        enrichment = EnrichmentClient(
+            base_url=settings.enrichment_url or PUBLISHED_URL,
+            transport=enrichment_transport,
+        )
+
+        stack.push_async_callback(
+            enrichment.close,
+        )
+
+        await stack.enter_async_context(
+            cm=watching(
+                read=enrichment.activity,
+                watch=watch,
+            ),
+        )
+
+    return client
+
+
+async def _waited(
+    client: IntakeClient,
+    analysis_id: AnalysisId,
+    timeout_seconds: float,
+    progress: RemoteAnalysisProgress,
+    /,
+) -> Analysis:
+    deadline = monotonic() + timeout_seconds
+
+    reported: AnalysisStatus | None = None
+
+    take_up = (
+        f"`wordwinnow show {analysis_id} --wait` waits for it again, and `wordwinnow show {analysis_id}` shows how "
+        "far it has come"
+    )
+
+    try:
         while True:
             watched = await client.watch(
                 analysis_id=analysis_id,
@@ -367,15 +473,16 @@ async def analyze_remotely(
 
             analysis = watched.analysis
 
-            if not wait or analysis.status in {
-                AnalysisStatus.COMPLETED,
-                AnalysisStatus.FAILED,
-            }:
+            if analysis.status in _FINISHED:
                 return analysis
 
+            # NOTE:
+            # The wait is the command's, not the analysis's: nothing is canceled, a worker goes on with it, and the
+            # message says how to take it up again rather than reading as a failure.
             if monotonic() >= deadline:
                 raise AnalysisTimedOutError(
-                    f"analysis {analysis_id} is still {analysis.status} after {timeout_seconds:.0f} s",
+                    f"analysis {analysis_id} is still {analysis.status} after {timeout_seconds:.0f} s and goes on "
+                    f"without this command: {take_up}",
                 )
 
             # NOTE:
@@ -400,6 +507,15 @@ async def analyze_remotely(
                 delay=POLL_SECONDS,
             )
 
+    # WARN:
+    # Ctrl-C reaches the command as the cancellation of its task, the only one a command's event loop cancels, and the
+    # analysis it waited for goes on in the services, so the cancellation ends here as the message that says so, which
+    # the command line prints instead of a bare interrupt.
+    except CancelledError as cancelled:
+        raise AnalysisWaitInterruptedError(
+            f"stopped waiting for analysis {analysis_id}, which goes on without this command: {take_up}",
+        ) from cancelled
+
 
 async def show(
     *,
@@ -407,18 +523,23 @@ async def show(
     settings: Settings,
     local: bool,
     transport: AsyncBaseTransport | None = None,
-) -> Analysis:
+) -> WatchedAnalysis:
     """
-    Read one analysis from the local store or the intake service.
+    Read one analysis from the local store or the intake service, with how far
+    a worker has come with it while it processes, which only the services
+    know.
     """
 
     if local:
         async with storage_profile(
             settings=settings,
         ) as profile:
-            return await show_an_analysis(
-                analysis_id=analysis_id,
-                new_unit_of_work=profile.new_unit_of_work,
+            return WatchedAnalysis(
+                analysis=await show_an_analysis(
+                    analysis_id=analysis_id,
+                    new_unit_of_work=profile.new_unit_of_work,
+                ),
+                progress=None,
             )
 
     client = IntakeClient(
@@ -427,7 +548,7 @@ async def show(
     )
 
     try:
-        return await client.get(
+        return await client.watch(
             analysis_id=analysis_id,
         )
 

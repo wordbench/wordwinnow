@@ -266,6 +266,15 @@ class InMemoryAnalysisRepository:
                 analysis.status is AnalysisStatus.PROCESSING
                 and analysis.started_at is not None
                 and analysis.started_at < stale_before
+                and (
+                    (
+                        reported := self._progress.get(
+                            analysis.id,
+                        )
+                    )
+                    is None
+                    or reported.reported_at < stale_before
+                )
             )
         )
 

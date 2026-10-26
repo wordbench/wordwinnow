@@ -14,6 +14,10 @@ from asyncio import (
 from collections.abc import (
     Sequence,
 )
+from datetime import (
+    UTC,
+    datetime,
+)
 from enum import (
     auto,
 )
@@ -98,11 +102,13 @@ from wordwinnow.services.cli import (
 from wordwinnow.services.cli.intake_client import (
     IntakeRejectedError,
     IntakeUnavailableError,
+    WatchedAnalysis,
 )
 from wordwinnow.services.cli.operator import (
     OperatorProgress,
 )
 from wordwinnow.services.cli.progress import (
+    STAGE_DESCRIPTIONS,
     TerminalProgress,
 )
 from wordwinnow.services.cli.report import (
@@ -308,6 +314,27 @@ def _fail(
     )
 
 
+def _stopped_waiting(
+    exception: commands.AnalysisWaitInterruptedError,
+    /,
+) -> Exit:
+    # NOTE:
+    # Not an error: the command stopped and the analysis did not, so the message goes without the error's red prefix,
+    # and the status is the one a shell gives a command an interrupt ended.
+    _errors.print(
+        str(
+            object=exception,
+        ),
+        markup=False,
+        highlight=False,
+        soft_wrap=True,
+    )
+
+    return Exit(
+        code=130,
+    )
+
+
 def _validation_message(
     exception: ValidationError,
     /,
@@ -335,6 +362,74 @@ def _tiers(
     return tuple(
         tier,
     )
+
+
+def _still_in_progress(
+    watched: WatchedAnalysis,
+    stale_after_seconds: float,
+    /,
+) -> str | None:
+    analysis = watched.analysis
+
+    hint = f"`wordwinnow show {analysis.id} --wait` waits for it"
+
+    if analysis.status is AnalysisStatus.REQUESTED:
+        return f"requested, and no worker has taken it yet; {hint}"
+
+    if analysis.status is not AnalysisStatus.PROCESSING:
+        return None
+
+    progress = watched.progress
+
+    if progress is None:
+        return f"processing, and its worker has not reported yet; {hint}"
+
+    count = "" if progress.steps is None else f", {progress.done:,} of {progress.steps:,}"
+
+    unavailable = "" if not progress.unavailable else f", {progress.unavailable:,} unavailable"
+
+    # NOTE:
+    # How long ago the worker last reported is what tells a slow analysis from one whose worker stopped: a worker
+    # reports at least whenever a count or a wait changes, and `admin requeue` hands back one that has gone quiet for
+    # longer than the setting.
+    quiet = (
+        datetime.now(
+            tz=UTC,
+        )
+        - progress.reported_at
+    ).total_seconds()
+
+    stale = (
+        ""
+        if quiet <= stale_after_seconds
+        else (
+            f", longer than the {stale_after_seconds:.0f} s after which `wordwinnow admin requeue` hands it to a "
+            "worker again"
+        )
+    )
+
+    return f"processing: {STAGE_DESCRIPTIONS[progress.stage]}{count}{unavailable}; its worker last reported {
+        _duration(
+            quiet,
+        )
+    } ago{stale}; {hint}"
+
+
+def _duration(
+    seconds: float,
+    /,
+) -> str:
+    if seconds < 120:
+        return f"{
+            max(
+                0.0,
+                seconds,
+            ):.0f} s"
+
+    if seconds < 7_200:
+        return f"{seconds / 60:.0f} min"
+
+    return f"{seconds / 3_600:.0f} h"
 
 
 def _render(
@@ -705,6 +800,11 @@ def analyze(
                 ),
             )
 
+    except commands.AnalysisWaitInterruptedError as exception:
+        raise _stopped_waiting(
+            exception,
+        ) from exception
+
     except _EXPECTED as exception:
         raise _fail(
             exception,
@@ -725,8 +825,12 @@ def analyze(
         ) from exception
 
     if not local and not wait:
+        # NOTE:
+        # Left for the terminal to wrap, so that each command stays whole on its line to be copied.
         _console.print(
-            f"requested analysis {analysis.id}; `wordwinnow show {analysis.id}` shows it when done",
+            f"requested analysis {analysis.id}; `wordwinnow show {analysis.id} --wait` waits for it, and "
+            f"`wordwinnow show {analysis.id}` shows how far it has come",
+            soft_wrap=True,
         )
 
         return
@@ -765,6 +869,22 @@ def show(
             help="Read the local SQLite store, or the intake service.",
         ),
     ] = False,
+    wait: Annotated[
+        bool,
+        Option(
+            "--wait/--no-wait",
+            help="In remote mode, wait for an analysis still in progress and show it when done.",
+            rich_help_panel=_RUNNING,
+        ),
+    ] = False,
+    timeout: Annotated[
+        float,
+        Option(
+            min=1,
+            help="Seconds --wait waits for the result.",
+            rich_help_panel=_RUNNING,
+        ),
+    ] = 900.0,
     tier: Annotated[
         list[StudyTier] | None,
         Option(
@@ -804,23 +924,77 @@ def show(
             rich_help_panel=_SHOWING,
         ),
     ] = None,
+    view: Annotated[
+        View,
+        Option(
+            help=(
+                "What standard error shows while --wait waits: the learner's line, or, for an operator, that line "
+                "with what the dictionary is doing under it."
+            ),
+            rich_help_panel=_SHOWING,
+        ),
+    ] = View.LEARNER,
 ) -> None:
     """
-    Show a stored analysis.
+    Show a stored analysis, or, with --wait, wait for one still in progress.
+
+    The analysis goes on whether or not a command waits for it, so --wait
+    takes up an analysis that `analyze` stopped waiting for, without
+    requesting it again.
     """
 
     settings = _settings()
 
     try:
-        analysis = run(
-            main=commands.show(
-                analysis_id=AnalysisId.parse(
-                    text=analysis_id,
-                ),
-                settings=settings,
-                local=local,
-            ),
+        parsed = AnalysisId.parse(
+            text=analysis_id,
         )
+
+        if not wait:
+            watched = run(
+                main=commands.show(
+                    analysis_id=parsed,
+                    settings=settings,
+                    local=local,
+                ),
+            )
+
+        elif local:
+            raise BadParameter(
+                message="--wait waits for the services; a local analysis is done when the command that ran it ends",
+            )
+
+        else:
+            operator = (
+                OperatorProgress(
+                    console=_errors,
+                )
+                if view is View.OPERATOR
+                else None
+            )
+
+            progress = operator or TerminalProgress(
+                console=_errors,
+            )
+
+            with progress:
+                watched = WatchedAnalysis(
+                    analysis=run(
+                        main=commands.wait_remotely(
+                            analysis_id=parsed,
+                            settings=settings,
+                            timeout_seconds=timeout,
+                            progress=progress,
+                            watch=operator,
+                        ),
+                    ),
+                    progress=None,
+                )
+
+    except commands.AnalysisWaitInterruptedError as exception:
+        raise _stopped_waiting(
+            exception,
+        ) from exception
 
     except _EXPECTED as exception:
         raise _fail(
@@ -828,7 +1002,7 @@ def show(
         ) from exception
 
     _render(
-        analysis,
+        watched.analysis,
         _tiers(
             tier,
         ),
@@ -837,6 +1011,26 @@ def show(
         as_json,
         csv_path,
     )
+
+    # NOTE:
+    # The JSON and the CSV are for programs, which read the status from them; a person reading the table is told where
+    # an analysis still in progress stands and how to wait for it.
+    note = (
+        None
+        if as_json or csv_path is not None
+        else _still_in_progress(
+            watched,
+            settings.stale_after_seconds,
+        )
+    )
+
+    if note is not None:
+        _console.print(
+            note,
+            markup=False,
+            highlight=False,
+            soft_wrap=True,
+        )
 
 
 @app.command(
@@ -927,7 +1121,8 @@ def stats(
 @admin_app.command()
 def requeue() -> None:
     """
-    Hand every analysis that waited or processed too long back to the workers.
+    Hand back to the workers every analysis that waited too long, or that
+    processed too long without a report from its worker.
     """
 
     settings = _settings()

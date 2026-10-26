@@ -118,8 +118,10 @@ per distinct lemma, and the enrichment service keeps to two requests a second
 against the Free Dictionary API, so the first analysis takes about twelve
 minutes at the least, and later ones reuse the cache.
 
-The command waits up to fifteen minutes, which `--timeout` changes, and names
-the analysis if it is still running then; `wordwinnow show ID` shows it once it
+The command waits up to fifteen minutes, which `--timeout` changes, and the
+analysis goes on whether or not it waits: when the wait ends, or Ctrl-C stops
+it, the command names the analysis, `wordwinnow show ID --wait` waits for it
+again, and `wordwinnow show ID` shows how far it has come, or the result once it
 is done.
 
 `--view operator` shows, under the progress line, what the enrichment service's

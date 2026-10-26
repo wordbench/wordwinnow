@@ -8,7 +8,7 @@ Every command, the configuration, and what to do when something stops.
 | --- | --- |
 | `wordwinnow analyze FILE --level LEVEL` | Analyze a text; `-` reads standard input |
 | `wordwinnow analyze --source NAME --topic TOPIC --level LEVEL` | Analyze a document a source fetches |
-| `wordwinnow show ID` | Show a stored analysis again |
+| `wordwinnow show ID` | Show a stored analysis again, or how far one still in progress has come |
 | `wordwinnow list` | List recent analyses, the id first |
 | `wordwinnow stats` | Summarize every completed analysis from ClickHouse |
 
@@ -25,7 +25,8 @@ without it, they talk to the intake service, which `stats` always reads from.
 | `--detail` | One card per word with pronunciation, examples, related words, and the other meanings the word can have |
 | `--json`, `--csv FILE` | The whole analysis for another program, or the shown words for a flashcard tool |
 | `--no-wait` | In the distributed mode, return the id at once |
-| `--timeout SECONDS` | In the distributed mode, how long to wait for the result, 900 by default |
+| `--wait` | With `show`, in the distributed mode, wait for an analysis still in progress, as `analyze` does |
+| `--timeout SECONDS` | In the distributed mode, how long `analyze` or `show --wait` waits for the result, 900 by default; the analysis goes on after it, as after Ctrl-C |
 | `--view operator` | Under the progress line, what the dictionary is doing; `learner`, the default, shows the line alone |
 
 A command that takes more than a moment says on standard error what it is
@@ -266,7 +267,7 @@ and the model.
 | `WORDWINNOW_ENRICHMENT_TIMEOUT_SECONDS` | 180 | How long a worker waits for one lookup from the enrichment service |
 | `WORDWINNOW_DICTIONARY_FOUND_TTL_SECONDS`, `WORDWINNOW_DICTIONARY_NOT_FOUND_TTL_SECONDS` | 30 days, 7 days | How long the cache keeps a found and a not-found answer |
 | `WORDWINNOW_DICTIONARY_CACHE_PATH` | `data/local/dictionary-cache.db` | The local mode's dictionary cache, kept from one command to the next; a file that cannot be opened leaves the command a cache in its own process and is left as it was, and deleting it only makes the next analysis ask the provider again |
-| `WORDWINNOW_STALE_AFTER_SECONDS` | 600 | How long an analysis may wait since it was requested, or process since it started, before `wordwinnow admin requeue` hands it back |
+| `WORDWINNOW_STALE_AFTER_SECONDS` | 600 | How long an analysis may wait since it was requested, or process without a report from its worker, before `wordwinnow admin requeue` hands it back |
 | `WORDWINNOW_LOG_FORMAT`, `WORDWINNOW_LOG_LEVEL` | `console`, unset | `json` for the services; unset, the command line logs warnings and worse and a service logs from `INFO` up |
 | `WORDWINNOW_TRACING_ENABLED` | false | Export traces to `OTEL_EXPORTER_OTLP_ENDPOINT` |
 
@@ -512,16 +513,21 @@ because nothing else in its log would show it.
 A worker that cannot write its progress logs `progress.unrecorded` once, at
 `WARNING`, and goes on with the analysis.
 
-An analysis that has waited since it was requested, or processed since it
-started, for longer than `WORDWINNOW_STALE_AFTER_SECONDS`, including one intake
-stored but could not publish, is handed back to the workers by
-`wordwinnow admin requeue`.
+An analysis that has waited since it was requested for longer than
+`WORDWINNOW_STALE_AFTER_SECONDS`, including one intake stored but could not
+publish, or that has processed that long without a report from its worker, is
+handed back to the workers by `wordwinnow admin requeue`.
 
-Set that above the longest analysis you expect: an analysis still running when
-it is handed back is processed a second time, and a cold analysis against the
-Free Dictionary API can run for twelve minutes or more, three more while it
-waits for a provider that stopped answering, which the default of ten minutes
-does not cover.
+A worker reports how far it has come whenever a count or a wait changes, at
+most once a second, so a slow analysis keeps reporting however long it runs: a
+cold analysis of the sample story against the Free Dictionary API has taken
+twenty-two minutes, and is not handed back while its worker works on it;
+`wordwinnow show ID` says when the worker last reported.
+
+Keep the setting above the longest a worker can go without a report, the time
+it gives the enrichment service to answer one lookup, three minutes with the
+defaults: an analysis handed back while its worker still works on it is
+processed a second time.
 
 A worker that meets a store or a broker that is not there exits, and Compose
 restarts it from the last committed offset; a record that cannot be handled is

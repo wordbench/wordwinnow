@@ -42,8 +42,9 @@ async def requeue_stale_analyses(
     Republish every analysis that has been waiting or processing too long.
 
     A requested analysis is stale once it has waited longer than
-    `older_than_seconds` since it was requested, and a processing one once it
-    has been processing that long.
+    `older_than_seconds` since it was requested, and a processing one once its
+    worker has gone that long without reporting how far it has come, or,
+    before any report, since it started.
 
     A stale requested analysis is republished as it is; a stale processing one
     is failed and reopened, the domain's only way back to requested, which

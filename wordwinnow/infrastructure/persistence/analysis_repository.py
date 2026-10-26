@@ -399,12 +399,24 @@ class SqlAlchemyAnalysisRepository:
         # NOTE:
         # A requested or processing analysis has no items: only `complete()` sets them, and `reconstitute()` drops
         # them for any other status, so the item tables are not read for these rows.
+        #
+        # A processing analysis whose worker has reported since the threshold is alive however long it has run, so one
+        # that started before it is stale only when its last report is older too, or when it has none.
         return tuple(
             analysis_from_rows(
                 row=row,
                 item_rows=(),
             )
             for row in result.scalars()
+            if AnalysisStatus(
+                value=row.status,
+            )
+            is not AnalysisStatus.PROCESSING
+            or row.progress is None
+            or progress_from_json(
+                payload=row.progress,
+            ).reported_at
+            < threshold
         )
 
     async def delete_expired(
