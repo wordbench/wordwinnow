@@ -15,7 +15,7 @@
 # The uv binary is pinned to the version the lock file was produced with, copied from its own image.
 FROM ghcr.io/astral-sh/uv:0.13.5@sha256:32a7bb39b496babbd997b0a39a4d66c126bdaf5661b302bf6f06abda8deca6ff AS uv
 
-FROM python:3.14.8-slim-trixie@sha256:89fb7d3da20043c370643435258bdd7ab755d326d359001d02988ed15ae5219e AS build
+FROM python:3.14.9-slim-trixie@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8 AS build
 
 COPY --from=uv /uv /uvx /bin/
 
@@ -48,7 +48,7 @@ RUN /app/.venv/bin/wordwinnow doctor --install-nltk-data
 # levels the way the experiment recommends without a model file being committed.
 RUN /app/.venv/bin/wordwinnow ml train --model-path /app/models/cefr_level_model.joblib
 
-FROM python:3.14.8-slim-trixie@sha256:89fb7d3da20043c370643435258bdd7ab755d326d359001d02988ed15ae5219e
+FROM python:3.14.9-slim-trixie@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8
 
 # NOTE:
 # `wget` is what the Compose health checks use; nothing else in the image needs a shell tool.
