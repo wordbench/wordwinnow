@@ -6,6 +6,7 @@ Every command, the configuration, and what to do when something stops.
 
 | Command | What it does |
 | --- | --- |
+| `wordwinnow setup` | Download and prepare what an analysis needs and does not have yet: the NLTK data, the reference lists, and the level model |
 | `wordwinnow analyze FILE --level LEVEL` | Analyze a text; `-` reads standard input |
 | `wordwinnow analyze --source NAME --topic TOPIC --level LEVEL` | Analyze a document a source fetches |
 | `wordwinnow show ID` | Show a stored analysis again, or how far one still in progress has come |
@@ -200,9 +201,15 @@ the command line in a plain shell; inside the Compose stack,
 tracing, and the image sets the paths of the NLTK data, the reference lists,
 and the model.
 
+The user data directory is `~/Library/Application Support/wordwinnow` on macOS
+and `~/.local/share/wordwinnow` on Linux, and the user cache directory is
+`~/Library/Caches/wordwinnow` and `~/.cache/wordwinnow`; on either system,
+`$XDG_DATA_HOME/wordwinnow` and `$XDG_CACHE_HOME/wordwinnow` take their place when
+those variables are set.
+
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `WORDWINNOW_DATABASE_URL` | `sqlite+aiosqlite:///data/local/wordwinnow.db` | The analysis store |
+| `WORDWINNOW_DATABASE_URL` | `wordwinnow.db` in the user data directory, through `sqlite+aiosqlite` | The analysis store |
 | `WORDWINNOW_KAFKA_BOOTSTRAP_SERVERS` | `127.0.0.1:9092` | The broker |
 | `WORDWINNOW_KAFKA_CONSUMER_GROUP` | `wordwinnow-analysis-workers` | The analysis workers' consumer group |
 | `WORDWINNOW_REDIS_URL` | unset | The enrichment service's dictionary cache, in its own process when unset; the command line caches in its own file, and a worker without an enrichment URL in its own process |
@@ -211,8 +218,8 @@ and the model.
 | `WORDWINNOW_INTAKE_URL` | `http://127.0.0.1:8010` | Where the CLI finds intake |
 | `WORDWINNOW_ENRICHMENT_URL` | unset | Where a worker finds enrichment, the provider directly when unset; where the operator view reads the enrichment service's activity, `http://127.0.0.1:8100` when unset |
 | `WORDWINNOW_INTAKE_PORT`, `WORDWINNOW_ENRICHMENT_PORT`, `WORDWINNOW_METRICS_PORT` | `8010`, `8100`, `9464` | Where the services listen |
-| `WORDWINNOW_LEVEL_MODEL_PATH` | `models/cefr_level_model.joblib` | The level model; the frequency heuristic when the file is absent |
-| `WORDWINNOW_REFERENCE_LISTS_DIR` | `data/reference` | The reference lists |
+| `WORDWINNOW_LEVEL_MODEL_PATH` | `cefr_level_model.joblib` in the user data directory | The level model, which `wordwinnow setup` trains; the frequency heuristic when the file is absent |
+| `WORDWINNOW_REFERENCE_LISTS_DIR` | `reference` in the user data directory | The reference lists, which `wordwinnow setup` downloads |
 | `WORDWINNOW_NLTK_DATA` | unset | A directory added to NLTK's own search path for its data |
 | `WORDWINNOW_NYT_API_KEY` | unset | Enables the New York Times API sources; an empty value counts as unset |
 | `WORDWINNOW_DICTIONARY` | `free_dictionary` | `wordnet` answers from WordNet, locally, without the provider |
@@ -223,7 +230,7 @@ and the model.
 | `WORDWINNOW_DICTIONARY_PATIENCE_SECONDS` | 180 | How long an analysis waits, in all, for a provider that stopped answering, before WordNet stands in for the words still waiting; 0 fails fast |
 | `WORDWINNOW_ENRICHMENT_TIMEOUT_SECONDS` | 180 | How long a worker waits for one lookup from the enrichment service |
 | `WORDWINNOW_DICTIONARY_FOUND_TTL_SECONDS`, `WORDWINNOW_DICTIONARY_NOT_FOUND_TTL_SECONDS` | 30 days, 7 days | How long the cache keeps a found and a not-found answer |
-| `WORDWINNOW_DICTIONARY_CACHE_PATH` | `data/local/dictionary-cache.db` | The local mode's dictionary cache, kept from one command to the next; a file that cannot be opened leaves the command a cache in its own process and is left as it was, and deleting it only makes the next analysis ask the provider again |
+| `WORDWINNOW_DICTIONARY_CACHE_PATH` | `dictionary-cache.db` in the user cache directory | The local mode's dictionary cache, kept from one command to the next; a file that cannot be opened leaves the command a cache in its own process and is left as it was, and deleting it only makes the next analysis ask the provider again |
 | `WORDWINNOW_STALE_AFTER_SECONDS` | 600 | How long an analysis may wait since it was requested, or process without a report from its worker, before `wordwinnow admin requeue` hands it back |
 | `WORDWINNOW_LOG_FORMAT`, `WORDWINNOW_LOG_LEVEL` | `console`, unset | `json` for the services; unset, the command line logs warnings and worse and a service logs from `INFO` up |
 | `WORDWINNOW_TRACING_ENABLED` | false | Export traces to `OTEL_EXPORTER_OTLP_ENDPOINT` |

@@ -26,8 +26,9 @@ __pycache__/
 # NOTE:
 # Generated data.
 #
-# Each entry is rebuilt by a command, so a committed copy would only go stale: `data/local/` holds the SQLite store
-# and the dictionary cache the local mode creates, and `models/` the level model `make model` trains, with its
+# Each entry is rebuilt by a command, so a committed copy would only go stale: `data/local/` holds what a developer
+# keeps beside a checkout, such as a store from before the defaults moved, which `WORDWINNOW_DATABASE_URL` can still
+# name, and `models/` the level model the notebook loads, which `ml train --model-path` writes there, with its
 # metadata beside it.
 #
 # The benchmark results and figures are deliberately not listed: they are the committed evidence `performance.md`

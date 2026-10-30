@@ -186,8 +186,7 @@ def ensure_resources(
     packages = " ".join(resource.package for resource in missing)
 
     raise LinguisticResourcesMissingError(
-        f"linguistic analysis requires NLTK packages that are not installed: {packages}; run "
-        "`wordwinnow doctor --install-nltk-data`",
+        f"linguistic analysis requires NLTK packages that are not installed: {packages}; run `wordwinnow setup`",
     )
 
 

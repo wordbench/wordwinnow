@@ -23,6 +23,12 @@ from importlib.metadata import (
 from pathlib import (
     Path,
 )
+from pickle import (
+    UnpicklingError,
+)
+from struct import (
+    error as struct_error,
+)
 from typing import (
     Final,
     final,
@@ -43,6 +49,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    ValidationError,
 )
 from sklearn.ensemble import (
     HistGradientBoostingClassifier,
@@ -85,6 +92,21 @@ from wordwinnow.infrastructure.ml.features import (
 # Hyperparameters are fixed rather than searched: the experiment compares model families and feature families on equal
 # terms, and a search inside each family is deferred work the notebook names under its limitations.
 _LOGISTIC_MAX_ITERATIONS: Final = 2_000
+
+# NOTE:
+# What `pickle` and joblib raise for bytes that are not a whole pickle: a file cut short, an empty one, or one that
+# was never a model.
+#
+# A file that cannot be opened is no part of this, and neither is a pickle that names a module this scikit-learn
+# lacks, which the sidecar's version tells apart before the pickle is opened.
+_NOT_A_WHOLE_PICKLE: Final = (
+    EOFError,
+    IndexError,
+    KeyError,
+    struct_error,
+    UnpicklingError,
+    ValueError,
+)
 
 
 @final
@@ -374,11 +396,32 @@ def train(
             train_size=len(
                 features,
             ),
-            sklearn_version=version(
-                distribution_name="scikit-learn",
-            ),
+            sklearn_version=installed_sklearn_version(),
         ),
     )
+
+
+def installed_sklearn_version() -> str:
+    """
+    The version of scikit-learn this process runs, which a model records when
+    it is trained.
+    """
+
+    return version(
+        distribution_name="scikit-learn",
+    )
+
+
+def is_stale(
+    *,
+    metadata: ModelMetadata,
+) -> bool:
+    """
+    Whether the model `metadata` describes was trained with another version of
+    scikit-learn than the one installed, so that a new model is wanted.
+    """
+
+    return metadata.sklearn_version != installed_sklearn_version()
 
 
 def _pipeline(
@@ -556,6 +599,15 @@ def save(
 ) -> None:
     """
     Write the fitted pipeline to `path` and its metadata beside it.
+
+    A save that raises, or whose process is stopped, part of the way never
+    leaves a half-written model at `path`: a failure while writing leaves the
+    earlier model and sidecar as they were, and one while putting them in
+    place leaves at most a model without its sidecar, which `load` refuses.
+
+    Nothing is flushed to disk before the files are renamed, so a crash of the
+    machine itself can still leave either file cut short, which
+    `read_metadata` and `load` refuse as well.
     """
 
     path.parent.mkdir(
@@ -563,31 +615,68 @@ def save(
         exist_ok=True,
     )
 
-    dump(
-        value=estimator.pipeline,
-        filename=path,
-    )
-
-    metadata_path(
+    sidecar = metadata_path(
         path=path,
-    ).write_text(
-        data=estimator.metadata.model_dump_json(
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
     )
 
+    partial_model = path.with_name(
+        name=f"{path.name}.part",
+    )
 
-def load(
+    partial_sidecar = sidecar.with_name(
+        name=f"{sidecar.name}.part",
+    )
+
+    try:
+        dump(
+            value=estimator.pipeline,
+            filename=partial_model,
+        )
+
+        partial_sidecar.write_text(
+            data=estimator.metadata.model_dump_json(
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        # NOTE:
+        # Both files are whole before either takes its place, and the old sidecar goes first, so that no moment leaves
+        # a new model beside the sidecar of an older one: an interruption from here on leaves a model without a
+        # sidecar, which `load` refuses and `wordwinnow setup` trains again.
+        sidecar.unlink(
+            missing_ok=True,
+        )
+
+        partial_model.replace(
+            target=path,
+        )
+
+        partial_sidecar.replace(
+            target=sidecar,
+        )
+
+    finally:
+        partial_model.unlink(
+            missing_ok=True,
+        )
+
+        partial_sidecar.unlink(
+            missing_ok=True,
+        )
+
+
+def read_metadata(
     *,
     path: Path,
-) -> SklearnLevelEstimator | None:
+) -> ModelMetadata | None:
     """
-    Read the model at `path`, or `None` when there is no file there.
+    Read the metadata sidecar of the model at `path` without opening the
+    model, or `None` when there is no file there.
 
-    Raises `ModelFileError` when the file has no sidecar, expects columns this
-    code does not produce, or does not hold a pipeline.
+    Raises `ModelFileError` when the file has no sidecar, or the sidecar does
+    not hold a model's metadata.
     """
 
     if not path.exists():
@@ -602,11 +691,35 @@ def load(
             f"a saved model requires a metadata sidecar, and {sidecar} does not exist",
         )
 
-    metadata = ModelMetadata.model_validate_json(
-        json_data=sidecar.read_text(
-            encoding="utf-8",
-        ),
+    try:
+        return ModelMetadata.model_validate_json(
+            json_data=sidecar.read_bytes(),
+        )
+
+    except ValidationError as exception:
+        raise ModelFileError(
+            f"the metadata sidecar {sidecar} does not hold a model's metadata",
+        ) from exception
+
+
+def load(
+    *,
+    path: Path,
+) -> SklearnLevelEstimator | None:
+    """
+    Read the model at `path`, or `None` when there is no file there.
+
+    Raises `ModelFileError` when the file has no sidecar, its sidecar does not
+    hold a model's metadata, it expects columns this code does not produce, it
+    is not a whole pickle, or it does not hold a pipeline.
+    """
+
+    metadata = read_metadata(
+        path=path,
     )
+
+    if metadata is None:
+        return None
 
     expected = columns_for(
         families=metadata.families,
@@ -617,9 +730,19 @@ def load(
             f"the model at {path} was trained on the feature columns {metadata.feature_columns}, not {expected}",
         )
 
-    pipeline = load_joblib(
-        filename=path,
-    )
+    try:
+        pipeline = load_joblib(
+            filename=path,
+        )
+
+    except _NOT_A_WHOLE_PICKLE as exception:
+        kind = type(
+            exception,
+        ).__name__
+
+        raise ModelFileError(
+            f"the model at {path} cannot be read ({kind})",
+        ) from exception
 
     if not isinstance(
         pipeline,

@@ -14,7 +14,11 @@ from typing import (
     final,
 )
 
+from pydantic import (
+    ValidationError,
+)
 from pytest import (
+    MonkeyPatch,
     fixture,
     mark,
     raises,
@@ -29,6 +33,9 @@ from wordwinnow.domain.cefr import (
 from wordwinnow.domain.difficulty import (
     ALL_FAMILIES,
     FeatureFamily,
+)
+from wordwinnow.infrastructure.ml import (
+    model,
 )
 from wordwinnow.infrastructure.ml.evaluation import (
     evaluate,
@@ -45,8 +52,11 @@ from wordwinnow.infrastructure.ml.model import (
     cross_validate,
     fingerprint,
     group_folds,
+    installed_sklearn_version,
+    is_stale,
     load,
     metadata_path,
+    read_metadata,
     save,
     train,
 )
@@ -377,6 +387,25 @@ class TestGroupFolds:
 
 
 @final
+class TestStale:
+    def test_a_model_is_stale_when_another_version_of_scikit_learn_trained_it(
+        self,
+        *,
+        boosted: SklearnLevelEstimator,
+        stale_model: SklearnLevelEstimator,
+    ) -> None:
+        assert boosted.metadata.sklearn_version == installed_sklearn_version()
+
+        assert not is_stale(
+            metadata=boosted.metadata,
+        )
+
+        assert is_stale(
+            metadata=stale_model.metadata,
+        )
+
+
+@final
 class TestModelFile:
     def test_a_saved_model_loads_back_with_its_metadata_and_answers(
         self,
@@ -506,3 +535,541 @@ class TestModelFile:
             load(
                 path=path,
             )
+
+
+@final
+class TestReadMetadata:
+    def test_a_missing_file_is_no_model(
+        self,
+        *,
+        tmp_path: Path,
+    ) -> None:
+        assert (
+            read_metadata(
+                path=tmp_path / "nonexistent.joblib",
+            )
+            is None
+        )
+
+    def test_it_reads_the_sidecar_without_opening_the_model(
+        self,
+        *,
+        tmp_path: Path,
+        boosted: SklearnLevelEstimator,
+    ) -> None:
+        path = tmp_path / "model.joblib"
+
+        save(
+            estimator=boosted,
+            path=path,
+        )
+
+        path.write_bytes(
+            data=b"foo",
+        )
+
+        assert (
+            read_metadata(
+                path=path,
+            )
+            == boosted.metadata
+        )
+
+        with raises(
+            expected_exception=ModelFileError,
+            match="cannot be read",
+        ):
+            load(
+                path=path,
+            )
+
+    def test_a_file_without_its_sidecar_is_refused(
+        self,
+        *,
+        tmp_path: Path,
+        boosted: SklearnLevelEstimator,
+    ) -> None:
+        path = tmp_path / "model.joblib"
+
+        save(
+            estimator=boosted,
+            path=path,
+        )
+
+        metadata_path(
+            path=path,
+        ).unlink()
+
+        with raises(
+            expected_exception=ModelFileError,
+            match="requires a metadata sidecar",
+        ):
+            read_metadata(
+                path=path,
+            )
+
+    @mark.parametrize(
+        argnames="contents",
+        argvalues=(
+            b"",
+            b"{not json",
+            b"{}",
+            b"[]",
+            b"\xff\xfe\x00",
+        ),
+    )
+    def test_a_sidecar_that_holds_no_model_metadata_is_refused_with_the_validation_error_as_its_cause(
+        self,
+        *,
+        tmp_path: Path,
+        boosted: SklearnLevelEstimator,
+        contents: bytes,
+    ) -> None:
+        path = tmp_path / "model.joblib"
+
+        save(
+            estimator=boosted,
+            path=path,
+        )
+
+        sidecar = metadata_path(
+            path=path,
+        )
+
+        sidecar.write_bytes(
+            data=contents,
+        )
+
+        with raises(
+            expected_exception=ModelFileError,
+            match="does not hold a model's metadata",
+        ) as caught:
+            read_metadata(
+                path=path,
+            )
+
+        assert isinstance(
+            caught.value.__cause__,
+            ValidationError,
+        )
+
+        assert str(
+            object=sidecar,
+        ) in str(
+            object=caught.value,
+        )
+
+        with raises(
+            expected_exception=ModelFileError,
+            match="does not hold a model's metadata",
+        ):
+            load(
+                path=path,
+            )
+
+
+@final
+class TestDamagedModelFile:
+    @mark.parametrize(
+        argnames="length",
+        argvalues=(
+            0,
+            1,
+            5,
+            100,
+            998,
+            50_000,
+        ),
+    )
+    def test_a_model_cut_short_is_refused_whatever_the_length(
+        self,
+        *,
+        tmp_path: Path,
+        boosted: SklearnLevelEstimator,
+        length: int,
+    ) -> None:
+        path = tmp_path / "model.joblib"
+
+        save(
+            estimator=boosted,
+            path=path,
+        )
+
+        whole = path.read_bytes()
+
+        assert (
+            len(
+                whole,
+            )
+            > length
+        )
+
+        path.write_bytes(
+            data=whole[:length],
+        )
+
+        with raises(
+            expected_exception=ModelFileError,
+            match=r"cannot be read \(\w+\)$",
+        ) as caught:
+            load(
+                path=path,
+            )
+
+        assert caught.value.__cause__ is not None
+
+    def test_a_file_that_was_never_a_model_is_refused(
+        self,
+        *,
+        tmp_path: Path,
+        boosted: SklearnLevelEstimator,
+    ) -> None:
+        path = tmp_path / "model.joblib"
+
+        save(
+            estimator=boosted,
+            path=path,
+        )
+
+        path.write_bytes(
+            data=b"not a pickle",
+        )
+
+        with raises(
+            expected_exception=ModelFileError,
+            match=r"cannot be read \(\w+\)$",
+        ):
+            load(
+                path=path,
+            )
+
+
+_MODEL: Final = "model.joblib"
+
+_SIDECAR: Final = "model.joblib.metadata.json"
+
+
+def _names(
+    directory: Path,
+    /,
+) -> list[str]:
+    return sorted(path.name for path in directory.iterdir())
+
+
+@final
+class TestSavingStopsPartWay:
+    def test_a_save_leaves_only_the_model_and_its_sidecar(
+        self,
+        *,
+        tmp_path: Path,
+        boosted: SklearnLevelEstimator,
+    ) -> None:
+        save(
+            estimator=boosted,
+            path=tmp_path / _MODEL,
+        )
+
+        assert _names(
+            tmp_path,
+        ) == [
+            _MODEL,
+            _SIDECAR,
+        ]
+
+    def test_a_second_save_replaces_both_files(
+        self,
+        *,
+        tmp_path: Path,
+        boosted: SklearnLevelEstimator,
+        stale_model: SklearnLevelEstimator,
+    ) -> None:
+        path = tmp_path / _MODEL
+
+        save(
+            estimator=boosted,
+            path=path,
+        )
+
+        save(
+            estimator=stale_model,
+            path=path,
+        )
+
+        assert (
+            read_metadata(
+                path=path,
+            )
+            == stale_model.metadata
+        )
+
+        assert _names(
+            tmp_path,
+        ) == [
+            _MODEL,
+            _SIDECAR,
+        ]
+
+    def test_a_save_stopped_while_the_model_is_written_leaves_the_earlier_pair_as_it_was(
+        self,
+        *,
+        tmp_path: Path,
+        monkeypatch: MonkeyPatch,
+        boosted: SklearnLevelEstimator,
+        stale_model: SklearnLevelEstimator,
+    ) -> None:
+        path = tmp_path / _MODEL
+
+        sidecar = tmp_path / _SIDECAR
+
+        save(
+            estimator=boosted,
+            path=path,
+        )
+
+        before = (
+            path.read_bytes(),
+            sidecar.read_bytes(),
+        )
+
+        def run_out_of_space(
+            *,
+            value: object,
+            filename: Path,
+        ) -> None:
+            filename.write_bytes(
+                data=b"half a model",
+            )
+
+            raise OSError(
+                "no space left on device",
+            )
+
+        monkeypatch.setattr(
+            target=model,
+            name="dump",
+            value=run_out_of_space,
+        )
+
+        with raises(
+            expected_exception=OSError,
+            match="no space left",
+        ):
+            save(
+                estimator=stale_model,
+                path=path,
+            )
+
+        assert (
+            path.read_bytes(),
+            sidecar.read_bytes(),
+        ) == before
+
+        assert _names(
+            tmp_path,
+        ) == [
+            _MODEL,
+            _SIDECAR,
+        ]
+
+        assert (
+            read_metadata(
+                path=path,
+            )
+            == boosted.metadata
+        )
+
+    def test_a_first_save_stopped_while_the_model_is_written_leaves_no_file(
+        self,
+        *,
+        tmp_path: Path,
+        monkeypatch: MonkeyPatch,
+        boosted: SklearnLevelEstimator,
+    ) -> None:
+        def run_out_of_space(
+            *,
+            value: object,
+            filename: Path,
+        ) -> None:
+            filename.write_bytes(
+                data=b"half a model",
+            )
+
+            raise OSError(
+                "no space left on device",
+            )
+
+        monkeypatch.setattr(
+            target=model,
+            name="dump",
+            value=run_out_of_space,
+        )
+
+        with raises(
+            expected_exception=OSError,
+            match="no space left",
+        ):
+            save(
+                estimator=boosted,
+                path=tmp_path / _MODEL,
+            )
+
+        assert (
+            tuple(
+                tmp_path.iterdir(),
+            )
+            == ()
+        )
+
+        assert (
+            load(
+                path=tmp_path / _MODEL,
+            )
+            is None
+        )
+
+    def test_a_save_stopped_while_the_sidecar_is_written_leaves_the_earlier_pair_as_it_was(
+        self,
+        *,
+        tmp_path: Path,
+        monkeypatch: MonkeyPatch,
+        boosted: SklearnLevelEstimator,
+        stale_model: SklearnLevelEstimator,
+    ) -> None:
+        path = tmp_path / _MODEL
+
+        sidecar = tmp_path / _SIDECAR
+
+        save(
+            estimator=boosted,
+            path=path,
+        )
+
+        before = (
+            path.read_bytes(),
+            sidecar.read_bytes(),
+        )
+
+        write_text = Path.write_text
+
+        def run_out_of_space(
+            self: Path,
+            *,
+            data: str,
+            encoding: str | None = None,
+        ) -> int:
+            if self.name.endswith(
+                ".part",
+            ):
+                raise OSError(
+                    "no space left on device",
+                )
+
+            return write_text(
+                self,
+                data=data,
+                encoding=encoding,
+            )
+
+        monkeypatch.setattr(
+            target=Path,
+            name="write_text",
+            value=run_out_of_space,
+        )
+
+        with raises(
+            expected_exception=OSError,
+            match="no space left",
+        ):
+            save(
+                estimator=stale_model,
+                path=path,
+            )
+
+        assert (
+            path.read_bytes(),
+            sidecar.read_bytes(),
+        ) == before
+
+        assert _names(
+            tmp_path,
+        ) == [
+            _MODEL,
+            _SIDECAR,
+        ]
+
+    def test_a_save_stopped_as_the_files_are_put_in_place_leaves_a_model_without_a_sidecar_the_next_save_repairs(
+        self,
+        *,
+        tmp_path: Path,
+        monkeypatch: MonkeyPatch,
+        boosted: SklearnLevelEstimator,
+        stale_model: SklearnLevelEstimator,
+    ) -> None:
+        path = tmp_path / _MODEL
+
+        sidecar = tmp_path / _SIDECAR
+
+        save(
+            estimator=boosted,
+            path=path,
+        )
+
+        replace = Path.replace
+
+        def stop_at_the_sidecar(
+            self: Path,
+            *,
+            target: Path,
+        ) -> Path:
+            if target == sidecar:
+                raise OSError(
+                    "stopped",
+                )
+
+            return replace(
+                self,
+                target=target,
+            )
+
+        with monkeypatch.context() as scoped:
+            scoped.setattr(
+                target=Path,
+                name="replace",
+                value=stop_at_the_sidecar,
+            )
+
+            with raises(
+                expected_exception=OSError,
+                match="stopped",
+            ):
+                save(
+                    estimator=stale_model,
+                    path=path,
+                )
+
+        assert _names(
+            tmp_path,
+        ) == [
+            _MODEL,
+        ]
+
+        with raises(
+            expected_exception=ModelFileError,
+            match="requires a metadata sidecar",
+        ):
+            load(
+                path=path,
+            )
+
+        save(
+            estimator=stale_model,
+            path=path,
+        )
+
+        loaded = load(
+            path=path,
+        )
+
+        assert loaded is not None
+
+        assert loaded.metadata == stale_model.metadata

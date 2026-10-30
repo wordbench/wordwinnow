@@ -31,15 +31,16 @@ RUN uv sync --frozen --no-dev --no-install-project
 
 COPY wordwinnow ./wordwinnow
 
-COPY alembic.ini ./alembic.ini
-
-COPY alembic ./alembic
-
 COPY data/reference ./data/reference
 
 RUN uv sync --frozen --no-dev
 
-ENV WORDWINNOW_NLTK_DATA=/opt/nltk_data
+# NOTE:
+# The image keeps explicit paths rather than the user's directories: it trains from the lists it copies above, and the
+# final stage names the same two paths.
+ENV WORDWINNOW_NLTK_DATA=/opt/nltk_data \
+    WORDWINNOW_REFERENCE_LISTS_DIR=/app/data/reference \
+    WORDWINNOW_LEVEL_MODEL_PATH=/app/models/cefr_level_model.joblib
 
 RUN /app/.venv/bin/wordwinnow doctor --install-nltk-data
 

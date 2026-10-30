@@ -35,6 +35,7 @@ from wordwinnow.infrastructure.linguistics.nltk_resources import (
     PACKAGES_URL,
     NltkResource,
     download_resources,
+    ensure_resources,
     missing_resources,
 )
 
@@ -45,6 +46,23 @@ class TestNltkResources:
         self,
     ) -> None:
         assert missing_resources() == ()
+
+    def test_a_missing_package_is_reported_with_the_command_that_installs_it(
+        self,
+    ) -> None:
+        with raises(
+            expected_exception=LinguisticResourcesMissingError,
+            match=r"not installed: nonexistent; run `wordwinnow setup`$",
+        ):
+            ensure_resources(
+                resources=(
+                    NltkResource(
+                        package="nonexistent",
+                        kind="corpora",
+                        paths=("corpora/nonexistent/",),
+                    ),
+                ),
+            )
 
 
 # TEST:

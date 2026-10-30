@@ -79,7 +79,7 @@ from wordwinnow.infrastructure.persistence.engine import (
     build_engine,
 )
 from wordwinnow.infrastructure.persistence.migrations import (
-    ALEMBIC_INI,
+    MIGRATION_SCRIPTS,
 )
 from wordwinnow.infrastructure.persistence.models import (
     Base,
@@ -362,8 +362,13 @@ def downgrade_to_base(
     # WARN:
     # A main option is read back through `ConfigParser` interpolation, so a `%` in the URL is doubled, as the upgrade
     # does it.
-    config = Config(
-        file_=ALEMBIC_INI,
+    config = Config()
+
+    config.set_main_option(
+        name="script_location",
+        value=str(
+            object=MIGRATION_SCRIPTS,
+        ),
     )
 
     config.set_main_option(

@@ -2,8 +2,8 @@
 # The build context.
 #
 # Everything is left out, and only what the Dockerfile copies is let back in: the manifest and the lock, the three
-# files the build backend reads for the package metadata, the package, the migrations, and the reference lists the
-# image trains its level model from.
+# files the build backend reads for the package metadata, the package, which holds the migrations, and the reference
+# lists the image trains its level model from.
 #
 # A file nobody listed therefore never reaches the build, which is the safe failure: a missing path breaks the build
 # at once, where a forgotten exclusion would carry a stray file into the image unnoticed.
@@ -20,10 +20,6 @@
 !NOTICE
 
 !wordwinnow
-
-!alembic.ini
-
-!alembic
 
 !data/reference
 
@@ -66,7 +62,7 @@
 # NOTE:
 # Local secrets.
 #
-# `wordwinnow/` and `alembic/` are copied whole, so an env file left inside either would otherwise land in the image.
+# `wordwinnow/` is copied whole, so an env file left inside it would otherwise land in the image.
 **/*.env
 
 

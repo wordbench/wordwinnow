@@ -27,6 +27,9 @@ from wordwinnow.domain.cefr import (
 from wordwinnow.domain.enums import (
     UnorderedStrEnum,
 )
+from wordwinnow.infrastructure.persistence.migrations import (
+    MIGRATION_SCRIPTS,
+)
 
 
 def _string_enums() -> dict[str, type[StrEnum]]:
@@ -35,6 +38,14 @@ def _string_enums() -> dict[str, type[StrEnum]]:
     for path in python_files(
         directory=PACKAGE_ROOT,
     ):
+        # TEST:
+        # Alembic imports the migration scripts by path, and `env.py` needs an Alembic context, so importing it here
+        # raises; none of them defines an enumeration.
+        if path.is_relative_to(
+            other=MIGRATION_SCRIPTS,
+        ):
+            continue
+
         parts = (
             path.relative_to(
                 other=PACKAGE_ROOT.parent,

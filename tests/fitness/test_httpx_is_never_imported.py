@@ -23,10 +23,10 @@ from tests.fitness._scan import (
 _SUPERSEDED: Final = "httpx"
 
 # NOTE:
-# The package, its migrations, and its tests: every module of the project's own that the image or the gate runs.
+# The package, which holds its migrations, and its tests: every module of the project's own that the image or the gate
+# runs.
 _SCANNED: Final = (
     PACKAGE_ROOT,
-    PACKAGE_ROOT.parent / "alembic",
     PACKAGE_ROOT.parent / "tests",
 )
 

@@ -66,7 +66,7 @@ from wordwinnow.infrastructure.persistence.engine import (
     build_engine,
 )
 from wordwinnow.infrastructure.persistence.migrations import (
-    ALEMBIC_INI,
+    MIGRATION_SCRIPTS,
     upgrade_to_head,
 )
 from wordwinnow.infrastructure.persistence.models import (
@@ -258,10 +258,17 @@ class TestMigrationsOnPostgreSql:
             finally:
                 await engine.dispose()
 
-        head = ScriptDirectory.from_config(
-            config=Config(
-                file_=ALEMBIC_INI,
+        scripts = Config()
+
+        scripts.set_main_option(
+            name="script_location",
+            value=str(
+                object=MIGRATION_SCRIPTS,
             ),
+        )
+
+        head = ScriptDirectory.from_config(
+            config=scripts,
         ).get_current_head()
 
         assert names == (

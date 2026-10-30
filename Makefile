@@ -72,8 +72,8 @@ setup: ## Create the environment this gate runs in
 nltk-data: ## Download the NLTK corpora the linguistic adapters need
 	$(RUN) wordwinnow doctor --install-nltk-data
 
-model: ## Train the shipped level model from the reference lists
-	$(RUN) wordwinnow ml train
+model: ## Set up the NLTK data, the reference lists, and the level model, as `wordwinnow setup` does
+	$(RUN) wordwinnow setup
 
 format: ## Apply formatting
 	$(RUN) ruff format .
@@ -89,7 +89,7 @@ typecheck: ## Run the type checker
 
 conventions: ## Run the vendored checker, positive control first
 	$(CHECK) --self-test
-	$(CHECK) $(PROSE) $(NOTEBOOKS) wordwinnow tests alembic/env.py $(SUPPLY_CHAIN)
+	$(CHECK) $(PROSE) $(NOTEBOOKS) wordwinnow tests $(SUPPLY_CHAIN)
 
 test: ## Run the tests that need no backing service
 	$(RUN) pytest -m "not integration and not live"

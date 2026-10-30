@@ -42,9 +42,18 @@ them, into your NLTK data directory.
 make model
 ```
 
-That trains the level model from the reference lists in under a minute and is
-optional: without it, a word outside the lists gets the frequency heuristic's
-level instead, and every level in a report names its source.
+That runs `uv run wordwinnow setup`, which downloads the two reference lists
+from their distributor at one fixed commit, checks each against its published
+SHA-256, and trains the level model from them in under a minute; it does only
+what is missing, and every analysis needs the lists, so it comes before the
+first.
+
+The lists and the model it sets up, the analysis store, and the dictionary
+cache live in your user directories rather than in the checkout:
+`~/Library/Application Support/wordwinnow` and `~/Library/Caches/wordwinnow` on
+macOS, `~/.local/share/wordwinnow` and `~/.cache/wordwinnow` on Linux, or
+`$XDG_DATA_HOME/wordwinnow` and `$XDG_CACHE_HOME/wordwinnow` on either system when
+those variables are set; [the configuration](operating.md#configuration) can move each of them.
 
 `uv run wordwinnow doctor` says what is present and what is missing.
 
@@ -54,8 +63,8 @@ level instead, and every level in a report names its source.
 uv run wordwinnow analyze data/corpus/a-scandal-in-bohemia.txt --local --level A2 --target B1 --no-dictionary
 ```
 
-The analysis runs inside the command, against a SQLite file under `data/local/`
-that the command creates and migrates itself.
+The analysis runs inside the command, against a SQLite file in your user data
+directory that the command creates and migrates itself.
 
 `--no-dictionary` skips the dictionary, so the report comes back in a few
 seconds with WordNet's glosses as meanings; drop the flag to get the Free

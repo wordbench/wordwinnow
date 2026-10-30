@@ -287,8 +287,8 @@ terms; WordNet can stand in for it, locally.
 Each word Wordwinnow looks up there is one request, so the words of a text
 leave the machine, though the text itself never does, and each answer stays in
 the dictionary cache under its word for up to thirty days, in Redis in the
-distributed mode and in a file under `data/local/` in the local mode; with
-`--no-dictionary`, no word of a text leaves the machine.
+distributed mode and in a file in your user cache directory in the local mode;
+with `--no-dictionary`, no word of a text leaves the machine.
 
 ## Where texts come from
 

@@ -48,6 +48,7 @@ dependencies = [
   "uvicorn>=0.54.0",
   "pydantic>=2.13.5",
   "pydantic-settings>=2.15.0",
+  "platformdirs>=4.12.2",
   "httpx2>=2.13.1",
   "nltk>=3.10.4",
   "wordfreq>=3.1.1",
@@ -119,10 +120,11 @@ src = [
 #
 # It is checked upstream, not here.
 #
-# `alembic/versions/` holds generated migration scripts whose shape Alembic owns.
+# `wordwinnow/infrastructure/persistence/migration_scripts/versions/` holds generated migration scripts whose shape
+# Alembic owns.
 extend-exclude = [
   "tools",
-  "alembic/versions",
+  "wordwinnow/infrastructure/persistence/migration_scripts/versions",
 ]
 
 [tool.ruff.lint]
@@ -236,12 +238,22 @@ namespace-modules = [
 # positional-only one breaks substitution, which the type checker proves.
 #
 # Scanned on its own, the module reports that signature and nothing else, so the exclusion hides exactly that.
+#
+# `wordwinnow/infrastructure/persistence/migration_scripts/versions/*` holds the migrations Alembic generates, whose
+# shape Alembic owns, as the formatter's exclusion above says.
+#
+# The checker never read them while they lived outside the package, and the one revision there is formatted by hand,
+# so the next generated one would fail where this one does not.
+#
+# The exclusion stops at that directory: the migration environment beside it, and the rest of the package, are
+# scanned.
 exclude = [
   "data/reference/ATTRIBUTION.md",
   "wordwinnow/infrastructure/log_formatters.py",
   "wordwinnow/infrastructure/messaging/handoff.py",
   "tests/fakes/jumping_selector.py",
   "wordwinnow/services/cli/clock_column.py",
+  "wordwinnow/infrastructure/persistence/migration_scripts/versions/*",
 ]
 
 [tool.pytest.ini_options]

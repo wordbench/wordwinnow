@@ -192,8 +192,13 @@ results, writing `results.json` and the figures only when given `--output-dir`,
 and `wordwinnow ml train` writes the model file the pipeline loads.
 
 The notebook is rerun from the top in one session, with no cell recording when
-it ran, as the standard asks of a notebook kept with its outputs, once
-`make model` has trained the model its last code cell loads:
+it ran, as the standard asks of a notebook kept with its outputs, once the
+model its last code cell loads has been trained into the checkout from the
+checkout's own lists:
+
+```sh
+WORDWINNOW_REFERENCE_LISTS_DIR=data/reference uv run wordwinnow ml train --model-path models/cefr_level_model.joblib
+```
 
 ```sh
 uv run jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.record_timing=False notebooks/cefr_level_classification.ipynb

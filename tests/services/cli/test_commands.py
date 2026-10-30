@@ -13,6 +13,7 @@ from asyncio import (
 )
 from collections.abc import (
     AsyncIterator,
+    Callable,
     Sequence,
 )
 from pathlib import (
@@ -36,6 +37,7 @@ from httpx2 import (
 from pytest import (
     MonkeyPatch,
     fixture,
+    mark,
     raises,
 )
 from rich.console import (
@@ -59,6 +61,7 @@ from wordwinnow.application.dto import (
 )
 from wordwinnow.application.errors import (
     AnalysisNotFoundError,
+    LinguisticResourcesMissingError,
     SourceNotConfiguredError,
     SourceRejectedError,
 )
@@ -89,9 +92,22 @@ from wordwinnow.infrastructure.dictionary.cache import (
 from wordwinnow.infrastructure.dictionary.free_dictionary import (
     FreeDictionaryClient,
 )
+from wordwinnow.infrastructure.lexicon.reference_lists import (
+    REFERENCE_FILES,
+)
+from wordwinnow.infrastructure.lexicon.reference_sources import (
+    REFERENCE_CITATIONS,
+)
 from wordwinnow.infrastructure.linguistics.nltk_resources import (
     REQUIRED_RESOURCES,
     NltkResource,
+)
+from wordwinnow.infrastructure.ml.model import (
+    SklearnLevelEstimator,
+    installed_sklearn_version,
+    load,
+    metadata_path,
+    save,
 )
 from wordwinnow.infrastructure.observability.metrics import (
     build_metrics,
@@ -110,6 +126,7 @@ from wordwinnow.services.cli.commands import (
     doctor,
     list_recent,
     requeue,
+    set_up,
     show,
     wait_remotely,
 )
@@ -129,6 +146,10 @@ from wordwinnow.services.intake.app import (
 )
 from wordwinnow.services.intake.schemas import (
     AnalysisRequest,
+)
+from wordwinnow.services.progress import (
+    UNWATCHED,
+    WorkProgress,
 )
 
 _TEXT: Final = (
@@ -1124,3 +1145,648 @@ class TestDoctor:
             "downloaded NLTK package punkt_tab",
             "downloaded NLTK package averaged_perceptron_tagger_eng",
         )
+
+    def test_the_report_names_the_command_that_sets_up_in_every_remedy_and_never_make(
+        self,
+        *,
+        settings: Settings,
+        monkeypatch: MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        missing = REQUIRED_RESOURCES[:1]
+
+        def missing_resources(
+            *,
+            resources: Sequence[NltkResource] = REQUIRED_RESOURCES,
+        ) -> tuple[NltkResource, ...]:
+            return tuple(resource for resource in resources if resource in missing)
+
+        monkeypatch.setattr(
+            target=commands,
+            name="missing_resources",
+            value=missing_resources,
+        )
+
+        settings.level_model_path.write_bytes(
+            data=b"foo",
+        )
+
+        monkeypatch.setenv(
+            name="WORDWINNOW_REFERENCE_LISTS_DIR",
+            value=str(
+                object=tmp_path / "nonexistent",
+            ),
+        )
+
+        report = doctor(
+            settings=Settings(),
+            install_nltk_data=False,
+        )
+
+        assert "run `wordwinnow setup` to install the missing packages" in report.lines
+
+        assert any(
+            line.startswith(
+                "MISSING reference lists:",
+            )
+            and line.endswith(
+                "run `wordwinnow setup`, or set WORDWINNOW_REFERENCE_LISTS_DIR",
+            )
+            for line in report.lines
+        )
+
+        assert any(
+            line.startswith(
+                "BROKEN  level model",
+            )
+            and line.endswith(
+                "; `wordwinnow setup` trains a new one",
+            )
+            for line in report.lines
+        )
+
+        assert not any("make " in line for line in report.lines)
+
+    def test_without_a_model_the_heuristic_is_named_with_the_command_that_trains_one(
+        self,
+        *,
+        settings: Settings,
+    ) -> None:
+        report = doctor(
+            settings=settings,
+            install_nltk_data=False,
+        )
+
+        assert report.healthy
+
+        assert (
+            f"none    level model at {settings.level_model_path}; the frequency heuristic is used "
+            "(`wordwinnow setup`)" in report.lines
+        )
+
+        assert not any("make " in line for line in report.lines)
+
+    def test_a_model_trained_with_the_installed_scikit_learn_is_ok(
+        self,
+        *,
+        settings: Settings,
+        fitted_model: SklearnLevelEstimator,
+    ) -> None:
+        save(
+            estimator=fitted_model,
+            path=settings.level_model_path,
+        )
+
+        report = doctor(
+            settings=settings,
+            install_nltk_data=False,
+        )
+
+        assert report.healthy
+
+        assert (
+            f"ok      level model at {settings.level_model_path}: gradient_boosting on frequency+lexical+wordnet"
+            in report.lines
+        )
+
+    def test_a_model_trained_with_another_scikit_learn_is_stale_and_makes_the_report_unhealthy(
+        self,
+        *,
+        settings: Settings,
+        stale_model: SklearnLevelEstimator,
+    ) -> None:
+        save(
+            estimator=stale_model,
+            path=settings.level_model_path,
+        )
+
+        report = doctor(
+            settings=settings,
+            install_nltk_data=False,
+        )
+
+        assert not report.healthy
+
+        assert (
+            f"STALE   level model at {settings.level_model_path}: trained with scikit-learn 0.0.0, and "
+            f"{installed_sklearn_version()} is installed; `wordwinnow setup` trains a new one"
+        ) in report.lines
+
+        assert not any(
+            line.startswith(
+                "ok      level model",
+            )
+            for line in report.lines
+        )
+
+    @mark.parametrize(
+        argnames=(
+            "state",
+            "prefix",
+            "healthy",
+        ),
+        argvalues=(
+            (
+                "absent",
+                "none    level model",
+                True,
+            ),
+            (
+                "current",
+                "ok      level model",
+                True,
+            ),
+            (
+                "without a sidecar",
+                "BROKEN  level model",
+                False,
+            ),
+            (
+                "a sidecar that is not JSON",
+                "BROKEN  level model",
+                False,
+            ),
+            (
+                "cut short",
+                "BROKEN  level model",
+                False,
+            ),
+            (
+                "another scikit-learn",
+                "STALE   level model",
+                False,
+            ),
+            (
+                "another scikit-learn and unreadable",
+                "STALE   level model",
+                False,
+            ),
+        ),
+    )
+    def test_every_state_of_the_model_file_is_named_without_an_exception(
+        self,
+        *,
+        settings: Settings,
+        put_model: Callable[..., None],
+        state: str,
+        prefix: str,
+        healthy: bool,
+    ) -> None:
+        put_model(
+            path=settings.level_model_path,
+            state=state,
+        )
+
+        report = doctor(
+            settings=settings,
+            install_nltk_data=False,
+        )
+
+        assert report.healthy is healthy
+
+        assert (
+            sum(
+                1
+                for line in report.lines
+                if "level model" in line
+                and line.startswith(
+                    prefix,
+                )
+            )
+            == 1
+        )
+
+        assert not any(
+            "level model" in line
+            and not line.startswith(
+                prefix,
+            )
+            for line in report.lines
+        )
+
+    def test_a_pickle_this_scikit_learn_cannot_read_is_never_opened_when_the_sidecar_names_another_version(
+        self,
+        *,
+        settings: Settings,
+        stale_model: SklearnLevelEstimator,
+        unreadable_pickle: bytes,
+    ) -> None:
+        save(
+            estimator=stale_model,
+            path=settings.level_model_path,
+        )
+
+        settings.level_model_path.write_bytes(
+            data=unreadable_pickle,
+        )
+
+        with raises(
+            expected_exception=ModuleNotFoundError,
+        ):
+            load(
+                path=settings.level_model_path,
+            )
+
+        report = doctor(
+            settings=settings,
+            install_nltk_data=False,
+        )
+
+        assert not report.healthy
+
+        assert (
+            f"STALE   level model at {settings.level_model_path}: trained with scikit-learn 0.0.0, and "
+            f"{installed_sklearn_version()} is installed; `wordwinnow setup` trains a new one"
+        ) in report.lines
+
+    def test_a_damaged_sidecar_and_a_cut_short_model_say_what_is_wrong_in_one_line_that_names_the_remedy(
+        self,
+        *,
+        settings: Settings,
+        put_model: Callable[..., None],
+    ) -> None:
+        sidecar = metadata_path(
+            path=settings.level_model_path,
+        )
+
+        put_model(
+            path=settings.level_model_path,
+            state="a sidecar that is not JSON",
+        )
+
+        damaged_sidecar = doctor(
+            settings=settings,
+            install_nltk_data=False,
+        )
+
+        assert (
+            f"BROKEN  level model at {settings.level_model_path}: the metadata sidecar {sidecar} does not hold a "
+            "model's metadata; `wordwinnow setup` trains a new one"
+        ) in damaged_sidecar.lines
+
+        put_model(
+            path=settings.level_model_path,
+            state="cut short",
+        )
+
+        cut_short = tuple(
+            line
+            for line in doctor(
+                settings=settings,
+                install_nltk_data=False,
+            ).lines
+            if line.startswith(
+                "BROKEN  level model",
+            )
+        )
+
+        assert (
+            len(
+                cut_short,
+            )
+            == 1
+        )
+
+        assert cut_short[0].startswith(
+            f"BROKEN  level model at {settings.level_model_path}: the model at {settings.level_model_path} cannot be "
+            "read (",
+        )
+
+        assert cut_short[0].endswith(
+            "); `wordwinnow setup` trains a new one",
+        )
+
+    def test_an_earlier_store_in_the_current_directory_is_named_after_the_store_in_use_and_never_moved(
+        self,
+        *,
+        settings: Settings,
+        tmp_path: Path,
+    ) -> None:
+        before = doctor(
+            settings=settings,
+            install_nltk_data=False,
+        )
+
+        earlier = tmp_path / "data" / "local" / "wordwinnow.db"
+
+        earlier.parent.mkdir(
+            parents=True,
+        )
+
+        earlier.write_bytes(
+            data=b"foo",
+        )
+
+        after = doctor(
+            settings=settings,
+            install_nltk_data=False,
+        )
+
+        position = after.lines.index(
+            f"        analysis store: {settings.database_url}",
+        )
+
+        assert after.lines[position + 1] == (
+            "        an earlier store is at data/local/wordwinnow.db; "
+            "WORDWINNOW_DATABASE_URL=sqlite+aiosqlite:///data/local/wordwinnow.db keeps using it"
+        )
+
+        assert after.healthy == before.healthy
+
+        assert earlier.read_bytes() == b"foo"
+
+        assert not any("an earlier store" in line for line in before.lines)
+
+    def test_the_earlier_store_is_not_named_when_the_configured_store_is_that_one(
+        self,
+        *,
+        settings: Settings,
+        monkeypatch: MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        (tmp_path / "data" / "local").mkdir(
+            parents=True,
+        )
+
+        (tmp_path / "data" / "local" / "wordwinnow.db").write_bytes(
+            data=b"foo",
+        )
+
+        monkeypatch.setenv(
+            name="WORDWINNOW_DATABASE_URL",
+            value="sqlite+aiosqlite:///data/local/wordwinnow.db",
+        )
+
+        report = doctor(
+            settings=Settings(),
+            install_nltk_data=False,
+        )
+
+        assert not any("an earlier store" in line for line in report.lines)
+
+
+@fixture
+def unprepared(
+    *,
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> Settings:
+    monkeypatch.chdir(
+        path=tmp_path,
+    )
+
+    monkeypatch.setenv(
+        name="WORDWINNOW_REFERENCE_LISTS_DIR",
+        value=str(
+            object=tmp_path / "reference",
+        ),
+    )
+
+    monkeypatch.setenv(
+        name="WORDWINNOW_LEVEL_MODEL_PATH",
+        value=str(
+            object=tmp_path / "model.joblib",
+        ),
+    )
+
+    return Settings()
+
+
+# TEST:
+# Training takes seconds, and what these tests ask is whether `set_up` trains, so a recording stands in for it; the
+# real training runs once, through the command line.
+@fixture
+def trained(
+    *,
+    monkeypatch: MonkeyPatch,
+) -> list[tuple[Path, int]]:
+    calls: list[tuple[Path, int]] = []
+
+    def train_level_model(
+        *,
+        settings: Settings,
+        seed: int,
+        model_path: Path,
+        progress: WorkProgress = UNWATCHED,
+    ) -> str:
+        calls.append(
+            (
+                model_path,
+                seed,
+            ),
+        )
+
+        return f"wrote a model to {model_path}"
+
+    monkeypatch.setattr(
+        target=commands,
+        name="train_level_model",
+        value=train_level_model,
+    )
+
+    return calls
+
+
+@final
+class TestSetUp:
+    def test_it_installs_downloads_trains_and_reports_in_that_order(
+        self,
+        *,
+        unprepared: Settings,
+        requested_lists: list[str],
+        trained: list[tuple[Path, int]],
+        monkeypatch: MonkeyPatch,
+    ) -> None:
+        absent = list(
+            REQUIRED_RESOURCES[:2],
+        )
+
+        def missing_resources(
+            *,
+            resources: Sequence[NltkResource] = REQUIRED_RESOURCES,
+        ) -> tuple[NltkResource, ...]:
+            return tuple(resource for resource in resources if resource in absent)
+
+        def download_resources(
+            *,
+            resources: Sequence[NltkResource] = REQUIRED_RESOURCES,
+            target: Path | None = None,
+            client: object = None,
+        ) -> tuple[NltkResource, ...]:
+            fetched = missing_resources(
+                resources=resources,
+            )
+
+            for resource in fetched:
+                absent.remove(
+                    resource,
+                )
+
+            return fetched
+
+        monkeypatch.setattr(
+            target=commands,
+            name="missing_resources",
+            value=missing_resources,
+        )
+
+        monkeypatch.setattr(
+            target=commands,
+            name="download_resources",
+            value=download_resources,
+        )
+
+        lines = set_up(
+            settings=unprepared,
+        )
+
+        directory = unprepared.reference_lists_dir
+
+        assert lines == (
+            "downloaded NLTK package punkt_tab",
+            "downloaded NLTK package averaged_perceptron_tagger_eng",
+            f"downloaded reference list {REFERENCE_FILES[0]} to {directory}",
+            f"downloaded reference list {REFERENCE_FILES[1]} to {directory}",
+            f"wrote a model to {unprepared.level_model_path}",
+            f"ready   NLTK data, reference lists in {directory}, level model at {unprepared.level_model_path}",
+            *REFERENCE_CITATIONS,
+        )
+
+        assert trained == [
+            (
+                unprepared.level_model_path,
+                42,
+            ),
+        ]
+
+        assert len(
+            requested_lists,
+        ) == len(
+            REFERENCE_FILES,
+        )
+
+    def test_a_second_run_changes_nothing_and_says_only_what_is_ready(
+        self,
+        *,
+        unprepared: Settings,
+        requested_lists: list[str],
+        trained: list[tuple[Path, int]],
+        fitted_model: SklearnLevelEstimator,
+    ) -> None:
+        save(
+            estimator=fitted_model,
+            path=unprepared.level_model_path,
+        )
+
+        first = set_up(
+            settings=unprepared,
+        )
+
+        assert first[:2] == (
+            f"downloaded reference list {REFERENCE_FILES[0]} to {unprepared.reference_lists_dir}",
+            f"downloaded reference list {REFERENCE_FILES[1]} to {unprepared.reference_lists_dir}",
+        )
+
+        before = {
+            path: path.stat().st_mtime_ns
+            for path in unprepared.reference_lists_dir.parent.rglob(
+                pattern="*",
+            )
+            if path.is_file()
+        }
+
+        second = set_up(
+            settings=unprepared,
+        )
+
+        assert second == (
+            f"ready   NLTK data, reference lists in {unprepared.reference_lists_dir}, level model at "
+            f"{unprepared.level_model_path}",
+            *REFERENCE_CITATIONS,
+        )
+
+        assert before == {
+            path: path.stat().st_mtime_ns
+            for path in unprepared.reference_lists_dir.parent.rglob(
+                pattern="*",
+            )
+            if path.is_file()
+        }
+
+        assert trained == []
+
+        assert len(
+            requested_lists,
+        ) == len(
+            REFERENCE_FILES,
+        )
+
+    @mark.parametrize(
+        argnames="state",
+        argvalues=(
+            "absent",
+            "without a sidecar",
+            "a sidecar that is not JSON",
+            "cut short",
+            "another scikit-learn",
+            "another scikit-learn and unreadable",
+        ),
+    )
+    def test_a_model_that_is_absent_unusable_or_from_another_scikit_learn_is_trained_again(
+        self,
+        *,
+        unprepared: Settings,
+        requested_lists: list[str],
+        trained: list[tuple[Path, int]],
+        put_model: Callable[..., None],
+        state: str,
+    ) -> None:
+        put_model(
+            path=unprepared.level_model_path,
+            state=state,
+        )
+
+        lines = set_up(
+            settings=unprepared,
+        )
+
+        assert f"wrote a model to {unprepared.level_model_path}" in lines
+
+        assert trained == [
+            (
+                unprepared.level_model_path,
+                42,
+            ),
+        ]
+
+    def test_a_list_that_cannot_be_had_stops_it_before_a_model_is_trained(
+        self,
+        *,
+        unprepared: Settings,
+        trained: list[tuple[Path, int]],
+        monkeypatch: MonkeyPatch,
+    ) -> None:
+        def download_reference_lists(
+            *,
+            directory: Path,
+            client: object = None,
+        ) -> tuple[str, ...]:
+            raise LinguisticResourcesMissingError(
+                "the reference list foo could not be fetched from https://example.com/foo (HTTPStatusError)",
+            )
+
+        monkeypatch.setattr(
+            target=commands,
+            name="download_reference_lists",
+            value=download_reference_lists,
+        )
+
+        with raises(
+            expected_exception=LinguisticResourcesMissingError,
+            match="could not be fetched",
+        ):
+            set_up(
+                settings=unprepared,
+            )
+
+        assert trained == []

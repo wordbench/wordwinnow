@@ -12,9 +12,14 @@ from pathlib import (
     Path,
 )
 from typing import (
+    Final,
     final,
 )
 
+from platformdirs import (
+    user_cache_path,
+    user_data_path,
+)
 from pydantic import (
     Field,
     SecretStr,
@@ -28,6 +33,52 @@ from pydantic_settings import (
 from wordwinnow.domain.enums import (
     UnorderedStrEnum,
 )
+
+# NOTE:
+# The user's own directories hold what the command keeps between runs, wherever it is run from: the analysis store,
+# the level model, and the reference lists in the data directory, and the dictionary cache in the cache directory.
+#
+# They are resolved when `Settings` is built and never at import, and resolving one creates nothing; the code that
+# first writes into a directory creates it.
+_APPLICATION: Final = "wordwinnow"
+
+
+def _default_database_url() -> str:
+    path = (
+        user_data_path(
+            appname=_APPLICATION,
+        )
+        / "wordwinnow.db"
+    )
+
+    return f"sqlite+aiosqlite:///{path}"
+
+
+def _default_dictionary_cache_path() -> Path:
+    return (
+        user_cache_path(
+            appname=_APPLICATION,
+        )
+        / "dictionary-cache.db"
+    )
+
+
+def _default_reference_lists_dir() -> Path:
+    return (
+        user_data_path(
+            appname=_APPLICATION,
+        )
+        / "reference"
+    )
+
+
+def _default_level_model_path() -> Path:
+    return (
+        user_data_path(
+            appname=_APPLICATION,
+        )
+        / "cefr_level_model.joblib"
+    )
 
 
 class LogFormat(
@@ -76,7 +127,9 @@ class Settings(
 
     # NOTE:
     # Stores, in the order the pipeline reaches them: the analysis store, the queue, the cache, the facts.
-    database_url: str = "sqlite+aiosqlite:///data/local/wordwinnow.db"
+    database_url: str = Field(
+        default_factory=_default_database_url,
+    )
 
     kafka_bootstrap_servers: str = "127.0.0.1:9092"
 
@@ -162,8 +215,8 @@ class Settings(
     # NOTE:
     # Where the local mode keeps the dictionary's answers from one command to the next; the distributed mode keeps
     # them in Redis.
-    dictionary_cache_path: Path = Path(
-        "data/local/dictionary-cache.db",
+    dictionary_cache_path: Path = Field(
+        default_factory=_default_dictionary_cache_path,
     )
 
     # NOTE:
@@ -174,12 +227,12 @@ class Settings(
     # Linguistic resources and the level model.
     nltk_data: Path | None = None
 
-    reference_lists_dir: Path = Path(
-        "data/reference",
+    reference_lists_dir: Path = Field(
+        default_factory=_default_reference_lists_dir,
     )
 
-    level_model_path: Path = Path(
-        "models/cefr_level_model.joblib",
+    level_model_path: Path = Field(
+        default_factory=_default_level_model_path,
     )
 
     # NOTE:

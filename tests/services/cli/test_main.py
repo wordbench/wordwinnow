@@ -4,6 +4,9 @@ The command line itself, through Typer's runner.
 These tests need the NLTK data `make nltk-data` installs.
 """
 
+from collections.abc import (
+    Callable,
+)
 from datetime import (
     UTC,
     datetime,
@@ -27,6 +30,9 @@ from typing import (
     final,
 )
 
+from platformdirs import (
+    user_data_path,
+)
 from pytest import (
     MonkeyPatch,
     fixture,
@@ -47,6 +53,9 @@ from typer.testing import (
 
 from wordwinnow.application.dto import (
     ProcessingProgress,
+)
+from wordwinnow.application.errors import (
+    LinguisticResourcesMissingError,
 )
 from wordwinnow.domain.analysis import (
     Analysis,
@@ -71,6 +80,19 @@ from wordwinnow.domain.learner import (
 from wordwinnow.infrastructure.composition import (
     API_SOURCES,
     FEED_SOURCE,
+)
+from wordwinnow.infrastructure.lexicon.reference_lists import (
+    REFERENCE_FILES,
+)
+from wordwinnow.infrastructure.lexicon.reference_sources import (
+    REFERENCE_CITATIONS,
+)
+from wordwinnow.infrastructure.ml.model import (
+    SklearnLevelEstimator,
+    installed_sklearn_version,
+    load,
+    read_metadata,
+    save,
 )
 from wordwinnow.infrastructure.settings import (
     Settings,
@@ -798,6 +820,86 @@ class TestCli:
 
         assert "level model" in result.output
 
+    def test_doctor_reports_a_model_from_another_scikit_learn_and_exits_one(
+        self,
+        *,
+        workspace: Path,
+        stale_model: SklearnLevelEstimator,
+    ) -> None:
+        save(
+            estimator=stale_model,
+            path=Settings().level_model_path,
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "doctor",
+            ],
+        )
+
+        assert result.exit_code == 1
+
+        assert "STALE" in result.output
+
+        assert "Traceback" not in result.output
+
+    def test_doctor_reports_a_model_from_another_scikit_learn_that_this_one_cannot_read_and_exits_one(
+        self,
+        *,
+        workspace: Path,
+        put_model: Callable[..., None],
+    ) -> None:
+        put_model(
+            path=Settings().level_model_path,
+            state="another scikit-learn and unreadable",
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "doctor",
+            ],
+        )
+
+        assert result.exit_code == 1
+
+        assert "STALE" in result.output
+
+        assert "Traceback" not in result.output
+
+    @mark.parametrize(
+        argnames="state",
+        argvalues=(
+            "a sidecar that is not JSON",
+            "cut short",
+        ),
+    )
+    def test_doctor_reports_a_damaged_model_file_and_exits_one(
+        self,
+        *,
+        workspace: Path,
+        put_model: Callable[..., None],
+        state: str,
+    ) -> None:
+        put_model(
+            path=Settings().level_model_path,
+            state=state,
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "doctor",
+            ],
+        )
+
+        assert result.exit_code == 1
+
+        assert "BROKEN" in result.output
+
+        assert "Traceback" not in result.output
+
     @mark.parametrize(
         argnames="view",
         argvalues=(
@@ -1193,3 +1295,268 @@ class TestShowingAnAnalysisInProgress:
         )
 
         assert "error:" not in result.output
+
+
+@fixture
+def empty_directory(
+    *,
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> Path:
+    directory = tmp_path / "empty"
+
+    directory.mkdir()
+
+    monkeypatch.chdir(
+        path=directory,
+    )
+
+    return directory
+
+
+def _modification_times(
+    directory: Path,
+    /,
+) -> dict[Path, int]:
+    return {
+        path: path.stat().st_mtime_ns
+        for path in directory.rglob(
+            pattern="*",
+        )
+        if path.is_file()
+    }
+
+
+@final
+class TestSetup:
+    def test_it_prepares_an_analysis_in_the_users_directory_and_a_second_run_changes_nothing(
+        self,
+        *,
+        empty_directory: Path,
+        requested_lists: list[str],
+    ) -> None:
+        data = user_data_path(
+            appname="wordwinnow",
+        )
+
+        ready = (
+            f"ready   NLTK data, reference lists in {data / 'reference'}, level model at "
+            f"{data / 'cefr_level_model.joblib'}"
+        )
+
+        first = _runner.invoke(
+            app=app,
+            args=[
+                "setup",
+            ],
+        )
+
+        assert first.exit_code == 0, first.output
+
+        lines = first.stdout.splitlines()
+
+        assert lines[:2] == [f"downloaded reference list {name} to {data / 'reference'}" for name in REFERENCE_FILES]
+
+        assert lines[2].startswith(
+            "wrote ",
+        )
+
+        assert lines[2].endswith(
+            f" to {data / 'cefr_level_model.joblib'}",
+        )
+
+        assert lines[3:] == [
+            ready,
+            *REFERENCE_CITATIONS,
+        ]
+
+        written = _modification_times(
+            data,
+        )
+
+        assert sorted(
+            path.relative_to(
+                other=data,
+            ).as_posix()
+            for path in written
+        ) == [
+            "cefr_level_model.joblib",
+            "cefr_level_model.joblib.metadata.json",
+            f"reference/{REFERENCE_FILES[0]}",
+            f"reference/{REFERENCE_FILES[1]}",
+        ]
+
+        second = _runner.invoke(
+            app=app,
+            args=[
+                "setup",
+            ],
+        )
+
+        assert second.exit_code == 0, second.output
+
+        assert second.stdout.splitlines() == [
+            ready,
+            *REFERENCE_CITATIONS,
+        ]
+
+        assert written == _modification_times(
+            data,
+        )
+
+        assert len(
+            requested_lists,
+        ) == len(
+            REFERENCE_FILES,
+        )
+
+        assert (
+            tuple(
+                empty_directory.iterdir(),
+            )
+            == ()
+        )
+
+    @mark.parametrize(
+        argnames="state",
+        argvalues=(
+            "another scikit-learn and unreadable",
+            "cut short",
+        ),
+    )
+    def test_it_trains_again_a_model_it_cannot_use_and_a_second_run_changes_nothing(
+        self,
+        *,
+        empty_directory: Path,
+        requested_lists: list[str],
+        fitted_model: SklearnLevelEstimator,
+        put_model: Callable[..., None],
+        state: str,
+    ) -> None:
+        data = user_data_path(
+            appname="wordwinnow",
+        )
+
+        path = data / "cefr_level_model.joblib"
+
+        put_model(
+            path=path,
+            state=state,
+        )
+
+        first = _runner.invoke(
+            app=app,
+            args=[
+                "setup",
+            ],
+        )
+
+        assert first.exit_code == 0, first.output
+
+        assert "Traceback" not in first.output
+
+        assert (
+            sum(
+                1
+                for line in first.stdout.splitlines()
+                if line.startswith(
+                    "wrote ",
+                )
+            )
+            == 1
+        )
+
+        metadata = read_metadata(
+            path=path,
+        )
+
+        assert metadata is not None
+
+        assert metadata.sklearn_version == installed_sklearn_version()
+
+        assert metadata.train_size > fitted_model.metadata.train_size
+
+        assert (
+            load(
+                path=path,
+            )
+            is not None
+        )
+
+        assert sorted(path.name for path in data.iterdir()) == [
+            "cefr_level_model.joblib",
+            "cefr_level_model.joblib.metadata.json",
+            "reference",
+        ]
+
+        written = _modification_times(
+            data,
+        )
+
+        second = _runner.invoke(
+            app=app,
+            args=[
+                "setup",
+            ],
+        )
+
+        assert second.exit_code == 0, second.output
+
+        assert second.stdout.splitlines() == [
+            f"ready   NLTK data, reference lists in {data / 'reference'}, level model at {path}",
+            *REFERENCE_CITATIONS,
+        ]
+
+        assert written == _modification_times(
+            data,
+        )
+
+        assert (
+            tuple(
+                empty_directory.iterdir(),
+            )
+            == ()
+        )
+
+    def test_a_list_that_cannot_be_fetched_prints_one_error_line_and_exits_one(
+        self,
+        *,
+        empty_directory: Path,
+        monkeypatch: MonkeyPatch,
+    ) -> None:
+        def download_reference_lists(
+            *,
+            directory: Path,
+            client: object = None,
+        ) -> tuple[str, ...]:
+            raise LinguisticResourcesMissingError(
+                "the reference list foo could not be fetched (nonexistent)",
+            )
+
+        monkeypatch.setattr(
+            target=commands,
+            name="download_reference_lists",
+            value=download_reference_lists,
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "setup",
+            ],
+        )
+
+        assert result.exit_code == 1
+
+        assert result.stdout == ""
+
+        assert result.output.splitlines() == [
+            "error: the reference list foo could not be fetched (nonexistent)",
+        ]
+
+        assert (
+            tuple(
+                empty_directory.iterdir(),
+            )
+            == ()
+        )

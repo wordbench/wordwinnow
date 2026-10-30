@@ -233,7 +233,7 @@ class TestMissingLists:
     ) -> None:
         with raises(
             expected_exception=LinguisticResourcesMissingError,
-            match="WORDWINNOW_REFERENCE_LISTS_DIR",
+            match="run `wordwinnow setup`, or set WORDWINNOW_REFERENCE_LISTS_DIR",
         ):
             CsvReferenceLexicon.from_directory(
                 directory=tmp_path,

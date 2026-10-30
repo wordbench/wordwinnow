@@ -10,6 +10,10 @@ from typing import (
     final,
 )
 
+from platformdirs import (
+    user_cache_path,
+    user_data_path,
+)
 from pydantic import (
     ValidationError,
 )
@@ -56,6 +60,112 @@ class TestSettings:
         assert settings.log_format is LogFormat.CONSOLE
 
         assert settings.dictionary is DictionaryName.FREE_DICTIONARY
+
+    def test_no_test_sees_the_real_user_directories(
+        self,
+        *,
+        tmp_path: Path,
+    ) -> None:
+        assert user_data_path(
+            appname="wordwinnow",
+        ).is_relative_to(
+            other=tmp_path,
+        )
+
+        assert user_cache_path(
+            appname="wordwinnow",
+        ).is_relative_to(
+            other=tmp_path,
+        )
+
+    def test_the_state_defaults_to_the_users_directories_and_resolving_them_creates_none(
+        self,
+        *,
+        monkeypatch: MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.chdir(
+            path=tmp_path,
+        )
+
+        data = user_data_path(
+            appname="wordwinnow",
+        )
+
+        cache = user_cache_path(
+            appname="wordwinnow",
+        )
+
+        settings = Settings()
+
+        assert (
+            settings.database_url,
+            settings.level_model_path,
+            settings.reference_lists_dir,
+            settings.dictionary_cache_path,
+            settings.nltk_data,
+        ) == (
+            f"sqlite+aiosqlite:///{data / 'wordwinnow.db'}",
+            data / "cefr_level_model.joblib",
+            data / "reference",
+            cache / "dictionary-cache.db",
+            None,
+        )
+
+        assert (
+            tuple(
+                tmp_path.rglob(
+                    pattern="*",
+                ),
+            )
+            == ()
+        )
+
+    def test_each_default_gives_way_to_its_variable(
+        self,
+        *,
+        monkeypatch: MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv(
+            name="WORDWINNOW_DATABASE_URL",
+            value="sqlite+aiosqlite:///foo.db",
+        )
+
+        monkeypatch.setenv(
+            name="WORDWINNOW_LEVEL_MODEL_PATH",
+            value=str(
+                object=tmp_path / "foo.joblib",
+            ),
+        )
+
+        monkeypatch.setenv(
+            name="WORDWINNOW_REFERENCE_LISTS_DIR",
+            value=str(
+                object=tmp_path / "foo",
+            ),
+        )
+
+        monkeypatch.setenv(
+            name="WORDWINNOW_DICTIONARY_CACHE_PATH",
+            value=str(
+                object=tmp_path / "foo.db",
+            ),
+        )
+
+        settings = Settings()
+
+        assert (
+            settings.database_url,
+            settings.level_model_path,
+            settings.reference_lists_dir,
+            settings.dictionary_cache_path,
+        ) == (
+            "sqlite+aiosqlite:///foo.db",
+            tmp_path / "foo.joblib",
+            tmp_path / "foo",
+            tmp_path / "foo.db",
+        )
 
     def test_a_remote_lookup_outlasts_the_enrichment_services_own_retries(
         self,

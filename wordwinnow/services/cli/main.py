@@ -1,8 +1,9 @@
 """
 The `wordwinnow` command.
 
-`analyze`, `show`, `list`, and `stats` are the learner's commands; `admin`,
-`db`, `serve`, `work`, `ml`, `bench`, and `doctor` are the operator's.
+`setup`, `analyze`, `show`, `list`, and `stats` are the learner's commands;
+`admin`, `db`, `serve`, `work`, `ml`, `bench`, and `doctor` are the
+operator's.
 
 Every command reads the settings once, configures the process, and calls into
 a module that a test can call without a terminal.
@@ -606,6 +607,42 @@ def _request(
         known_lemmas=known_lemmas,
         include_dictionary=dictionary,
     )
+
+
+@app.command()
+def setup() -> None:
+    """
+    Download and prepare what an analysis needs and does not have yet.
+
+    It installs the NLTK data, downloads the reference lists and checks their
+    digests, and trains the level model, doing only what is missing or stale.
+    """
+
+    settings = _settings()
+
+    try:
+        with TerminalProgress(
+            console=_errors,
+        ) as progress:
+            lines = commands.set_up(
+                settings=settings,
+                progress=progress,
+            )
+
+    except LinguisticResourcesMissingError as exception:
+        raise _fail(
+            exception,
+        ) from exception
+
+    # NOTE:
+    # Soft wrapping keeps each line whole when a pipe reads the output, as the citations, each one line, need.
+    for line in lines:
+        _console.print(
+            line,
+            markup=False,
+            highlight=False,
+            soft_wrap=True,
+        )
 
 
 @app.command(
@@ -1293,7 +1330,7 @@ def train(
         Option(
             help="The random seed of the model.",
         ),
-    ] = 42,
+    ] = commands.DEFAULT_SEED,
     model_path: Annotated[
         Path | None,
         Option(

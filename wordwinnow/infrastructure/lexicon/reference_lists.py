@@ -1,6 +1,6 @@
 """
-The CEFR reference word lists, read from the CSV files that ship with the
-project.
+The CEFR reference word lists, read from the CSV files in the directory the
+settings name, where `wordwinnow setup` puts them.
 
 Two lists are combined: CEFR-J for A1 to B2 and the Octanove profile for C1
 and C2.
@@ -193,8 +193,8 @@ class CsvReferenceLexicon:
             path = directory / name
 
             # NOTE:
-            # The directory is relative to where the command runs, so a missing list most often means the wrong
-            # directory, and the message says how to fix that rather than showing a traceback.
+            # A missing list most often means setup has not run, or the setting names another directory, and the
+            # message says how to fix either rather than showing a traceback.
             try:
                 handle = path.open(
                     encoding="utf-8-sig",
@@ -203,7 +203,7 @@ class CsvReferenceLexicon:
 
             except FileNotFoundError as exception:
                 raise LinguisticResourcesMissingError(
-                    f"the reference list {path} does not exist; run from the repository root, or set "
+                    f"the reference list {path} does not exist; run `wordwinnow setup`, or set "
                     "WORDWINNOW_REFERENCE_LISTS_DIR",
                 ) from exception
 

@@ -646,7 +646,7 @@ async def local_profile(
 
     # NOTE:
     # The adapters load before the store is prepared, so a command that cannot find its reference lists, such as one
-    # run outside the repository's root, stops before it creates a store there.
+    # run before `wordwinnow setup`, stops before it creates a store.
     adapters = build_linguistic_adapters(
         settings=settings,
     )

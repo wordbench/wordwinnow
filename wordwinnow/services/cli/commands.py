@@ -91,6 +91,10 @@ from wordwinnow.infrastructure.dictionary.activity import (
 from wordwinnow.infrastructure.lexicon.reference_lists import (
     CsvReferenceLexicon,
 )
+from wordwinnow.infrastructure.lexicon.reference_sources import (
+    REFERENCE_CITATIONS,
+    download_reference_lists,
+)
 from wordwinnow.infrastructure.lexicon.wordnet_semantics import (
     WordNetLexicalSemantics,
 )
@@ -104,7 +108,10 @@ from wordwinnow.infrastructure.linguistics.wordfreq_frequency import (
 )
 from wordwinnow.infrastructure.ml.model import (
     ModelFileError,
+    installed_sklearn_version,
+    is_stale,
     load,
+    read_metadata,
     save,
 )
 from wordwinnow.infrastructure.observability.metrics import (
@@ -168,6 +175,19 @@ from wordwinnow.services.progress import (
 # NOTE:
 # How often the remote flow asks whether the analysis is done.
 POLL_SECONDS: Final = 1.0
+
+# NOTE:
+# The seed the shipped model is trained with, by `ml train` and by `setup` alike, so that both write the same model.
+DEFAULT_SEED: Final = 42
+
+# NOTE:
+# Where a clone kept its store before the defaults moved into the user's directories, relative to the current
+# directory.
+_EARLIER_STORE: Final = Path(
+    "data/local/wordwinnow.db",
+)
+
+_EARLIER_STORE_URL: Final = f"sqlite+aiosqlite:///{_EARLIER_STORE}"
 
 # NOTE:
 # Why an operator's view of a local analysis has no dictionary to show, by whether the analysis asks one.
@@ -865,6 +885,137 @@ def run_level_experiment(
     )
 
 
+def _install_nltk_data(
+    settings: Settings,
+    progress: WorkProgress,
+    /,
+) -> tuple[str, ...]:
+    lines: list[str] = []
+
+    absent = missing_resources()
+
+    progress.begin(
+        description="downloading the NLTK packages that are missing",
+        steps=len(
+            absent,
+        ),
+    )
+
+    # NOTE:
+    # One package at a time, so the count moves as each one arrives; the data path is added once however often it is
+    # asked for.
+    for resource in absent:
+        progress.describe(
+            description=f"downloading the NLTK package {resource.package}",
+        )
+
+        for downloaded in download_resources(
+            resources=(resource,),
+            target=settings.nltk_data,
+        ):
+            lines.append(
+                f"downloaded NLTK package {downloaded.package}",
+            )
+
+        progress.advance()
+
+    return tuple(
+        lines,
+    )
+
+
+def _needs_model(
+    settings: Settings,
+    /,
+) -> bool:
+    try:
+        metadata = read_metadata(
+            path=settings.level_model_path,
+        )
+
+        # NOTE:
+        # The sidecar is asked before the model is opened: a model from another scikit-learn may be one this
+        # scikit-learn cannot read, and it is trained again either way.
+        if metadata is None or is_stale(
+            metadata=metadata,
+        ):
+            return True
+
+        load(
+            path=settings.level_model_path,
+        )
+
+    except ModelFileError:
+        return True
+
+    return False
+
+
+def set_up(
+    *,
+    settings: Settings,
+    progress: WorkProgress = UNWATCHED,
+) -> tuple[str, ...]:
+    """
+    Make ready what an analysis needs, doing only what is missing or stale:
+    the NLTK data, the reference lists, and the level model.
+
+    Returns the lines that say what was done and what is ready.
+
+    Raises `LinguisticResourcesMissingError` when a package or a list cannot
+    be had.
+    """
+
+    lines = list(
+        _install_nltk_data(
+            settings,
+            progress,
+        ),
+    )
+
+    progress.begin(
+        description="downloading the reference lists that are missing",
+        steps=None,
+    )
+
+    for name in download_reference_lists(
+        directory=settings.reference_lists_dir,
+    ):
+        lines.append(
+            f"downloaded reference list {name} to {settings.reference_lists_dir}",
+        )
+
+    progress.begin(
+        description="checking the level model",
+        steps=None,
+    )
+
+    if _needs_model(
+        settings,
+    ):
+        lines.append(
+            train_level_model(
+                settings=settings,
+                seed=DEFAULT_SEED,
+                model_path=settings.level_model_path,
+                progress=progress,
+            ),
+        )
+
+    lines.append(
+        f"ready   NLTK data, reference lists in {settings.reference_lists_dir}, level model at "
+        f"{settings.level_model_path}",
+    )
+
+    lines.extend(
+        REFERENCE_CITATIONS,
+    )
+
+    return tuple(
+        lines,
+    )
+
+
 @dataclass(
     frozen=True,
     kw_only=True,
@@ -897,32 +1048,12 @@ def doctor(
     healthy = True
 
     if install_nltk_data:
-        absent = missing_resources()
-
-        progress.begin(
-            description="downloading the NLTK packages that are missing",
-            steps=len(
-                absent,
+        lines.extend(
+            _install_nltk_data(
+                settings,
+                progress,
             ),
         )
-
-        # NOTE:
-        # One package at a time, so the count moves as each one arrives; the data path is added once however often it
-        # is asked for.
-        for resource in absent:
-            progress.describe(
-                description=f"downloading the NLTK package {resource.package}",
-            )
-
-            for downloaded in download_resources(
-                resources=(resource,),
-                target=settings.nltk_data,
-            ):
-                lines.append(
-                    f"downloaded NLTK package {downloaded.package}",
-                )
-
-            progress.advance()
 
     progress.begin(
         description="checking the NLTK data, the lists, WordNet, and the level model",
@@ -942,7 +1073,7 @@ def doctor(
 
     if missing:
         lines.append(
-            "run `wordwinnow doctor --install-nltk-data` to install the missing packages",
+            "run `wordwinnow setup` to install the missing packages",
         )
 
     try:
@@ -974,30 +1105,53 @@ def doctor(
         )
 
     try:
-        estimator = load(
+        metadata = read_metadata(
             path=settings.level_model_path,
         )
+
+        # NOTE:
+        # A stale model is reported from its sidecar and never opened, so that one this scikit-learn cannot read is
+        # still named for what it is.
+        if metadata is not None and not is_stale(
+            metadata=metadata,
+        ):
+            load(
+                path=settings.level_model_path,
+            )
 
     except ModelFileError as exception:
         healthy = False
 
         lines.append(
-            f"BROKEN  level model at {settings.level_model_path}: {exception}; `make model` trains a new one",
+            f"BROKEN  level model at {settings.level_model_path}: {exception}; `wordwinnow setup` trains a new one",
         )
 
     else:
-        if estimator is not None:
-            families = "+".join(
-                estimator.metadata.families,
+        if metadata is None:
+            lines.append(
+                f"none    level model at {settings.level_model_path}; the frequency heuristic is used "
+                "(`wordwinnow setup`)",
             )
 
+        elif is_stale(
+            metadata=metadata,
+        ):
+            healthy = False
+
+            installed = installed_sklearn_version()
+
             lines.append(
-                f"ok      level model at {settings.level_model_path}: {estimator.metadata.model_kind} on {families}",
+                f"STALE   level model at {settings.level_model_path}: trained with scikit-learn "
+                f"{metadata.sklearn_version}, and {installed} is installed; `wordwinnow setup` trains a new one",
             )
 
         else:
+            families = "+".join(
+                metadata.families,
+            )
+
             lines.append(
-                f"none    level model at {settings.level_model_path}; the frequency heuristic is used (`make model`)",
+                f"ok      level model at {settings.level_model_path}: {metadata.model_kind} on {families}",
             )
 
     names = ", ".join(
@@ -1026,6 +1180,12 @@ def doctor(
     lines.append(
         f"        analysis store: {store}",
     )
+
+    if _EARLIER_STORE.is_file() and settings.database_url != _EARLIER_STORE_URL:
+        lines.append(
+            f"        an earlier store is at {_EARLIER_STORE}; "
+            f"WORDWINNOW_DATABASE_URL={_EARLIER_STORE_URL} keeps using it",
+        )
 
     lines.append(
         f"        intake service: {settings.intake_url}",

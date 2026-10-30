@@ -2,7 +2,7 @@
 ## The template every generated migration starts from.
 ##
 ## Autogenerate renders types as `sa.Column`, `sa.String`, and so on, which is why the alias import below stays:
-## `alembic/versions` is Alembic's to shape, and the project excludes it from its own formatting and checks.
+## `migration_scripts/versions` is Alembic's to shape, and the project excludes it from its own formatting and checks.
 ##
 ## The header leaves out Alembic's creation date: the revision chain already orders the migrations, and a date would
 ## record only when each was written.

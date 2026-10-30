@@ -3,9 +3,9 @@ The Alembic environment: where the migrations find the database and the
 models.
 
 The URL comes from `sqlalchemy.url` when a programmatic caller set it,
-otherwise from `WORDWINNOW_DATABASE_URL`, otherwise from the project
-settings; a caller that already holds a connection hands it over through
-the configuration's `connection` attribute and the migrations run on it.
+otherwise from `WORDWINNOW_DATABASE_URL`, otherwise from the project settings;
+a caller that already holds a connection hands it over through the
+configuration's `connection` attribute and the migrations run on it.
 """
 
 from asyncio import (
@@ -18,13 +18,13 @@ from typing import (
     Final,
 )
 
+from alembic import (
+    context,
+)
 from sqlalchemy import (
     Connection,
 )
 
-from alembic import (
-    context,
-)
 from wordwinnow.infrastructure.persistence.engine import (
     build_engine,
 )
@@ -67,8 +67,8 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     """
-    Apply the migrations over a connection: the one a caller supplied, or
-    a fresh one on an engine built for the resolved URL.
+    Apply the migrations over a connection: the one a caller supplied, or a
+    fresh one on an engine built for the resolved URL.
     """
 
     connection = config.attributes.get(
