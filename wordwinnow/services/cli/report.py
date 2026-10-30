@@ -443,13 +443,25 @@ def render_summary(
         )
 
         if analysis.options.include_dictionary:
+            outcomes = lookup_outcome_counts(
+                items=analysis.items,
+            )
+
+            asked = sum(
+                outcomes.values(),
+            )
+
+            total = len(
+                analysis.items,
+            )
+
+            outcomes_text = _counted(
+                outcomes,
+            )
+
             table.add_row(
                 "Dictionary",
-                _counted(
-                    lookup_outcome_counts(
-                        items=analysis.items,
-                    ),
-                ),
+                f"asked about {asked} of {total} items: {outcomes_text}",
             )
 
         wait = analysis.queue_wait_seconds

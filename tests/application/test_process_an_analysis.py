@@ -112,6 +112,7 @@ from wordwinnow.domain.senses import (
     LexicalSense,
 )
 from wordwinnow.domain.study import (
+    STUDY_TIERS,
     GlossSource,
     StudyTier,
 )
@@ -686,6 +687,8 @@ class TestRunPipeline:
         # NOTE:
         # The text meets the words as become, drunken, groom, saunter, slowly; one lookup at a time shows the order
         # the stage asks in instead.
+        #
+        # Of them `become` is known and `slowly` lies below the learner's level, so neither is asked.
         await run_pipeline(
             text=_TEXT,
             profile=LearnerProfile(
@@ -708,9 +711,97 @@ class TestRunPipeline:
             "groom",
             "drunken",
             "saunter",
-            "slowly",
-            "become",
         ]
+
+    async def test_only_the_words_to_study_are_looked_up(
+        self,
+    ) -> None:
+        dictionary = FakeDictionary()
+
+        result = await run_pipeline(
+            text=_TEXT,
+            profile=LearnerProfile(
+                level=CefrLevel.B1,
+                target_level=CefrLevel.B2,
+                known_lemmas=frozenset(
+                    ("become",),
+                ),
+            ),
+            include_dictionary=True,
+            pipeline=_pipeline(
+                dictionary=dictionary,
+            ),
+        )
+
+        assert frozenset(study_item.tier for study_item in result.items) == frozenset(
+            StudyTier,
+        )
+
+        assert sorted(
+            dictionary.looked_up,
+        ) == sorted(study_item.item.lemma for study_item in result.items if study_item.tier in STUDY_TIERS)
+
+    async def test_a_word_that_is_not_asked_carries_no_dictionary_information(
+        self,
+    ) -> None:
+        result = await run_pipeline(
+            text=_TEXT,
+            profile=LearnerProfile(
+                level=CefrLevel.B1,
+                target_level=CefrLevel.B2,
+                known_lemmas=frozenset(
+                    ("become",),
+                ),
+            ),
+            include_dictionary=True,
+            pipeline=_pipeline(),
+        )
+
+        assert frozenset(study_item.tier for study_item in result.items) == frozenset(
+            StudyTier,
+        )
+
+        for study_item in result.items:
+            assert (study_item.dictionary is not None) is (study_item.tier in STUDY_TIERS)
+
+    async def test_the_dictionary_changes_neither_a_words_tier_nor_its_place_in_the_order(
+        self,
+    ) -> None:
+        async def placed(
+            *,
+            include_dictionary: bool,
+        ) -> tuple[tuple[str, PartOfSpeech, StudyTier], ...]:
+            result = await run_pipeline(
+                text=_TEXT,
+                profile=LearnerProfile(
+                    level=CefrLevel.B1,
+                    target_level=CefrLevel.B2,
+                    known_lemmas=frozenset(
+                        ("become",),
+                    ),
+                ),
+                include_dictionary=include_dictionary,
+                pipeline=_pipeline(),
+            )
+
+            return tuple(
+                (
+                    study_item.item.lemma,
+                    study_item.item.part_of_speech,
+                    study_item.tier,
+                )
+                for study_item in result.items
+            )
+
+        with_the_dictionary = await placed(
+            include_dictionary=True,
+        )
+
+        assert with_the_dictionary
+
+        assert with_the_dictionary == await placed(
+            include_dictionary=False,
+        )
 
     async def test_progress_hears_every_stage_in_order_and_every_lookup_with_its_outcome(
         self,
@@ -734,11 +825,9 @@ class TestRunPipeline:
         assert sorted(
             dictionary.looked_up,
         ) == [
-            "become",
             "drunken",
             "groom",
             "saunter",
-            "slowly",
         ]
 
         assert progress.events == [
@@ -746,12 +835,57 @@ class TestRunPipeline:
             "vocabulary_selection",
             "lexical_semantics",
             "level_assessment",
-            "dictionary_enrichment of 5",
+            "dictionary_enrichment of 3",
             "not_found",
             "not_found",
             "not_found",
-            "not_found",
-            "not_found",
+            "winnowing",
+        ]
+
+    async def test_an_analysis_with_no_word_to_study_starts_the_dictionary_stage_with_nought_and_looks_nothing_up(
+        self,
+    ) -> None:
+        dictionary = FakeDictionary()
+
+        progress = RecordingProgress()
+
+        result = await run_pipeline(
+            text=_TEXT,
+            profile=LearnerProfile(
+                level=CefrLevel.B1,
+                target_level=CefrLevel.B2,
+                known_lemmas=frozenset(
+                    (
+                        "drunken",
+                        "groom",
+                        "saunter",
+                    ),
+                ),
+            ),
+            include_dictionary=True,
+            pipeline=replace(
+                _pipeline(
+                    dictionary=dictionary,
+                ),
+                progress=progress,
+            ),
+        )
+
+        assert frozenset(study_item.tier for study_item in result.items) == frozenset(
+            (
+                StudyTier.REVIEW,
+                StudyTier.KNOWN,
+            ),
+        )
+
+        assert dictionary.looked_up == []
+
+        assert progress.events == [
+            "linguistic_analysis",
+            "vocabulary_selection",
+            "lexical_semantics",
+            "level_assessment",
+            "dictionary_enrichment of 0",
             "winnowing",
         ]
 
@@ -1036,7 +1170,7 @@ class TestWaitingForTheDictionary:
                 refused=frozenset(
                     (
                         "groom",
-                        "slowly",
+                        "drunken",
                     ),
                 ),
                 back_at=10.0,
@@ -1054,13 +1188,13 @@ class TestWaitingForTheDictionary:
             and (value := study_item.item.lemma)
             in {
                 "groom",
-                "slowly",
+                "drunken",
             }
         }
 
         assert outcomes == {
             "groom": LookupOutcome.FOUND,
-            "slowly": LookupOutcome.NOT_FOUND,
+            "drunken": LookupOutcome.NOT_FOUND,
         }
 
         assert ended_at == 16.0
@@ -1162,6 +1296,7 @@ class TestWaitingForTheDictionary:
         assert all(
             (value_object := study_item.dictionary) is not None and value_object.outcome is LookupOutcome.FOUND
             for study_item in result.items
+            if study_item.tier in STUDY_TIERS
         )
 
         assert (
@@ -1388,13 +1523,14 @@ class TestWaitingForTheDictionary:
 
         # NOTE:
         # The service refuses every connection for its first three seconds, as it does while it restarts: each word it
-        # refused is asked again after as long as it has been unreachable, a second at the least, and every word is
-        # answered once it is back, rather than taking WordNet's gloss at the first refusal.
+        # refused is asked again after as long as it has been unreachable, a second at the least, and every word to
+        # study is answered once it is back, rather than taking WordNet's gloss at the first refusal.
         assert refused
 
         assert all(
             study_item.dictionary is not None and study_item.dictionary.outcome is LookupOutcome.FOUND
             for study_item in result.items
+            if study_item.tier in STUDY_TIERS
         )
 
     def test_a_provider_that_never_answers_delays_the_analysis_by_the_waiting_time_at_most(

@@ -67,6 +67,15 @@ class StudyTier(
 
 
 # NOTE:
+# The tiers whose words a learner studies, which are the words the dictionary is asked about.
+STUDY_TIERS: Final = frozenset(
+    (
+        StudyTier.FOCUS,
+        StudyTier.STRETCH,
+    ),
+)
+
+# NOTE:
 # The order tiers are reported in, which is the order a learner works through them.
 _TIER_ORDER: Final = MappingProxyType(
     mapping={
@@ -151,6 +160,9 @@ class EnrichedItem:
     A vocabulary item with everything learned about it, before winnowing.
 
     `dictionary` is `None` when the analysis was run without the dictionary.
+
+    It is also `None` for a word outside the tiers to study, which the
+    dictionary is not asked about.
     """
 
     item: VocabularyItem

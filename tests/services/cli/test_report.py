@@ -266,6 +266,7 @@ _ITEMS: Final = (
 def _completed(
     *,
     items: tuple[StudyItem, ...] = _ITEMS,
+    include_dictionary: bool = True,
 ) -> Analysis:
     analysis = request_an_analysis(
         document=Document(
@@ -275,7 +276,9 @@ def _completed(
             reference="a-scandal-in-bohemia.txt",
         ),
         profile=_PROFILE,
-        options=AnalysisOptions(),
+        options=AnalysisOptions(
+            include_dictionary=include_dictionary,
+        ),
         at=_EPOCH,
     )
 
@@ -372,12 +375,25 @@ class TestRendering:
 
         assert "reference list 4, model 0, frequency heuristic 0" in text
 
-        assert "found 1, not found 0, unavailable 2" in text
+        assert "asked about 3 of 4 items: found 1, not found 0, unavailable 2" in text
 
         assert (
             "Definitions shown under CC BY-SA 3.0 (https://creativecommons.org/licenses/by-sa/3.0); --detail gives "
             "each one's source."
         ) in text
+
+    def test_the_dictionary_line_is_absent_when_the_analysis_did_not_ask_the_dictionary(
+        self,
+    ) -> None:
+        text = _render(
+            _completed(
+                include_dictionary=False,
+            ),
+        )
+
+        assert "focus 1, stretch 1, review 1, known 1" in text
+
+        assert "asked about" not in text
 
     def test_a_dictionary_without_a_page_per_word_is_credited_by_its_license_alone(
         self,

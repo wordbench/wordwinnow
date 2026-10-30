@@ -98,6 +98,7 @@ from wordwinnow.domain.senses import (
     LexicalSense,
 )
 from wordwinnow.domain.study import (
+    STUDY_TIERS,
     DictionaryInformation,
     EnrichedItem,
     StudyItem,
@@ -342,20 +343,6 @@ async def run_pipeline(
     dictionary_information: tuple[DictionaryInformation | None, ...]
 
     if include_dictionary:
-        # NOTE:
-        # The only stage whose size is known before it runs and whose length a person notices: one lookup per item,
-        # each of which may wait for the provider's budget.
-        progress.stage_started(
-            stage=Stage.DICTIONARY_ENRICHMENT,
-            steps=len(
-                items,
-            ),
-        )
-
-        # NOTE:
-        # The words a learner studies first are asked first, the more frequent in the text before the rest, so a
-        # provider that stops answering late, or a wait that runs out, costs the words that matter least; the report
-        # keeps its own order whatever this one is.
         tiers = tuple(
             study_tier(
                 lemma=item.lemma,
@@ -372,13 +359,24 @@ async def run_pipeline(
             )
         )
 
-        dictionary_information = await _look_up_all(
-            items,
+        # NOTE:
+        # Only the words a learner studies are asked, because the others keep WordNet's meaning and a word's tier and
+        # place in the report never depend on the dictionary.
+        #
+        # They are asked in the order a learner studies them, the more frequent in the text before the rest, so a
+        # provider that stops answering late, or a wait that runs out, costs the words that matter least; the report
+        # keeps its own order whatever this one is.
+        order = tuple(
             sorted(
-                range(
-                    len(
-                        items,
-                    ),
+                (
+                    index
+                    for (
+                        index,
+                        tier,
+                    ) in enumerate(
+                        iterable=tiers,
+                    )
+                    if tier in STUDY_TIERS
                 ),
                 key=lambda index: (
                     tier_order(
@@ -387,6 +385,21 @@ async def run_pipeline(
                     -items[index].occurrence_count,
                 ),
             ),
+        )
+
+        # NOTE:
+        # The only stage whose size is known before it runs and whose length a person notices: one lookup per word to
+        # study, each of which may wait for the provider's budget.
+        progress.stage_started(
+            stage=Stage.DICTIONARY_ENRICHMENT,
+            steps=len(
+                order,
+            ),
+        )
+
+        dictionary_information = await _look_up_all(
+            items,
+            order,
             pipeline,
         )
 
@@ -735,10 +748,12 @@ async def _look_up_all(
     order: Sequence[int],
     pipeline: Pipeline,
     /,
-) -> tuple[DictionaryInformation, ...]:
+) -> tuple[DictionaryInformation | None, ...]:
     """
     Look the items up in the order `order` gives, as many at a time as the
     pipeline allows, and hand the answers back in the items' own order.
+
+    An item that `order` does not name is not looked up and has no answer.
     """
 
     semaphore = Semaphore(
@@ -867,7 +882,9 @@ async def _look_up_all(
     )
 
     return tuple(
-        by_index[index]
+        by_index.get(
+            index,
+        )
         for index in range(
             len(
                 items,

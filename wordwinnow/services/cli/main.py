@@ -663,8 +663,9 @@ def analyze(
         Option(
             "--dictionary/--no-dictionary",
             help=(
-                "Ask the dictionary provider for definitions, examples, and pronunciation; Wordwinnow asks it for "
-                "about two words a second, so a long text takes minutes, which --no-dictionary skips."
+                "Ask the dictionary provider for definitions, examples, and pronunciation of the words to study; "
+                "Wordwinnow asks it for about two words a second, so a long text takes minutes, which "
+                "--no-dictionary skips."
             ),
             rich_help_panel=_RUNNING,
         ),

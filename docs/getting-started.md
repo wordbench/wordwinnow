@@ -113,11 +113,15 @@ Without `--local`, the command posts the text to intake, waits for a worker to
 finish, and shows the result; `wordwinnow stats` then summarizes every completed
 analysis from ClickHouse.
 
-The story's 1,508 vocabulary items come to 1,400 requests to the provider, one
-per distinct lemma, and the enrichment service sends them at up to two a
-second, but when last measured the Free Dictionary API answered about one a
-second and refused the rest until each 20-second window ended, so the first
-analysis took over twenty-two minutes, and later ones reuse the cache.
+Only the words to study, FOCUS and STRETCH, are looked up: for a B1 learner
+the story has 832 of them, which come to 810 requests to the provider, one per
+distinct lemma, and the enrichment service sends them at up to two a second.
+
+When last measured, the Free Dictionary API answered about one request a
+second and refused the rest until each 20-second window ended: a first
+analysis that looked up every word took over twenty-two minutes, so one that
+looks up the words to study should take about thirteen, an estimate, and later
+ones reuse the cache.
 
 The command waits up to fifteen minutes, which `--timeout` changes, and the
 analysis goes on whether or not it waits: when the wait ends, or Ctrl-C stops

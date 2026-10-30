@@ -151,9 +151,9 @@ file, and from then on it is KNOWN, listed last and struck through.
 | Occurrence count and a sentence | The text |
 | CEFR level and its source | A reference list, the level model, or the frequency heuristic |
 | Study tier | The level against the learner's level, target, and known words |
-| Meaning | The dictionary's definition, or [WordNet](https://wordnet.princeton.edu/)'s gloss when the dictionary has none |
+| Meaning | For a word to study, the dictionary's definition, or [WordNet](https://wordnet.princeton.edu/)'s gloss when the dictionary has none; for a REVIEW or KNOWN word, WordNet's gloss |
 | Where the meaning comes from | The license the dictionary's definitions are shown under, and the page each one came from where the dictionary has one |
-| The dictionary's example and a pronunciation | The dictionary: the Free Dictionary API, or WordNet, which has no pronunciation, when it is chosen |
+| The dictionary's example and a pronunciation | The dictionary, for the words to study: the Free Dictionary API, or WordNet, which has no pronunciation, when it is chosen |
 | Synonyms, broader terms, opposites | WordNet, constrained by part of speech |
 
 WordNet is local and always answers; the Free Dictionary API is external and

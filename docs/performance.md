@@ -90,6 +90,10 @@ vocabulary items and 1,401 provider requests once the repeated lemmas are
 merged, against a replay provider that answers in 0.1 s and reports ten
 percent of words unknown.
 
+These numbers were measured when the pipeline looked up every word; it now
+looks up only the words to study, so a rerun sends fewer requests, and the
+numbers are kept as they were measured.
+
 **Measurement.**
 
 Median seconds for the dictionary stage, over two runs without a budget, one

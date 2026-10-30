@@ -30,6 +30,7 @@ from wordwinnow.domain.senses import (
     LexicalSense,
 )
 from wordwinnow.domain.study import (
+    STUDY_TIERS,
     DictionaryInformation,
     EnrichedItem,
     Gloss,
@@ -247,6 +248,19 @@ class TestStudyTier:
                 )
                 is StudyTier.REVIEW
             )
+
+    def test_the_tiers_to_study_are_focus_and_stretch_and_no_others(
+        self,
+    ) -> None:
+        assert (
+            frozenset(
+                (
+                    StudyTier.FOCUS,
+                    StudyTier.STRETCH,
+                ),
+            )
+            == STUDY_TIERS
+        )
 
 
 @final
