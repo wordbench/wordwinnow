@@ -363,12 +363,9 @@ While the circuit is closed, its row counts the requests that failed in a row
 since the last answer, against the five that open the circuit; any answer
 starts the count again, a request to slow down included.
 
-The row `turned away` is a different number, a total by reason since the view
-began, the words the open circuit refused without asking included, as
-`held back`, so it can pass five while the count in a row stays below it and the
-circuit stays closed; a word turned away may be asked again and answered, so
-the report's count of unavailable words is the one that says what the learner
-gets.
+The row `turned away` is a different number, a total of lookups by reason,
+`held back` among them, so it can pass five while the count in a row stays below
+it and the circuit stays closed; [the terms](#the-terms-and-what-each-row-counts) below say what each row counts.
 
 The lookups in flight are counted by what they wait for: asking the provider,
 retrying after a pause, behind the trial, paused while the provider's pause
@@ -387,6 +384,46 @@ The activity names the words in flight, as each lookup a worker sends does,
 and like every port the stack publishes, the enrichment service's listens on
 127.0.0.1 alone.
 
+### The terms, and what each row counts
+
+The panel counts words, lookups, and requests, three different things, and
+reading one as another is the usual way to misread it.
+
+| Term | What it is |
+| --- | --- |
+| Word | A vocabulary item of the text, a lemma with its part of speech, that the analysis looks up; the progress line counts each one once |
+| Lookup | One question to the dictionary about one word, which ends one way: from the cache, found, not found, or turned away |
+| Request | One HTTP request the client sends; a lookup sends one or more, its retries included, or none when the cache answers it or the open circuit holds it back before its first |
+| Turned away | A lookup that ended without an answer, for one of six reasons: `server error`, `timed out`, `connection failed`, `rate limited`, `unreadable answer`, or `held back` |
+| Held back | A lookup the open circuit refused instead of sending its next request; one reason within turned away, never a count beside it |
+| Retry | A request a lookup sends again, after a failure or a pause, within that one lookup |
+| Circuit breaker | The client's switch that stops sending requests after five fail in a row: closed while it sends, open while it sends none, and half-open while one trial request decides |
+| Trial request | The one request the open circuit lets through, about ten seconds after it opened or after the last trial failed, never before a wait the service named; its answer closes the circuit, and its failure opens it again |
+| Pause | The whole client's wait after a request to slow down, HTTP 429, as long as `Retry-After` says |
+| Waiting time | How long one analysis waits, in all, for the words turned away with a time to ask again; three minutes by default |
+
+Each row counts one of them.
+
+| Row | What it counts | How often a word counts |
+| --- | --- | --- |
+| `answered` | The lookups answered since the view began: from the cache, found, or not found | At most once in an analysis, because an answered word is not asked again |
+| `turned away` | The lookups that ended without an answer since the view began, by reason | Once each time it is turned away |
+| `retries` | The requests sent again within lookups, by reason | Once each time a request is sent again; a retry is not a lookup |
+| `in flight` | The lookups not yet ended, by what they wait for | Once while it waits |
+
+A word turned away with a time to ask again, as every word the open circuit
+holds back is, is asked again then, while the analysis's waiting time lasts,
+and each refusal counts once more, so `turned away` can pass both the words the
+progress line counts and `answered`.
+
+The README's recording shows it: an analysis of 48 words ends with `answered 48`
+beside `turned away 82: 79 held back, 3 server error`, because each of the 41
+words the service had to answer was turned away twice, when the circuit opened
+and again behind the trial that failed, before it was answered.
+
+The report counts each word once: its count of unavailable words, the words
+that show WordNet's gloss, is what the learner gets.
+
 ## Recovering
 
 When the dictionary provider fails, an analysis still completes: the client
@@ -402,6 +439,26 @@ unavailable.
 `WORDWINNOW_DICTIONARY_PATIENCE_SECONDS` sets that waiting time, and 0 makes an
 analysis fail fast, giving every word turned away WordNet's gloss at once; the
 [operator view](#the-operator-view), the dashboard, and the log events below show each step.
+
+### When the dictionary seems down
+
+Four places answer four questions, best read in this order.
+
+1. **The report:** the words marked `(WordNet; dictionary unavailable)`, and its
+   count of unavailable words, which is what the learner lost.
+2. **The operator view:** its title and its row `circuit` say whether this client
+   stopped asking and why, `next try` says when it asks again, `last minute` what
+   its own requests met, and `turned away` the reasons, lookup by lookup.
+3. **The log:** the events listed at the end of [the dictionary client in detail](#the-dictionary-client-in-detail),
+   `dictionary.circuit.opened` once per outage among them, each with its
+   analysis's `correlation_id`.
+4. **In the distributed mode,** `GET /activity` on the enrichment service and the
+   dashboard's dictionary panels show the same client while no analysis is
+   watched.
+
+The client sees only its own requests, so none of these says how the service
+is doing for its other clients; meanwhile a local command run with
+`WORDWINNOW_DICTIONARY=wordnet` analyzes from WordNet without the service.
 
 ### The dictionary client in detail
 

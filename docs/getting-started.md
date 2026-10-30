@@ -130,6 +130,10 @@ dictionary is doing meanwhile: whether the provider is answering,
 rate-limited, or failing, the last minute of the client's requests, and the
 lookups in flight.
 
+Its counts are of lookups, not words: a word the dictionary turns away and
+asks again counts each time, so `turned away` can pass the number of words;
+[the operating guide](operating.md#the-terms-and-what-each-row-counts) says what each row counts.
+
 `WORDWINNOW_DICTIONARY=wordnet` in `.env` before `make up-full` answers from WordNet
 instead, and the same analysis then took about five seconds, observed once on
 the laptop the performance numbers come from.
