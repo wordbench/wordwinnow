@@ -205,6 +205,40 @@ Two adapters satisfy the port:
   license and no page, because WordNet has none to link to, and needs neither
   the cache nor the budget.
 
+Three more classes satisfy the same port without being dictionaries of their
+own, which is what the port buys: `CachingDictionary` answers from a cache and
+asks the dictionary behind it otherwise, `RemoteDictionary` lets a worker ask
+the enrichment service, and `DisabledDictionary` stands in when an analysis runs
+without a dictionary.
+
+So, with the Free Dictionary API chosen, a lookup takes one of two paths, and
+the use case sees only the port at the start of each:
+
+```text
+local:        use case → Dictionary port → CachingDictionary, a SQLite file
+                → FreeDictionaryClient → the Free Dictionary API
+distributed:  use case, in a worker → Dictionary port → RemoteDictionary
+                → the enrichment service → CachingDictionary, Redis
+                → FreeDictionaryClient → the Free Dictionary API
+```
+
+What is particular to one service stays in its adapter: `FreeDictionaryClient`
+keeps the Free Dictionary API's pace, retries a request, pauses when asked to
+slow down, and holds the circuit breaker with its trial, so another adapter
+can protect itself and its service as that service needs.
+
+The domain's `DictionaryLookup` carries only what any dictionary can say: found,
+not found, or unavailable with a reason and, when one is known, a time to ask
+again.
+
+The analysis use case waits on that time within its waiting time, the same way
+whichever dictionary answered, so waiting for a service to answer again is the
+application's behavior, and how often to ask it is the adapter's.
+
+The operator view reads the counts of the `CachingDictionary` in front of the
+provider and the client's own activity; WordNet asks no provider, so with it
+there is no activity to show.
+
 A third dictionary is the same work:
 
 1. A class in `infrastructure/dictionary/` with
@@ -228,6 +262,19 @@ WordNet also plays a second part, as the lexical network the level model
 learns from, `FeatureFamily.WORDNET`, whose features follow WordNet's own
 structure; replacing WordNet in that part, rather than adding a dictionary
 beside it, changes the domain and means training the model again.
+
+The port makes another dictionary possible without touching the use cases; it
+does not make Wordwinnow use several at once, and the table says which is
+which.
+
+| Capability | Today | What it would take |
+| --- | --- | --- |
+| One dictionary for the whole system, `WORDWINNOW_DICTIONARY`, read when a process starts | Built | Nothing more |
+| WordNet's gloss for a word the dictionary left unanswered, marked `(WordNet; dictionary unavailable)` | Built, as the domain's choice of gloss: the analysis already has WordNet's senses, and no second dictionary is asked | Nothing more |
+| Another dictionary in place of the Free Dictionary API | The three steps above | A key prefix of its own if it sits behind the cache, because a cache key names only the lemma, so its answers are never the ones the Free Dictionary API left there |
+| Asking a second dictionary when the first is unavailable | Not built | A dictionary that holds two others behind the one port, with its rule for when to ask the second and each entry's provenance kept; the use cases would not change |
+| Asking several dictionaries at once and merging their entries | Not built | The same kind of dictionary, with a rule for merging entries and their licenses |
+| Changing the dictionary while a process runs | Not built: the setting is read at start, so a restart changes it | Building the dictionary again when the setting changes, its cache and its circuit breaker included |
 
 ### Another source
 
