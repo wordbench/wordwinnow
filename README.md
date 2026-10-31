@@ -68,31 +68,31 @@ a flashcard tool.
 ## Running it
 
 ```sh
-make setup
+uv tool install --python 3.14 git+https://github.com/wordbench/wordwinnow
 ```
 
 ```sh
-make nltk-data
+wordwinnow setup
 ```
 
 ```sh
-make model
+curl -sSfL https://raw.githubusercontent.com/wordbench/wordwinnow/main/data/corpus/a-scandal-in-bohemia.txt | wordwinnow analyze - --level A2 --target B1 --no-dictionary
 ```
 
-```sh
-uv run wordwinnow analyze data/corpus/a-scandal-in-bohemia.txt --local --level A2 --target B1 --no-dictionary
-```
+Installing needs [uv](https://docs.astral.sh/uv/) and Git, and `--python 3.14` names the Python version
+Wordwinnow is tested on, which uv fetches if your system lacks it.
 
-That analyzes "A Scandal in Bohemia," the first Sherlock Holmes short story,
-in one process against a SQLite file, for a learner at A2 working toward B1,
-with the level model `make model` trains for the words the reference lists do
-not cover; [`data/corpus/README.md`](data/corpus/README.md) says why it is this story.
+Those commands install the command, set it up, and analyze "A Scandal in
+Bohemia," the first Sherlock Holmes short story, in one process against a
+SQLite file in your user data directory, for a learner at A2 working toward
+B1, with the level model `wordwinnow setup` trains for the words the reference
+lists do not cover; [`data/corpus/README.md`](data/corpus/README.md) says why it is this story.
 
 ![Wordwinnow analyzing the sample story](docs/images/demo.gif)
 
-`make up-full` starts the distributed mode, where the same pipeline runs as
-services over PostgreSQL, Kafka, Redis, and ClickHouse, and the same command
-without `--local` sends the text there.
+From a clone, `make up-full` starts the distributed mode, where the same
+pipeline runs as services over PostgreSQL, Kafka, Redis, and ClickHouse, and
+the same command with `--remote` sends the text there.
 
 While it works, `analyze` says on standard error what it is doing, and
 `--view operator` adds under that line what the dictionary is doing: whether the

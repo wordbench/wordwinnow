@@ -25,7 +25,12 @@ authors = [
 # needs wherever a method's signature names its own class, as `CefrLevel.steps_above` does.
 #
 # Every dependency below installs and imports on 3.14.
-requires-python = ">=3.14"
+#
+# The upper bound names the one minor version the gate, the image, and `.python-version` run: it turns pip away from
+# any other version and steers uv when it installs from a source tree, but uv reads only the lower bound of a wheel's,
+# so the guides' install commands also name the version with `--python`; moving to another changes all of them, those
+# commands included.
+requires-python = ">=3.14,<3.15"
 # NOTE:
 # Runtime dependencies in pipeline order: the interface, the boundary models, the linguistic stack, the providers, the
 # stores, the messaging, and the observability stack.
@@ -269,6 +274,7 @@ testpaths = [
 markers = [
   "integration: needs the backing services `make up` starts",
   "live: calls a real external provider over the network",
+  "installed: builds the wheel and installs it as a learner does, which needs uv and the network",
 ]
 
 # NOTE:

@@ -55,6 +55,7 @@ from wordwinnow.application.errors import (
     AnalysisNotFoundError,
     AnalysisNotPublishedError,
     FactStoreUnavailableError,
+    LevelModelUnusableError,
     LinguisticResourcesMissingError,
     MessagingUnavailableError,
     SourceNotConfiguredError,
@@ -235,15 +236,15 @@ _SOURCE_ROWS: Final = "\n".join(
 # NOTE:
 # Typer keeps the epilog's line breaks and indentation in its Rich help, and the epilog holds what a first-time user
 # needs at the point of use and would otherwise look for in `docs/operating.md`: what each source takes, which sources
-# need the key, and two commands that work as written.
+# need the key, and two commands, one for a text of the learner's own and one that works as written.
 _ANALYZE_EPILOG: Final = (
     "[bold]Sources[/bold] for --source, each with the --topic it takes:\n\n"
     f"{_SOURCE_ROWS}\n\n"
     "Every source but nyt-rss needs WORDWINNOW_NYT_API_KEY, and `wordwinnow doctor` lists the sources this setup "
     "enables.\n\n"
     "[bold]Examples[/bold]\n\n"
-    "  wordwinnow analyze data/corpus/a-scandal-in-bohemia.txt --level A2 --local --no-dictionary\n"
-    "  wordwinnow analyze --source nyt-rss --topic Science --level B1 --local"
+    "  wordwinnow analyze chapter.txt --level A2 --target B1 --no-dictionary\n"
+    "  wordwinnow analyze --source nyt-rss --topic Science --level B1"
 )
 
 # NOTE:
@@ -277,6 +278,7 @@ _EXPECTED: Final = (
     MessagingUnavailableError,
     FactStoreUnavailableError,
     LinguisticResourcesMissingError,
+    LevelModelUnusableError,
     InvalidDocumentError,
     InvalidIdentifierError,
     InvalidLearnerProfileError,
@@ -365,14 +367,31 @@ def _tiers(
     )
 
 
+# NOTE:
+# A local `analyze` leaves its analysis requested or processing in the store while it runs, and for good if it was
+# stopped, because nothing goes on with a local analysis once its command ends, and the store does not tell the two
+# apart, so the line says both and hands out no wait, which could never finish the second.
+_UNFINISHED_LOCALLY: Final = (
+    "a local analysis goes on only while the command that runs it is running; if that command has stopped, run "
+    "`wordwinnow analyze` on the text again"
+)
+
+
 def _still_in_progress(
     watched: WatchedAnalysis,
     stale_after_seconds: float,
+    local: bool,
     /,
 ) -> str | None:
     analysis = watched.analysis
 
-    hint = f"`wordwinnow show {analysis.id} --wait` waits for it"
+    if local and analysis.status in (
+        AnalysisStatus.REQUESTED,
+        AnalysisStatus.PROCESSING,
+    ):
+        return _UNFINISHED_LOCALLY
+
+    hint = f"`wordwinnow show {analysis.id} --remote --wait` waits for it"
 
     if analysis.status is AnalysisStatus.REQUESTED:
         return f"requested, and no worker has taken it yet; {hint}"
@@ -714,7 +733,7 @@ def analyze(
             help="Run in this process against SQLite, or send the text to the distributed mode's intake service.",
             rich_help_panel=_RUNNING,
         ),
-    ] = False,
+    ] = True,
     wait: Annotated[
         bool,
         Option(
@@ -784,10 +803,21 @@ def analyze(
     """
     Analyze a text for a learner and show the vocabulary in study order.
 
-    The text is a file, standard input, or one of the sources below; with
-    --local this process analyzes it, and without it the running services of
-    the distributed mode do.
+    The text is a file, standard input, or one of the sources below; this
+    process analyzes it, and with --remote the running services of the
+    distributed mode do.
     """
+
+    # NOTE:
+    # Refused before anything is read, fetched, or stored, whether --local was given or is the default: a local
+    # analysis is done when the command ends, so there is nothing to leave to the services.
+    if local and not wait:
+        raise BadParameter(
+            message=(
+                "--no-wait leaves the analysis to the distributed mode's services, which --remote asks for; a local "
+                "analysis is done when the command that ran it ends"
+            ),
+        )
 
     settings = _settings()
 
@@ -866,8 +896,8 @@ def analyze(
         # NOTE:
         # Left for the terminal to wrap, so that each command stays whole on its line to be copied.
         _console.print(
-            f"requested analysis {analysis.id}; `wordwinnow show {analysis.id} --wait` waits for it, and "
-            f"`wordwinnow show {analysis.id}` shows how far it has come",
+            f"requested analysis {analysis.id}; `wordwinnow show {analysis.id} --remote --wait` waits for it, and "
+            f"`wordwinnow show {analysis.id} --remote` shows how far it has come",
             soft_wrap=True,
         )
 
@@ -906,7 +936,7 @@ def show(
             "--local/--remote",
             help="Read the local SQLite store, or the intake service.",
         ),
-    ] = False,
+    ] = True,
     wait: Annotated[
         bool,
         Option(
@@ -974,7 +1004,8 @@ def show(
     ] = View.LEARNER,
 ) -> None:
     """
-    Show a stored analysis, or, with --wait, wait for one still in progress.
+    Show a stored analysis, or, with --remote --wait, wait for one still in
+    progress.
 
     The analysis goes on whether or not a command waits for it, so --wait
     takes up an analysis that `analyze` stopped waiting for, without
@@ -999,7 +1030,10 @@ def show(
 
         elif local:
             raise BadParameter(
-                message="--wait waits for the services; a local analysis is done when the command that ran it ends",
+                message=(
+                    "--wait waits for the distributed mode's services, which --remote asks for; a local analysis is "
+                    "done when the command that ran it ends"
+                ),
             )
 
         else:
@@ -1059,6 +1093,7 @@ def show(
         else _still_in_progress(
             watched,
             settings.stale_after_seconds,
+            local,
         )
     )
 
@@ -1081,7 +1116,7 @@ def list_command(
             "--local/--remote",
             help="Read the local SQLite store, or the intake service.",
         ),
-    ] = False,
+    ] = True,
     limit: Annotated[
         int,
         Option(

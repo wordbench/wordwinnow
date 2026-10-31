@@ -1,9 +1,12 @@
 """
 Tests for the composition root's choice of dictionary: the one place another
 implementation of the `Dictionary` port is wired in, and where its cache
-lives.
+lives, and for its choice between the level model and none.
 """
 
+from collections.abc import (
+    Callable,
+)
 from contextlib import (
     closing,
 )
@@ -25,9 +28,16 @@ from httpx2 import (
 )
 from pytest import (
     MonkeyPatch,
+    fixture,
+    mark,
+    raises,
 )
 
+from wordwinnow.application.errors import (
+    LevelModelUnusableError,
+)
 from wordwinnow.infrastructure.composition import (
+    build_level_estimator,
     build_provider_dictionary,
     local_profile,
 )
@@ -44,6 +54,12 @@ from wordwinnow.infrastructure.dictionary.resilience import (
 )
 from wordwinnow.infrastructure.dictionary.wordnet_dictionary import (
     WordNetDictionary,
+)
+from wordwinnow.infrastructure.ml.model import (
+    ModelFileError,
+    NoLevelEstimator,
+    SklearnLevelEstimator,
+    installed_sklearn_version,
 )
 from wordwinnow.infrastructure.settings import (
     DictionaryName,
@@ -262,3 +278,122 @@ class TestLocalProfile:
             ).fetchall() == [
                 ("dictionary_cache",),
             ]
+
+
+@fixture
+def settings(
+    *,
+    tmp_path: Path,
+) -> Settings:
+    return Settings(
+        level_model_path=tmp_path / "model.joblib",
+    )
+
+
+@final
+class TestBuildLevelEstimator:
+    def test_without_a_model_file_every_word_is_left_to_the_frequency_heuristic(
+        self,
+        *,
+        settings: Settings,
+    ) -> None:
+        assert isinstance(
+            build_level_estimator(
+                settings=settings,
+            ),
+            NoLevelEstimator,
+        )
+
+    def test_a_model_this_scikit_learn_trained_is_used(
+        self,
+        *,
+        settings: Settings,
+        put_model: Callable[..., None],
+    ) -> None:
+        put_model(
+            path=settings.level_model_path,
+            state="current",
+        )
+
+        assert isinstance(
+            build_level_estimator(
+                settings=settings,
+            ),
+            SklearnLevelEstimator,
+        )
+
+    @mark.parametrize(
+        argnames="state",
+        argvalues=(
+            "another scikit-learn",
+            "another scikit-learn and unreadable",
+        ),
+    )
+    def test_a_model_another_scikit_learn_trained_stops_the_command_and_is_never_opened(
+        self,
+        *,
+        settings: Settings,
+        put_model: Callable[..., None],
+        state: str,
+    ) -> None:
+        put_model(
+            path=settings.level_model_path,
+            state=state,
+        )
+
+        # NOTE:
+        # A pickle this scikit-learn cannot read raises `ModuleNotFoundError` when it is opened, which is not a
+        # `ModelFileError`: the error below, with the stale message, is what shows the file was never opened.
+        with raises(
+            expected_exception=LevelModelUnusableError,
+        ) as caught:
+            build_level_estimator(
+                settings=settings,
+            )
+
+        assert (
+            str(
+                object=caught.value,
+            )
+            == f"the level model at {settings.level_model_path} was trained with scikit-learn 0.0.0, and "
+            f"{installed_sklearn_version()} is installed; run `wordwinnow setup`"
+        )
+
+    @mark.parametrize(
+        argnames="state",
+        argvalues=(
+            "cut short",
+            "without a sidecar",
+            "a sidecar that is not JSON",
+        ),
+    )
+    def test_a_model_this_code_cannot_read_stops_the_command_with_the_reason_and_the_remedy(
+        self,
+        *,
+        settings: Settings,
+        put_model: Callable[..., None],
+        state: str,
+    ) -> None:
+        put_model(
+            path=settings.level_model_path,
+            state=state,
+        )
+
+        with raises(
+            expected_exception=LevelModelUnusableError,
+        ) as caught:
+            build_level_estimator(
+                settings=settings,
+            )
+
+        assert isinstance(
+            caught.value.__cause__,
+            ModelFileError,
+        )
+
+        assert (
+            str(
+                object=caught.value,
+            )
+            == f"{caught.value.__cause__}; run `wordwinnow setup`"
+        )

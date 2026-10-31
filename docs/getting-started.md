@@ -4,64 +4,71 @@ From nothing to a first report, on your own machine.
 
 ## Before you start
 
-You need Python 3.14 and [`uv`](https://docs.astral.sh/uv/), which fetches the interpreter if your system
-lacks it.
+You need [`uv`](https://docs.astral.sh/uv/), which installs the command.
 
-You need network access to set it up, for the packages and the NLTK data.
+Its `--python 3.14` option names the Python version Wordwinnow is tested on,
+which uv fetches if your system lacks it.
 
-Docker with Compose is needed only for the distributed mode and the
-integration tests.
+You need Git, to install Wordwinnow from its repository.
 
-To run the gate or commit through the repository's hooks, you also need
-[gitleaks](https://github.com/gitleaks/gitleaks) 8.30.1 on your `PATH`, the version the gate checks for: `make verify`
-and the `pre-push` hook run its secret scan, and the `pre-commit` hook runs the
-scan alone.
+You need network access to install it and to set it up, for the packages, the
+NLTK data, and the reference lists.
 
-Its [release page](https://github.com/gitleaks/gitleaks/releases/tag/v8.30.1) has an archive for each platform, and a package manager
-that carries that version works as well; analyzing a text never needs it.
+## Installing it
 
-The environment I develop Wordwinnow in, these tools included, is set up by my
-[dotfiles](https://github.com/olegturzhanskii/dotfiles); nothing here depends on them.
+```sh
+uv tool install --python 3.14 git+https://github.com/wordbench/wordwinnow
+```
+
+That installs the `wordwinnow` command in an environment of its own, with the
+packages it needs.
+
+`--python 3.14` names the Python version Wordwinnow is tested on, which uv
+fetches if your system lacks it.
+
+Without it, uv may install the command on a newer Python, one Wordwinnow is
+not tested on.
 
 ## Setting it up
 
 ```sh
-make setup
+wordwinnow setup
 ```
 
-```sh
-make nltk-data
-```
+It downloads whichever of NLTK's sentence splitter, tagger, stop words, and
+WordNet are missing, as [one fixed commit of the NLTK project's data repository](https://github.com/nltk/nltk_data/tree/550b6625bcef1f2abff2ff770a5a0d272c9c6b2a)
+holds them, into `~/nltk_data`, which other programs that use NLTK share.
 
-The first command creates the locked environment; the second downloads
-whichever of NLTK's sentence splitter, tagger, stop words, and WordNet are
-missing, as [one fixed commit of the NLTK project's data repository](https://github.com/nltk/nltk_data/tree/550b6625bcef1f2abff2ff770a5a0d272c9c6b2a) holds
-them, into your NLTK data directory.
+It downloads the two reference lists from their distributor at one fixed
+commit, checks each against its published SHA-256, and trains the level model
+from them in under a minute.
 
-```sh
-make model
-```
-
-That runs `uv run wordwinnow setup`, which downloads the two reference lists
-from their distributor at one fixed commit, checks each against its published
-SHA-256, and trains the level model from them in under a minute; it does only
-what is missing, and every analysis needs the lists, so it comes before the
-first.
+It does only what is missing, and every analysis needs what it sets up, so it
+comes before the first.
 
 The lists and the model it sets up, the analysis store, and the dictionary
-cache live in your user directories rather than in the checkout:
-`~/Library/Application Support/wordwinnow` and `~/Library/Caches/wordwinnow` on
-macOS, `~/.local/share/wordwinnow` and `~/.cache/wordwinnow` on Linux, or
+cache live in your user directories, not in the directory you run a command
+from: `~/Library/Application Support/wordwinnow` and `~/Library/Caches/wordwinnow`
+on macOS, `~/.local/share/wordwinnow` and `~/.cache/wordwinnow` on Linux, or
 `$XDG_DATA_HOME/wordwinnow` and `$XDG_CACHE_HOME/wordwinnow` on either system when
 those variables are set; [the configuration](operating.md#configuration) can move each of them.
 
-`uv run wordwinnow doctor` says what is present and what is missing.
+`setup`, `analyze`, `show`, `list`, and `doctor` write nothing in the directory you run
+them from, except a file you name, such as `--csv`'s.
+
+`wordwinnow doctor` says what is present and what is missing.
+
+After you install another version, `analyze` stops and names `wordwinnow setup`
+when the level model needs training again.
 
 ## The first analysis
 
 ```sh
-uv run wordwinnow analyze data/corpus/a-scandal-in-bohemia.txt --local --level A2 --target B1 --no-dictionary
+curl -sSfL https://raw.githubusercontent.com/wordbench/wordwinnow/main/data/corpus/a-scandal-in-bohemia.txt | wordwinnow analyze - --level A2 --target B1 --no-dictionary
 ```
+
+The `-` makes `analyze` read the text from standard input, which here is the story
+`curl` fetches.
 
 The analysis runs inside the command, against a SQLite file in your user data
 directory that the command creates and migrates itself.
@@ -74,8 +81,10 @@ because every distinct word is a request to a service outside Wordwinnow.
 `--detail` prints one card per word, `--json` the whole analysis, and `--csv FILE`
 the shown words for a flashcard tool.
 
-`uv run wordwinnow list --local` lists what was stored, and
-`uv run wordwinnow show ID --local` shows one analysis again.
+A text of your own is `wordwinnow analyze FILE --level LEVEL`.
+
+`wordwinnow list` lists what was stored, and `wordwinnow show ID` shows one
+analysis again.
 
 ## Texts from The New York Times
 
@@ -91,7 +100,7 @@ src="https://developer.nytimes.com/files/poweredby_nytimes_150a.png">
 </a>
 
 ```sh
-uv run wordwinnow analyze --source nyt-rss --topic Science --level B1 --local --no-dictionary
+wordwinnow analyze --source nyt-rss --topic Science --level B1 --no-dictionary
 ```
 
 The feeds need no credential.
@@ -104,6 +113,53 @@ well; `wordwinnow doctor` lists the sources the configuration enables,
 `wordwinnow analyze --help` lists what each source expects as a topic, and
 [`operating.md`](operating.md) says where to keep the key, with or without direnv.
 
+## Removing it
+
+```sh
+uv tool uninstall wordwinnow
+```
+
+That removes the command and its environment and leaves your user data and
+cache directories and `~/nltk_data`, which you delete to remove the rest.
+
+## From a clone
+
+To inspect the source, run its gate, or start the distributed mode, work from
+a clone.
+
+```sh
+git clone https://github.com/wordbench/wordwinnow && cd wordwinnow
+```
+
+```sh
+make setup
+```
+
+```sh
+make model
+```
+
+`make setup` creates the locked environment, and `make model` runs
+`uv run wordwinnow setup`, which prepares the same user directories as the
+installed command does.
+
+`uv run wordwinnow` runs the checkout's own code, and `make demo` analyzes the
+sample story with it.
+
+Docker with Compose is needed only for the distributed mode and the
+integration tests.
+
+To run the gate or commit through the repository's hooks, you also need
+[gitleaks](https://github.com/gitleaks/gitleaks) 8.30.1 on your `PATH`, the version the gate checks for: `make verify`
+and the `pre-push` hook run its secret scan, and the `pre-commit` hook runs the
+scan alone.
+
+Its [release page](https://github.com/gitleaks/gitleaks/releases/tag/v8.30.1) has an archive for each platform, and a package manager
+that carries that version works as well; analyzing a text never needs it.
+
+The environment I develop Wordwinnow in, these tools included, is set up by my
+[dotfiles](https://github.com/olegturzhanskii/dotfiles); nothing here depends on them.
+
 ## The distributed mode
 
 ```sh
@@ -115,10 +171,10 @@ PostgreSQL, Redis, Kafka, ClickHouse, the migration job, intake, enrichment,
 one analysis worker, the aggregation worker, Prometheus, Tempo, and Grafana.
 
 ```sh
-uv run wordwinnow analyze data/corpus/a-scandal-in-bohemia.txt --level B1
+uv run wordwinnow analyze data/corpus/a-scandal-in-bohemia.txt --remote --level B1
 ```
 
-Without `--local`, the command posts the text to intake, waits for a worker to
+With `--remote`, the command posts the text to intake, waits for a worker to
 finish, and shows the result; `wordwinnow stats` then summarizes every completed
 analysis from ClickHouse.
 
@@ -134,9 +190,9 @@ ones reuse the cache.
 
 The command waits up to fifteen minutes, which `--timeout` changes, and the
 analysis goes on whether or not it waits: when the wait ends, or Ctrl-C stops
-it, the command names the analysis, `wordwinnow show ID --wait` waits for it
-again, and `wordwinnow show ID` shows how far it has come, or the result once it
-is done.
+it, the command names the analysis, `wordwinnow show ID --remote --wait` waits
+for it again, and `wordwinnow show ID --remote` shows how far it has come, or
+the result once it is done.
 
 `--view operator` shows, under the progress line, what the enrichment service's
 dictionary is doing meanwhile: whether the provider is answering,
@@ -162,6 +218,15 @@ make verify
 
 That is the gate [`operating.md`](operating.md) describes, with the integration lane beside
 it.
+
+```sh
+make test-installed
+```
+
+That builds the wheel, installs it as a learner does with its dependencies
+resolved afresh, in a temporary home, sets it up, and analyzes the sample
+story with the network closed to it, and it needs the network itself, for the
+packages, the NLTK data, and the lists.
 
 If you intend to commit, opt into the repository's hooks once per clone:
 

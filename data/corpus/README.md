@@ -139,7 +139,7 @@ the word no resource knows; they read none of these files.
 
 ## What the tool makes of it
 
-`wordwinnow analyze data/corpus/a-scandal-in-bohemia.txt --local --level B1
+`wordwinnow analyze data/corpus/a-scandal-in-bohemia.txt --level B1
 --no-dictionary` finds 1,508 vocabulary items in the story's 8,530 words; with
 the level model `make model` trains, it puts 832 of them on a B1 learner's study
 list, the FOCUS and STRETCH words, and with the frequency heuristic alone,
@@ -182,5 +182,5 @@ The text was converted from the edition's XHTML with no change to its words:
 
 The spelling is the edition's, which keeps the original's British spelling.
 
-`wordwinnow analyze data/corpus/a-scandal-in-bohemia.txt --local --level B1
+`wordwinnow analyze data/corpus/a-scandal-in-bohemia.txt --level B1
 --no-dictionary` is the quickest way to see the tool work.

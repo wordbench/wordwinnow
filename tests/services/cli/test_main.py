@@ -4,6 +4,9 @@ The command line itself, through Typer's runner.
 These tests need the NLTK data `make nltk-data` installs.
 """
 
+from asyncio import (
+    run,
+)
 from collections.abc import (
     Callable,
 )
@@ -30,6 +33,9 @@ from typing import (
     final,
 )
 
+from httpx2 import (
+    AsyncBaseTransport,
+)
 from platformdirs import (
     user_data_path,
 )
@@ -52,6 +58,7 @@ from typer.testing import (
 )
 
 from wordwinnow.application.dto import (
+    AnalysisSummary,
     ProcessingProgress,
 )
 from wordwinnow.application.errors import (
@@ -80,6 +87,7 @@ from wordwinnow.domain.learner import (
 from wordwinnow.infrastructure.composition import (
     API_SOURCES,
     FEED_SOURCE,
+    storage_profile,
 )
 from wordwinnow.infrastructure.lexicon.reference_lists import (
     REFERENCE_FILES,
@@ -122,6 +130,33 @@ _TEXT: Final = (
 )
 
 _runner: Final = CliRunner()
+
+
+def _words(
+    text: str,
+    /,
+) -> str:
+    return " ".join(
+        text.split(),
+    )
+
+
+# NOTE:
+# A usage error is drawn in a box, and a message longer than the terminal is wide runs over its lines between the
+# box's sides, so the sides are taken out before the words are read.
+def _usage_error(
+    output: str,
+    /,
+) -> str:
+    return _words(
+        Text.from_ansi(
+            text=output,
+        ).plain.replace(
+            "│",
+            " ",
+        ),
+    )
+
 
 _EPOCH: Final = datetime(
     year=1970,
@@ -191,6 +226,83 @@ def workspace(
     )
 
     return tmp_path
+
+
+# TEST:
+# Every way a command reaches the distributed mode, replaced by one that records itself and fails, so that a test of
+# the local mode shows it called none of them.
+@fixture
+def services_called(
+    *,
+    monkeypatch: MonkeyPatch,
+) -> list[str]:
+    called: list[str] = []
+
+    async def analyze_remotely(
+        *,
+        request: AnalysisRequest,
+        settings: Settings,
+        wait: bool,
+        timeout_seconds: float,
+        progress: AnalysisProgress = UNWATCHED,
+        watch: DictionaryWatch | None = None,
+    ) -> Analysis:
+        called.append(
+            "analyze_remotely",
+        )
+
+        raise RuntimeError(
+            "the distributed mode was asked",
+        )
+
+    async def wait_remotely(
+        *,
+        analysis_id: AnalysisId,
+        settings: Settings,
+        timeout_seconds: float,
+        progress: AnalysisProgress = UNWATCHED,
+        watch: DictionaryWatch | None = None,
+    ) -> Analysis:
+        called.append(
+            "wait_remotely",
+        )
+
+        raise RuntimeError(
+            "the distributed mode was asked",
+        )
+
+    def intake_client(
+        *,
+        base_url: str,
+        transport: AsyncBaseTransport | None = None,
+    ) -> None:
+        called.append(
+            "IntakeClient",
+        )
+
+        raise RuntimeError(
+            "the distributed mode was asked",
+        )
+
+    monkeypatch.setattr(
+        target=commands,
+        name="analyze_remotely",
+        value=analyze_remotely,
+    )
+
+    monkeypatch.setattr(
+        target=commands,
+        name="wait_remotely",
+        value=wait_remotely,
+    )
+
+    monkeypatch.setattr(
+        target=commands,
+        name="IntakeClient",
+        value=intake_client,
+    )
+
+    return called
 
 
 @final
@@ -978,9 +1090,38 @@ class TestCli:
 
         assert "WORDWINNOW_NYT_API_KEY" in result.stdout
 
+    def test_the_examples_of_analyze_work_as_written_by_a_learner_who_installed_it(
+        self,
+    ) -> None:
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "analyze",
+                "--help",
+            ],
+        )
 
-def _processing() -> Analysis:
-    analysis = request_an_analysis(
+        assert result.exit_code == 0, result.output
+
+        plain = Text.from_ansi(
+            text=result.stdout,
+        ).plain
+
+        examples = plain.partition(
+            "Examples",
+        )[2]
+
+        assert "wordwinnow analyze chapter.txt --level A2 --target B1 --no-dictionary" in examples
+
+        assert "wordwinnow analyze --source nyt-rss --topic Science --level B1" in examples
+
+        assert "--local" not in examples
+
+        assert "data/corpus" not in plain
+
+
+def _requested() -> Analysis:
+    return request_an_analysis(
         document=Document(
             title="a-scandal-in-bohemia",
             text=_TEXT,
@@ -994,6 +1135,10 @@ def _processing() -> Analysis:
         options=AnalysisOptions(),
         at=_EPOCH,
     )
+
+
+def _processing() -> Analysis:
+    analysis = _requested()
 
     analysis.start(
         at=_EPOCH,
@@ -1057,6 +1202,7 @@ class TestShowingAnAnalysisInProgress:
                 str(
                     object=analysis.id,
                 ),
+                "--remote",
             ],
         )
 
@@ -1073,7 +1219,7 @@ class TestShowingAnAnalysisInProgress:
             string=output,
         )
 
-        assert f"`wordwinnow show {analysis.id} --wait` waits for it" in output
+        assert f"`wordwinnow show {analysis.id} --remote --wait` waits for it" in output
 
         assert "admin requeue" not in output
 
@@ -1111,6 +1257,7 @@ class TestShowingAnAnalysisInProgress:
                 str(
                     object=analysis.id,
                 ),
+                "--remote",
             ],
         )
 
@@ -1154,6 +1301,7 @@ class TestShowingAnAnalysisInProgress:
                 str(
                     object=analysis.id,
                 ),
+                "--remote",
                 "--json",
             ],
         )
@@ -1209,6 +1357,7 @@ class TestShowingAnAnalysisInProgress:
                 str(
                     object=analysis.id,
                 ),
+                "--remote",
                 "--wait",
                 "--timeout",
                 "5",
@@ -1225,10 +1374,19 @@ class TestShowingAnAnalysisInProgress:
 
         assert "the tagger was not there" in result.output
 
-    def test_waiting_on_the_local_store_is_refused(
+    @mark.parametrize(
+        argnames="mode",
+        argvalues=(
+            (),
+            ("--local",),
+        ),
+    )
+    def test_waiting_without_remote_is_refused(
         self,
         *,
         workspace: Path,
+        services_called: list[str],
+        mode: tuple[str, ...],
     ) -> None:
         result = _runner.invoke(
             app=app,
@@ -1237,7 +1395,7 @@ class TestShowingAnAnalysisInProgress:
                 str(
                     object=AnalysisId.new(),
                 ),
-                "--local",
+                *mode,
                 "--wait",
             ],
         )
@@ -1245,11 +1403,13 @@ class TestShowingAnAnalysisInProgress:
         assert result.exit_code == 2
 
         assert (
-            "--wait waits for the services"
-            in Text.from_ansi(
-                text=result.output,
-            ).plain
+            "--wait waits for the distributed mode's services, which --remote asks for; a local analysis is done "
+            "when the command that ran it ends"
+        ) in _usage_error(
+            result.output,
         )
+
+        assert not services_called
 
     def test_an_interrupted_wait_says_the_analysis_goes_on_and_ends_as_an_interrupt_does(
         self,
@@ -1284,6 +1444,7 @@ class TestShowingAnAnalysisInProgress:
                 str(
                     object=analysis_id,
                 ),
+                "--remote",
                 "--wait",
             ],
         )
@@ -1295,6 +1456,503 @@ class TestShowingAnAnalysisInProgress:
         )
 
         assert "error:" not in result.output
+
+
+def _stored(
+    analysis: Analysis,
+    /,
+) -> None:
+    async def store() -> None:
+        async with (
+            storage_profile(
+                settings=Settings(),
+            ) as profile,
+            profile.new_unit_of_work() as uow,
+        ):
+            await uow.analyses.save(
+                analysis=analysis,
+            )
+
+            await uow.commit()
+
+    run(
+        main=store(),
+    )
+
+
+@final
+class TestTheDefaultMode:
+    def test_with_no_mode_option_the_commands_run_in_this_process_and_call_no_service(
+        self,
+        *,
+        workspace: Path,
+        services_called: list[str],
+    ) -> None:
+        (workspace / "a-scandal-in-bohemia.txt").write_text(
+            data=_TEXT,
+            encoding="utf-8",
+        )
+
+        analyzed = _runner.invoke(
+            app=app,
+            args=[
+                "analyze",
+                "a-scandal-in-bohemia.txt",
+                "--no-dictionary",
+                "--level",
+                "A2",
+                "--json",
+            ],
+        )
+
+        assert analyzed.exit_code == 0, analyzed.output
+
+        payload = loads(
+            s=analyzed.stdout,
+        )
+
+        assert payload["status"] == "completed"
+
+        listed = _runner.invoke(
+            app=app,
+            args=[
+                "list",
+            ],
+        )
+
+        assert listed.exit_code == 0, listed.output
+
+        assert payload["analysis_id"] in listed.output
+
+        shown = _runner.invoke(
+            app=app,
+            args=[
+                "show",
+                payload["analysis_id"],
+            ],
+        )
+
+        assert shown.exit_code == 0, shown.output
+
+        assert "completed" in shown.output
+
+        assert not services_called
+
+    def test_with_remote_the_commands_reach_the_services(
+        self,
+        *,
+        workspace: Path,
+        monkeypatch: MonkeyPatch,
+    ) -> None:
+        reached: list[str] = []
+
+        requested = _requested()
+
+        async def analyze_remotely(
+            *,
+            request: AnalysisRequest,
+            settings: Settings,
+            wait: bool,
+            timeout_seconds: float,
+            progress: AnalysisProgress = UNWATCHED,
+            watch: DictionaryWatch | None = None,
+        ) -> Analysis:
+            reached.append(
+                f"analyze wait={wait}",
+            )
+
+            return requested
+
+        async def show(
+            *,
+            analysis_id: AnalysisId,
+            settings: Settings,
+            local: bool,
+        ) -> WatchedAnalysis:
+            reached.append(
+                f"show local={local}",
+            )
+
+            return WatchedAnalysis(
+                analysis=requested,
+                progress=None,
+            )
+
+        async def list_recent(
+            *,
+            settings: Settings,
+            local: bool,
+            limit: int,
+        ) -> tuple[AnalysisSummary, ...]:
+            reached.append(
+                f"list local={local}",
+            )
+
+            return ()
+
+        for (
+            name,
+            double,
+        ) in (
+            (
+                "analyze_remotely",
+                analyze_remotely,
+            ),
+            (
+                "show",
+                show,
+            ),
+            (
+                "list_recent",
+                list_recent,
+            ),
+        ):
+            monkeypatch.setattr(
+                target=commands,
+                name=name,
+                value=double,
+            )
+
+        (workspace / "a-scandal-in-bohemia.txt").write_text(
+            data=_TEXT,
+            encoding="utf-8",
+        )
+
+        analyzed = _runner.invoke(
+            app=app,
+            args=[
+                "analyze",
+                "a-scandal-in-bohemia.txt",
+                "--remote",
+                "--no-wait",
+                "--level",
+                "A2",
+            ],
+        )
+
+        assert analyzed.exit_code == 0, analyzed.output
+
+        # NOTE:
+        # The two commands the line hands out are the ones that reach the services, so each carries --remote.
+        assert (
+            f"requested analysis {requested.id}; `wordwinnow show {requested.id} --remote --wait` waits for it, and "
+            f"`wordwinnow show {requested.id} --remote` shows how far it has come"
+        ) in _words(
+            analyzed.output,
+        )
+
+        for command in (
+            "show",
+            "list",
+        ):
+            result = _runner.invoke(
+                app=app,
+                args=[
+                    command,
+                    *(
+                        (
+                            str(
+                                object=requested.id,
+                            ),
+                        )
+                        if command == "show"
+                        else ()
+                    ),
+                    "--remote",
+                ],
+            )
+
+            assert result.exit_code == 0, result.output
+
+        assert reached == [
+            "analyze wait=False",
+            "show local=False",
+            "list local=False",
+        ]
+
+
+@final
+class TestOptionsOfTheDistributedMode:
+    @mark.parametrize(
+        argnames="mode",
+        argvalues=(
+            (),
+            ("--local",),
+        ),
+    )
+    def test_not_waiting_without_remote_is_refused_before_anything_is_read_or_stored(
+        self,
+        *,
+        workspace: Path,
+        services_called: list[str],
+        mode: tuple[str, ...],
+    ) -> None:
+        # NOTE:
+        # The file does not exist, so a command that read it before it refused would end with exit code 1 and the
+        # file's own message instead.
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "analyze",
+                "no-such-file.txt",
+                *mode,
+                "--no-wait",
+                "--level",
+                "A2",
+            ],
+        )
+
+        assert result.exit_code == 2
+
+        assert (
+            "--no-wait leaves the analysis to the distributed mode's services, which --remote asks for; a local "
+            "analysis is done when the command that ran it ends"
+        ) in _usage_error(
+            result.output,
+        )
+
+        assert not (workspace / "wordwinnow.db").exists()
+
+        assert not services_called
+
+
+@final
+class TestShowingALocalAnalysis:
+    def test_an_id_the_store_lacks_is_one_line_that_says_where_else_to_look(
+        self,
+        *,
+        workspace: Path,
+        services_called: list[str],
+    ) -> None:
+        analysis_id = AnalysisId.new()
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "show",
+                str(
+                    object=analysis_id,
+                ),
+            ],
+        )
+
+        assert result.exit_code == 1
+
+        assert (
+            _words(
+                result.output,
+            )
+            == f"error: no analysis {analysis_id} in the local store; --remote looks for it in the distributed mode"
+        )
+
+        assert not services_called
+
+    @mark.parametrize(
+        argnames="stored_as",
+        argvalues=(
+            _requested,
+            _processing,
+        ),
+        ids=(
+            "requested",
+            "processing",
+        ),
+    )
+    def test_a_local_analysis_left_unfinished_says_it_goes_on_only_while_its_command_runs(
+        self,
+        *,
+        workspace: Path,
+        services_called: list[str],
+        stored_as: Callable[[], Analysis],
+    ) -> None:
+        analysis = stored_as()
+
+        _stored(
+            analysis,
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "show",
+                str(
+                    object=analysis.id,
+                ),
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+
+        output = _words(
+            result.output,
+        )
+
+        assert "Status" in output
+
+        assert output.endswith(
+            "a local analysis goes on only while the command that runs it is running; if that command has stopped, "
+            "run `wordwinnow analyze` on the text again",
+        )
+
+        assert "--wait" not in output
+
+        assert "--remote" not in output
+
+        assert not services_called
+
+    def test_the_json_of_such_an_analysis_carries_no_line(
+        self,
+        *,
+        workspace: Path,
+    ) -> None:
+        analysis = _processing()
+
+        _stored(
+            analysis,
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "show",
+                str(
+                    object=analysis.id,
+                ),
+                "--json",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+
+        assert (
+            loads(
+                s=result.stdout,
+            )["status"]
+            == "processing"
+        )
+
+
+@final
+class TestAnalyzingWithAnUnusableModel:
+    @mark.parametrize(
+        argnames="state",
+        argvalues=(
+            "another scikit-learn",
+            "another scikit-learn and unreadable",
+            "cut short",
+            "a sidecar that is not JSON",
+            "without a sidecar",
+        ),
+    )
+    def test_analyze_stops_in_one_line_that_names_setup_and_creates_no_store(
+        self,
+        *,
+        workspace: Path,
+        put_model: Callable[..., None],
+        state: str,
+    ) -> None:
+        put_model(
+            path=Settings().level_model_path,
+            state=state,
+        )
+
+        (workspace / "a-scandal-in-bohemia.txt").write_text(
+            data=_TEXT,
+            encoding="utf-8",
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "analyze",
+                "a-scandal-in-bohemia.txt",
+                "--no-dictionary",
+                "--level",
+                "B1",
+            ],
+        )
+
+        assert result.exit_code == 1, result.output
+
+        output = _words(
+            result.output,
+        )
+
+        assert output.startswith(
+            "error: ",
+        )
+
+        assert output.endswith(
+            "; run `wordwinnow setup`",
+        )
+
+        assert (
+            output.count(
+                "error:",
+            )
+            == 1
+        )
+
+        assert "Traceback" not in output
+
+        assert not (workspace / "wordwinnow.db").exists()
+
+    def test_show_and_list_still_work_beside_a_model_analyze_refuses(
+        self,
+        *,
+        workspace: Path,
+        stale_model: SklearnLevelEstimator,
+    ) -> None:
+        (workspace / "a-scandal-in-bohemia.txt").write_text(
+            data=_TEXT,
+            encoding="utf-8",
+        )
+
+        analyzed = _runner.invoke(
+            app=app,
+            args=[
+                "analyze",
+                "a-scandal-in-bohemia.txt",
+                "--no-dictionary",
+                "--level",
+                "B1",
+                "--json",
+            ],
+        )
+
+        assert analyzed.exit_code == 0, analyzed.output
+
+        analysis_id = loads(
+            s=analyzed.stdout,
+        )["analysis_id"]
+
+        save(
+            estimator=stale_model,
+            path=Settings().level_model_path,
+        )
+
+        listed = _runner.invoke(
+            app=app,
+            args=[
+                "list",
+            ],
+        )
+
+        assert listed.exit_code == 0, listed.output
+
+        assert analysis_id in listed.output
+
+        shown = _runner.invoke(
+            app=app,
+            args=[
+                "show",
+                analysis_id,
+            ],
+        )
+
+        assert shown.exit_code == 0, shown.output
+
+        assert "completed" in shown.output
 
 
 @fixture

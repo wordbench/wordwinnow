@@ -9,19 +9,20 @@ Every command, the configuration, and what to do when something stops.
 | `wordwinnow setup` | Download and prepare what an analysis needs and does not have yet: the NLTK data, the reference lists, and the level model |
 | `wordwinnow analyze FILE --level LEVEL` | Analyze a text; `-` reads standard input |
 | `wordwinnow analyze --source NAME --topic TOPIC --level LEVEL` | Analyze a document a source fetches |
-| `wordwinnow show ID` | Show a stored analysis again, or how far one still in progress has come |
+| `wordwinnow show ID` | Show a stored analysis again, or, with `--remote`, how far one still in progress has come |
 | `wordwinnow list` | List recent analyses, the id first |
 | `wordwinnow stats` | Summarize every completed analysis from ClickHouse |
 
-`--local` runs `analyze`, `show`, and `list` against the SQLite store in this process;
-without it, they talk to the intake service, which `stats` always reads from.
+`analyze`, `show`, and `list` run in this process against the SQLite store in your
+user data directory; `--remote` sends them to the distributed mode's intake
+service, which `stats` always reads from.
 
 `analyze FILE` reads plain text, Markdown, SRT, or WebVTT; for anything else,
 such as a PDF, extract the text with a tool of your choice and pipe it in, `-`
 reading standard input:
 
 ```sh
-pdftotext paper.pdf - | uv run wordwinnow analyze - --level B1
+pdftotext paper.pdf - | wordwinnow analyze - --level B1
 ```
 
 Poppler's `pdftotext` is one such tool, packaged as `poppler` by Homebrew and as
@@ -38,9 +39,10 @@ finds no text, `analyze` refuses the empty document.
 | `--tier`, `--rows` | Which tiers to show, `focus`, `stretch`, `review`, or `known`, and how many words |
 | `--detail` | One card per word with pronunciation, examples, related words, and the other meanings the word can have |
 | `--json`, `--csv FILE` | The whole analysis for another program, or the shown words for a flashcard tool |
-| `--no-wait` | In the distributed mode, return the id at once |
-| `--wait` | With `show`, in the distributed mode, wait for an analysis still in progress, as `analyze` does |
-| `--timeout SECONDS` | In the distributed mode, how long `analyze` or `show --wait` waits for the result, 900 by default; the analysis goes on after it, as after Ctrl-C |
+| `--remote` | With `analyze`, `show`, and `list`, use the distributed mode's intake service rather than this process |
+| `--no-wait` | With `--remote`, return the id at once |
+| `--wait` | With `show` and `--remote`, wait for an analysis still in progress, as `analyze` does |
+| `--timeout SECONDS` | With `--remote`, how long `analyze` or `show --wait` waits for the result, 900 by default; the analysis goes on after it, as after Ctrl-C |
 | `--view operator` | Under the progress line, what the dictionary is doing; `learner`, the default, shows the line alone |
 
 A command that takes more than a moment says on standard error what it is
@@ -619,7 +621,7 @@ A worker reports how far it has come whenever a count or a wait changes, at
 most once a second, so a slow analysis keeps reporting however long it runs: a
 cold analysis of the sample story against the Free Dictionary API has taken
 twenty-two minutes, and is not handed back while its worker works on it;
-`wordwinnow show ID` says when the worker last reported.
+`wordwinnow show ID --remote` says when the worker last reported.
 
 Keep the setting above the longest a worker can go without a report, the time
 it gives the enrichment service to answer one lookup, three minutes with the
@@ -649,7 +651,7 @@ worker still holding a record then is killed, and the record is handled again
 by the partition's next owner.
 
 An analysis whose pipeline failed is stored as `failed` with the reason, and
-`wordwinnow show ID` shows it.
+`wordwinnow show ID --remote` shows it.
 
 An analysis of a text that may be kept only for a while is deleted once its
 time has passed, before anyone can read it again: intake deletes it before it
@@ -682,3 +684,17 @@ matching cannot pass as a clean scan.
 `make up` then `make test-integration` runs the lane that needs PostgreSQL, Kafka,
 and ClickHouse; `uv run pytest -m live` runs the one test that reads a real New
 York Times feed.
+
+`make test-installed` builds the wheel, installs it as a learner does, in a
+temporary home, sets it up, and analyzes the sample story with the network
+closed to it, which proves that the package works as it is distributed and not
+only as the checkout runs it.
+
+It resolves the dependencies afresh and never from `uv.lock`, because a
+learner's `uv tool install` does, so it proves the wheel with the dependencies a
+learner would get today, which the locked suite cannot.
+
+It needs the network, for the packages, the NLTK data, and the reference
+lists, so `make verify` leaves it out.
+
+CI runs it on Linux and macOS.

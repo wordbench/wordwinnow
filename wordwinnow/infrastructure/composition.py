@@ -49,6 +49,9 @@ from redis.asyncio import (
     Redis,
 )
 
+from wordwinnow.application.errors import (
+    LevelModelUnusableError,
+)
 from wordwinnow.application.ports.analysis_event_publisher import (
     AnalysisEventPublisher,
 )
@@ -134,8 +137,12 @@ from wordwinnow.infrastructure.messaging.publisher import (
     build_producer,
 )
 from wordwinnow.infrastructure.ml.model import (
+    ModelFileError,
     NoLevelEstimator,
+    installed_sklearn_version,
+    is_stale,
     load,
+    read_metadata,
 )
 from wordwinnow.infrastructure.observability.metrics import (
     Metrics,
@@ -276,11 +283,38 @@ def build_level_estimator(
     """
     The trained level model when its file exists, otherwise a
     `NoLevelEstimator` that leaves every word to the frequency heuristic.
+
+    Raises `LevelModelUnusableError`, naming `wordwinnow setup`, when the file
+    exists and was trained with another scikit-learn or cannot be read.
     """
 
-    estimator = load(
-        path=settings.level_model_path,
-    )
+    path = settings.level_model_path
+
+    try:
+        metadata = read_metadata(
+            path=path,
+        )
+
+        # NOTE:
+        # The sidecar is asked before the model is opened: a model from another scikit-learn may be one this
+        # scikit-learn cannot read, and it is not used either way.
+        if metadata is not None and is_stale(
+            metadata=metadata,
+        ):
+            raise LevelModelUnusableError(
+                f"the level model at {path} was trained with scikit-learn {metadata.sklearn_version}, and {
+                    installed_sklearn_version()
+                } is installed; run `wordwinnow setup`",
+            )
+
+        estimator = load(
+            path=path,
+        )
+
+    except ModelFileError as exception:
+        raise LevelModelUnusableError(
+            f"{exception}; run `wordwinnow setup`",
+        ) from exception
 
     if estimator is None:
         _logger.info(

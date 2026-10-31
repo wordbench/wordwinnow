@@ -98,11 +98,11 @@ _ERRORS: Final = MappingProxyType(
 )
 
 # NOTE:
-# What a refused connection almost always means at the command line, whose default is the remote mode: the distributed
-# mode is not running.
+# What a refused connection almost always means once a command has asked for the distributed mode with --remote: its
+# services are not running, or not where the setting says.
 _NOT_RUNNING: Final = (
-    "; is the distributed mode running? `make up-full` starts it, and --local runs analyze, show, and list in this "
-    "process instead"
+    "; is the distributed mode running, and does WORDWINNOW_INTAKE_URL name its intake service? Without --remote, "
+    "analyze, show, and list run in this process"
 )
 
 

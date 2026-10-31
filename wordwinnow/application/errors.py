@@ -102,3 +102,15 @@ class LinguisticResourcesMissingError(
 
     Not retryable until the resources are installed.
     """
+
+
+@final
+class LevelModelUnusableError(
+    RuntimeError,
+):
+    """
+    Raised when the level model is installed but this code cannot use it:
+    trained with another scikit-learn, or unreadable.
+
+    Not retryable until a model this scikit-learn trained is installed.
+    """

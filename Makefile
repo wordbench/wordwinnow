@@ -59,8 +59,8 @@ GITLEAKS_VERSION := 8.30.1
 
 GITLEAKS_RELEASE := https://github.com/gitleaks/gitleaks/releases/tag/v$(GITLEAKS_VERSION)
 
-.PHONY: help setup nltk-data model format format-check lint typecheck conventions test test-integration secrets \
-	verify check-commits drift hooks build up up-full down reset demo
+.PHONY: help setup nltk-data model format format-check lint typecheck conventions test test-integration test-installed \
+	secrets verify check-commits drift hooks build up up-full down reset demo
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -97,10 +97,16 @@ conventions: ## Run the vendored checker, positive control first
 	$(CHECK) $(PROSE) $(NOTEBOOKS) wordwinnow tests $(SUPPLY_CHAIN)
 
 test: ## Run the tests that need no backing service
-	$(RUN) pytest -m "not integration and not live"
+	$(RUN) pytest -m "not integration and not live and not installed"
 
 test-integration: ## Run the tests that need the backing services (`make up` first)
 	$(RUN) pytest -m integration
+
+# NOTE:
+# The install resolves the dependencies afresh and never from `uv.lock`, because a learner's `uv tool install` does,
+# so this proves the wheel with the dependencies a learner would get today, which the locked suite cannot.
+test-installed: ## Install the built wheel as a learner does, in a temporary home, and analyze offline (needs the network)
+	$(RUN) pytest -m installed
 
 # NOTE:
 # The scan reads what Git holds, every commit and the staged changes, and never the working tree: an ignored `.env` is
@@ -176,4 +182,4 @@ reset: ## Stop everything and delete every volume and its data, with CONFIRM=1
 	docker compose --profile full down -v
 
 demo: ## Analyze the sample story locally, without the dictionary
-	$(RUN) wordwinnow analyze data/corpus/a-scandal-in-bohemia.txt --local --level A2 --no-dictionary
+	$(RUN) wordwinnow analyze data/corpus/a-scandal-in-bohemia.txt --level A2 --no-dictionary

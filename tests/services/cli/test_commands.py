@@ -438,11 +438,14 @@ class TestLocalFlow:
         *,
         settings: Settings,
     ) -> None:
+        analysis_id = AnalysisId.new()
+
         with raises(
             expected_exception=AnalysisNotFoundError,
+            match=f"^no analysis {analysis_id} in the local store; --remote looks for it in the distributed mode$",
         ):
             await show(
-                analysis_id=AnalysisId.new(),
+                analysis_id=analysis_id,
                 settings=settings,
                 local=True,
             )
@@ -555,7 +558,10 @@ class TestRemoteFlow:
             object=caught.value,
         )
 
-        assert f"`wordwinnow show {analysis_id} --wait` waits for it again" in str(
+        assert (
+            f"`wordwinnow show {analysis_id} --remote --wait` waits for it again, and "
+            f"`wordwinnow show {analysis_id} --remote` shows how far it has come"
+        ) in str(
             object=caught.value,
         )
 
@@ -688,6 +694,13 @@ class TestRemoteFlow:
         (analysis_id,) = storage.analyses
 
         assert f"stopped waiting for analysis {analysis_id}, which goes on" in str(
+            object=caught.value,
+        )
+
+        assert (
+            f"`wordwinnow show {analysis_id} --remote --wait` waits for it again, and "
+            f"`wordwinnow show {analysis_id} --remote` shows how far it has come"
+        ) in str(
             object=caught.value,
         )
 
@@ -1028,17 +1041,27 @@ class TestRemoteFlow:
         )
 
         # NOTE:
-        # A refused connection is what a learner meets when the distributed mode is not running, so the error says how
-        # to start it and how to do without it.
+        # A refused connection is what a learner meets when a command asked for the distributed mode with --remote and
+        # its services are not running, so the error says what to check and that the commands run without it.
         with raises(
             expected_exception=IntakeUnavailableError,
-            match="`make up-full` starts it, and --local runs analyze, show, and list",
-        ):
+        ) as caught:
             await list_recent(
                 settings=Settings(),
                 local=False,
                 limit=5,
             )
+
+        message = str(
+            object=caught.value,
+        )
+
+        assert message.endswith(
+            "; is the distributed mode running, and does WORDWINNOW_INTAKE_URL name its intake service? Without "
+            "--remote, analyze, show, and list run in this process",
+        )
+
+        assert "make" not in message
 
 
 @final

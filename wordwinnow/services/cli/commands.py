@@ -54,6 +54,7 @@ from wordwinnow.application.dto import (
     VocabularySummary,
 )
 from wordwinnow.application.errors import (
+    AnalysisNotFoundError,
     LinguisticResourcesMissingError,
     SourceRejectedError,
 )
@@ -226,8 +227,8 @@ class AnalysisTimedOutError(
     Raised when a remote analysis did not finish within the wait.
 
     Not an error of the analysis, which goes on without the command:
-    `wordwinnow show` finds it later, and `wordwinnow show --wait` waits for
-    it again.
+    `wordwinnow show --remote` finds it later, and
+    `wordwinnow show --remote --wait` waits for it again.
     """
 
 
@@ -481,8 +482,8 @@ async def _waited(
     reported: AnalysisStatus | None = None
 
     take_up = (
-        f"`wordwinnow show {analysis_id} --wait` waits for it again, and `wordwinnow show {analysis_id}` shows how "
-        "far it has come"
+        f"`wordwinnow show {analysis_id} --remote --wait` waits for it again, and `wordwinnow show {analysis_id} "
+        "--remote` shows how far it has come"
     )
 
     try:
@@ -554,11 +555,22 @@ async def show(
         async with storage_profile(
             settings=settings,
         ) as profile:
-            return WatchedAnalysis(
-                analysis=await show_an_analysis(
+            try:
+                analysis = await show_an_analysis(
                     analysis_id=analysis_id,
                     new_unit_of_work=profile.new_unit_of_work,
-                ),
+                )
+
+            # NOTE:
+            # An analysis the distributed mode holds is not in this store, and a learner who used it must not read the
+            # absence as lost data.
+            except AnalysisNotFoundError as exception:
+                raise AnalysisNotFoundError(
+                    f"no analysis {analysis_id} in the local store; --remote looks for it in the distributed mode",
+                ) from exception
+
+            return WatchedAnalysis(
+                analysis=analysis,
                 progress=None,
             )
 
