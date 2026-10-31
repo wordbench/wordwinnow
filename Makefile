@@ -69,8 +69,13 @@ help: ## Show this help
 setup: ## Create the environment this gate runs in
 	uv sync --locked
 
+# NOTE:
+# CI runs this target for the NLTK data alone, before the gate, in a home where `wordwinnow setup` has never run.
+#
+# `doctor` installs the data and then checks the reference lists too, so it is pointed at the checkout's own copies,
+# the ones the tests read, rather than at the user data directory, which only `wordwinnow setup` fills.
 nltk-data: ## Download the NLTK corpora the linguistic adapters need
-	$(RUN) wordwinnow doctor --install-nltk-data
+	WORDWINNOW_REFERENCE_LISTS_DIR=data/reference $(RUN) wordwinnow doctor --install-nltk-data
 
 model: ## Set up the NLTK data, the reference lists, and the level model, as `wordwinnow setup` does
 	$(RUN) wordwinnow setup
