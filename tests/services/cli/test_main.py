@@ -1985,6 +1985,23 @@ def _modification_times(
     }
 
 
+def _ready(
+    reference_lists: Path,
+    level_model: Path,
+    /,
+) -> tuple[str, ...]:
+    """
+    What `setup` prints once everything is ready, before the citations.
+    """
+
+    return (
+        "ready   NLTK data: punkt_tab, averaged_perceptron_tagger_eng, stopwords, wordnet",
+        f"        reference lists: {reference_lists}",
+        f"        level model: {level_model}",
+        "        next: wordwinnow analyze FILE --level LEVEL",
+    )
+
+
 @final
 class TestSetup:
     def test_it_prepares_an_analysis_in_the_users_directory_and_a_second_run_changes_nothing(
@@ -1997,9 +2014,9 @@ class TestSetup:
             appname="wordwinnow",
         )
 
-        ready = (
-            f"ready   NLTK data, reference lists in {data / 'reference'}, level model at "
-            f"{data / 'cefr_level_model.joblib'}"
+        ready = _ready(
+            data / "reference",
+            data / "cefr_level_model.joblib",
         )
 
         first = _runner.invoke(
@@ -2024,7 +2041,7 @@ class TestSetup:
         )
 
         assert lines[3:] == [
-            ready,
+            *ready,
             *REFERENCE_CITATIONS,
         ]
 
@@ -2054,7 +2071,7 @@ class TestSetup:
         assert second.exit_code == 0, second.output
 
         assert second.stdout.splitlines() == [
-            ready,
+            *ready,
             *REFERENCE_CITATIONS,
         ]
 
@@ -2161,7 +2178,10 @@ class TestSetup:
         assert second.exit_code == 0, second.output
 
         assert second.stdout.splitlines() == [
-            f"ready   NLTK data, reference lists in {data / 'reference'}, level model at {path}",
+            *_ready(
+                data / "reference",
+                path,
+            ),
             *REFERENCE_CITATIONS,
         ]
 

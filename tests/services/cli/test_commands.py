@@ -1616,6 +1616,23 @@ def trained(
     return calls
 
 
+def _ready(
+    reference_lists: Path,
+    level_model: Path,
+    /,
+) -> tuple[str, ...]:
+    """
+    What `setup` prints once everything is ready, before the citations.
+    """
+
+    return (
+        "ready   NLTK data: punkt_tab, averaged_perceptron_tagger_eng, stopwords, wordnet",
+        f"        reference lists: {reference_lists}",
+        f"        level model: {level_model}",
+        "        next: wordwinnow analyze FILE --level LEVEL",
+    )
+
+
 @final
 class _PhaseTotals:
     """
@@ -1728,7 +1745,10 @@ class TestSetUp:
             f"downloaded reference list {REFERENCE_FILES[0]} to {directory}",
             f"downloaded reference list {REFERENCE_FILES[1]} to {directory}",
             f"wrote a model to {unprepared.level_model_path}",
-            f"ready   NLTK data, reference lists in {directory}, level model at {unprepared.level_model_path}",
+            *_ready(
+                directory,
+                unprepared.level_model_path,
+            ),
             *REFERENCE_CITATIONS,
         )
 
@@ -1891,8 +1911,10 @@ class TestSetUp:
         )
 
         assert second == (
-            f"ready   NLTK data, reference lists in {unprepared.reference_lists_dir}, level model at "
-            f"{unprepared.level_model_path}",
+            *_ready(
+                unprepared.reference_lists_dir,
+                unprepared.level_model_path,
+            ),
             *REFERENCE_CITATIONS,
         )
 

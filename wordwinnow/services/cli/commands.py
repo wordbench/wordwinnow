@@ -182,6 +182,11 @@ POLL_SECONDS: Final = 1.0
 DEFAULT_SEED: Final = 42
 
 # NOTE:
+# What `setup` names as the next step once everything is ready, in the form the getting-started guide gives for a text
+# of one's own.
+FIRST_ANALYSIS: Final = "wordwinnow analyze FILE --level LEVEL"
+
+# NOTE:
 # Where a clone kept its store before the defaults moved into the user's directories, relative to the current
 # directory.
 _EARLIER_STORE: Final = Path(
@@ -1014,9 +1019,18 @@ def set_up(
             ),
         )
 
-    lines.append(
-        f"ready   NLTK data, reference lists in {settings.reference_lists_dir}, level model at "
-        f"{settings.level_model_path}",
+    packages = ", ".join(resource.package for resource in REQUIRED_RESOURCES)
+
+    # NOTE:
+    # What is ready, one item a line under the status column, each with what it holds or where it is, then the command
+    # an analysis starts with; the citations follow in the same column.
+    lines.extend(
+        (
+            f"ready   NLTK data: {packages}",
+            f"        reference lists: {settings.reference_lists_dir}",
+            f"        level model: {settings.level_model_path}",
+            f"        next: {FIRST_ANALYSIS}",
+        ),
     )
 
     lines.extend(

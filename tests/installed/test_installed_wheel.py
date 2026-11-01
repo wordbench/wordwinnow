@@ -662,9 +662,13 @@ class TestInstalledWheel:
             installation.first_setup,
         ).stdout.splitlines()
 
-        assert lines[-3].startswith(
+        assert lines[-6].startswith(
             "ready   ",
         ), _transcript(
+            installation.first_setup,
+        )
+
+        assert lines[-3] == "        next: wordwinnow analyze FILE --level LEVEL", _transcript(
             installation.first_setup,
         )
 
@@ -690,7 +694,7 @@ class TestInstalledWheel:
             len(
                 lines,
             )
-            == 3
+            == 6
         ), _transcript(
             installation.second_setup,
         )
@@ -703,7 +707,7 @@ class TestInstalledWheel:
 
         assert (
             tuple(
-                lines[1:],
+                lines[4:],
             )
             == REFERENCE_CITATIONS
         ), _transcript(
