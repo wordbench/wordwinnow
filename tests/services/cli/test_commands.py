@@ -16,6 +16,9 @@ from collections.abc import (
     Callable,
     Sequence,
 )
+from io import (
+    StringIO,
+)
 from pathlib import (
     Path,
 )
@@ -132,6 +135,9 @@ from wordwinnow.services.cli.commands import (
 )
 from wordwinnow.services.cli.intake_client import (
     IntakeUnavailableError,
+)
+from wordwinnow.services.cli.progress import (
+    TerminalProgress,
 )
 from wordwinnow.services.cli.report import (
     render_listing,
@@ -1611,6 +1617,57 @@ def trained(
 
 
 @final
+class _PhaseTotals:
+    """
+    A terminal's progress line that notes, as each phase begins, the total its
+    bar is drawn against: a number for a counted phase, or `None`, which Rich
+    draws as a pulse.
+    """
+
+    def __init__(
+        self,
+        line: TerminalProgress,
+        /,
+    ) -> None:
+        self.line: Final = line
+
+        self.totals: Final[list[tuple[str, float | None]]] = []
+
+    def begin(
+        self,
+        *,
+        description: str,
+        steps: int | None,
+    ) -> None:
+        self.line.begin(
+            description=description,
+            steps=steps,
+        )
+
+        for task in self.line.line.tasks:
+            self.totals.append(
+                (
+                    task.description,
+                    task.total,
+                ),
+            )
+
+    def describe(
+        self,
+        *,
+        description: str,
+    ) -> None:
+        self.line.describe(
+            description=description,
+        )
+
+    def advance(
+        self,
+    ) -> None:
+        self.line.advance()
+
+
+@final
 class TestSetUp:
     def test_it_installs_downloads_trains_and_reports_in_that_order(
         self,
@@ -1687,6 +1744,117 @@ class TestSetUp:
         ) == len(
             REFERENCE_FILES,
         )
+
+    def test_every_phase_whose_steps_are_unknown_pulses_after_the_counted_downloads(
+        self,
+        *,
+        unprepared: Settings,
+        requested_lists: list[str],
+        fitted_model: SklearnLevelEstimator,
+        monkeypatch: MonkeyPatch,
+    ) -> None:
+        absent = list(
+            REQUIRED_RESOURCES[:2],
+        )
+
+        def missing_resources(
+            *,
+            resources: Sequence[NltkResource] = REQUIRED_RESOURCES,
+        ) -> tuple[NltkResource, ...]:
+            return tuple(resource for resource in resources if resource in absent)
+
+        def download_resources(
+            *,
+            resources: Sequence[NltkResource] = REQUIRED_RESOURCES,
+            target: Path | None = None,
+            client: object = None,
+        ) -> tuple[NltkResource, ...]:
+            fetched = missing_resources(
+                resources=resources,
+            )
+
+            for resource in fetched:
+                absent.remove(
+                    resource,
+                )
+
+            return fetched
+
+        # TEST:
+        # The dataset and the fit stand in for seconds of work, so that the real training reports its two phases.
+        def build_dataset(
+            **_: object,
+        ) -> tuple[None, ...]:
+            return (None,) * 9_520
+
+        def train_shipped_model(
+            **_: object,
+        ) -> SklearnLevelEstimator:
+            return fitted_model
+
+        monkeypatch.setattr(
+            target=commands,
+            name="missing_resources",
+            value=missing_resources,
+        )
+
+        monkeypatch.setattr(
+            target=commands,
+            name="download_resources",
+            value=download_resources,
+        )
+
+        monkeypatch.setattr(
+            target=commands,
+            name="build_dataset",
+            value=build_dataset,
+        )
+
+        monkeypatch.setattr(
+            target=commands,
+            name="train_shipped_model",
+            value=train_shipped_model,
+        )
+
+        with TerminalProgress(
+            console=Console(
+                force_terminal=True,
+                force_interactive=True,
+                file=StringIO(),
+                width=160,
+            ),
+        ) as line:
+            phases = _PhaseTotals(
+                line,
+            )
+
+            set_up(
+                settings=unprepared,
+                progress=phases,
+            )
+
+        assert phases.totals == [
+            (
+                "downloading the NLTK packages that are missing",
+                2,
+            ),
+            (
+                "downloading the reference lists that are missing",
+                None,
+            ),
+            (
+                "checking the level model",
+                None,
+            ),
+            (
+                "building the dataset from the reference lists",
+                None,
+            ),
+            (
+                "training the level model on 9,520 words",
+                None,
+            ),
+        ]
 
     def test_a_second_run_changes_nothing_and_says_only_what_is_ready(
         self,

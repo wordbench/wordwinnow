@@ -467,19 +467,18 @@ class TerminalProgress:
 
         self._quiet_since = None
 
-        if self._task is None:
-            self._task = self._progress.add_task(
-                description=description,
-                total=steps,
-                **self._fields(),
+        # NOTE:
+        # Each phase is a task of its own, because Rich's reset keeps a task's total when it is given None: a phase
+        # whose steps are unknown, begun after a counted one, would draw that phase's total as an empty bar rather
+        # than the pulse that says the work goes on.
+        if self._task is not None:
+            self._progress.remove_task(
+                task_id=self._task,
             )
 
-            return
-
-        self._progress.reset(
-            task_id=self._task,
-            total=steps,
+        self._task = self._progress.add_task(
             description=description,
+            total=steps,
             **self._fields(),
         )
 

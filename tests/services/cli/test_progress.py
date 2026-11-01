@@ -9,6 +9,10 @@ from datetime import (
 from io import (
     StringIO,
 )
+from re import (
+    findall,
+    split,
+)
 from typing import (
     Final,
     final,
@@ -194,6 +198,64 @@ class TestTerminalProgress:
         assert "looking the words up in the dictionary" in written
 
         assert "3 of 1,509" in written
+
+    def test_a_phase_whose_steps_are_unknown_pulses_after_a_counted_one(
+        self,
+    ) -> None:
+        stream = StringIO()
+
+        with TerminalProgress(
+            console=Console(
+                color_system="truecolor",
+                force_terminal=True,
+                force_interactive=True,
+                file=stream,
+                width=100,
+            ),
+        ) as progress:
+            progress.begin(
+                description="downloading the NLTK packages that are missing",
+                steps=4,
+            )
+
+            progress.advance()
+
+            progress.begin(
+                description="training the level model on 9,520 words",
+                steps=None,
+            )
+
+            totals = tuple(task.total for task in progress.line.tasks)
+
+            progress.line.refresh()
+
+        assert totals == (None,)
+
+        # NOTE:
+        # Rich draws a bar with a total against it, empty at none done, in its one background color, and only a task
+        # with no total as the moving pulse, whose cells shade from the bar's color into the background.
+        drawn = tuple(
+            line
+            for line in split(
+                pattern=r"[\r\n]",
+                string=stream.getvalue(),
+            )
+            if "training the level model" in line
+        )
+
+        colors = frozenset(
+            findall(
+                pattern=r"\x1b\[38;2;[0-9;]+m(?=━)",
+                string=drawn[-1],
+            ),
+        )
+
+        assert (
+            len(
+                colors,
+            )
+            > 1
+        )
 
     def test_unavailable_answers_are_counted_and_a_paused_dictionary_is_named(
         self,
