@@ -102,10 +102,11 @@ every row.
 
 ![The operator's view of failures, a request limit, an outage, and a recovery](docs/images/operator.gif)
 
-The recording asks a stand-in for the dictionary provider, which, when it is
-told to, fails requests, refuses those over a limit of its own, stops
-answering, and answers again, so that the failures, the limit, the outage, and
-the recovery come on cue.
+The recording runs the distributed mode, the installed command sending every
+analysis with `--remote`, and asks a stand-in for the dictionary provider,
+which, when it is told to, fails requests, refuses those over a limit of its
+own, stops answering, and answers again, so that the failures, the limit, the
+outage, and the recovery come on cue.
 
 Every meaning and related word the two recordings show is WordNet's, the
 stand-in's definitions included, under Princeton University's WordNet 3.0

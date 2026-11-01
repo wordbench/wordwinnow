@@ -350,6 +350,13 @@ a minute; how the dictionary's lookups were answered since the view began,
 from the cache or by the provider; the ones it turned away and the retries,
 each by reason; the request budget; and the lookups in flight.
 
+The README's recording, below as well, follows the panel through a provider
+answering, failing, rate-limited, down, and back, as its title and rows say
+each; while the provider is down for good, the one word an earlier chapter
+looked up is answered from the cache, and only that word keeps its definition.
+
+![The operator's view of failures, a request limit, an outage, and a recovery](images/operator.gif)
+
 The row `last minute` has a mark for each second of the last minute, the newest
 on the right: `✓` when a request the client sent was answered in that second,
 found or not, `!` when the provider refused one with a 429, `✗` when one failed,
@@ -425,10 +432,12 @@ holds back is, is asked again then, while the analysis's waiting time lasts,
 and each refusal counts once more, so `turned away` can pass both the words the
 progress line counts and `answered`.
 
-The README's recording shows it: an analysis of 48 words ends with `answered 48`
-beside `turned away 82: 79 held back, 3 server error`, because each of the 41
-words the service had to answer was turned away twice, when the circuit opened
-and again behind the trial that failed, before it was answered.
+The README's recording shows it: an analysis that looks up 40 words, each of
+them answered in the end, 39 found and 1 not found as its report counts them,
+shows `turned away 80: 74 held back, 6 server error` in the panel, because each
+of the 40 was turned away twice, when the circuit opened and again behind the
+trial that failed, before it was answered; in the panel, `turned away` counts to
+40 and then to 80 while `answered` stays at 0.
 
 The report counts each word once: its count of unavailable words, the words
 that show WordNet's gloss, is what the learner gets.
