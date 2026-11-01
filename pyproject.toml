@@ -279,7 +279,7 @@ markers = [
 
 # NOTE:
 # The build backend is the one requirement the lock does not cover, so it is pinned exactly here: a range would let a
-# rebuild of the same commit use another backend, and this is the uv release the image and the pipeline pin.
+# rebuild of the same commit use another backend and so change the wheel.
 [build-system]
 requires = [
   "uv_build==0.12.22",
