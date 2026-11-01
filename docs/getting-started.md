@@ -61,6 +61,11 @@ them from, except a file you name, such as `--csv`'s.
 After you install another version, `analyze` stops and names `wordwinnow setup`
 when the level model needs training again.
 
+The recording installs a 2.0.0 wheel from a file, which `uv tool install` takes
+in place of a URL, then sets it up.
+
+![Installing Wordwinnow 2.0.0 from a wheel, then running wordwinnow setup](images/installing.gif)
+
 ## The first analysis
 
 ```sh
@@ -193,6 +198,13 @@ analysis goes on whether or not it waits: when the wait ends, or Ctrl-C stops
 it, the command names the analysis, `wordwinnow show ID --remote --wait` waits
 for it again, and `wordwinnow show ID --remote` shows how far it has come, or
 the result once it is done.
+
+The recording runs the installed `wordwinnow`, which reaches the stack as
+`uv run wordwinnow` does, and stops the worker first, so that the request waits;
+once the worker is back, `show` finds the analysis looking its words up, and
+`show --wait` follows it to the end.
+
+![A request that waits for a worker, outlives its command, then is followed](images/distributed-queue.gif)
 
 `--view operator` shows, under the progress line, what the enrichment service's
 dictionary is doing meanwhile: whether the provider is answering,
