@@ -68,7 +68,7 @@ a flashcard tool.
 ## Running it
 
 ```sh
-uv tool install --python 3.14 git+https://github.com/wordbench/wordwinnow
+uv tool install --python 3.14 https://github.com/wordbench/wordwinnow/releases/download/v2.0.0/wordwinnow-2.0.0-py3-none-any.whl
 ```
 
 ```sh
@@ -76,11 +76,11 @@ wordwinnow setup
 ```
 
 ```sh
-curl -sSfL https://raw.githubusercontent.com/wordbench/wordwinnow/main/data/corpus/a-scandal-in-bohemia.txt | wordwinnow analyze - --level A2 --target B1 --no-dictionary
+curl -sSfL https://raw.githubusercontent.com/wordbench/wordwinnow/v2.0.0/data/corpus/a-scandal-in-bohemia.txt | wordwinnow analyze - --level A2 --target B1 --no-dictionary
 ```
 
-Installing needs [uv](https://docs.astral.sh/uv/) and Git, and `--python 3.14` names the Python version
-Wordwinnow is tested on, which uv fetches if your system lacks it.
+Installing needs [uv](https://docs.astral.sh/uv/), and `--python 3.14` names the Python version Wordwinnow
+is tested on, which uv fetches if your system lacks it.
 
 Those commands install the command, set it up, and analyze "A Scandal in
 Bohemia," the first Sherlock Holmes short story, in one process against a

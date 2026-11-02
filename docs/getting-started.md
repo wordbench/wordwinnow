@@ -9,19 +9,17 @@ You need [`uv`](https://docs.astral.sh/uv/), which installs the command.
 Its `--python 3.14` option names the Python version Wordwinnow is tested on,
 which uv fetches if your system lacks it.
 
-You need Git, to install Wordwinnow from its repository.
-
 You need network access to install it and to set it up, for the packages, the
 NLTK data, and the reference lists.
 
 ## Installing it
 
 ```sh
-uv tool install --python 3.14 git+https://github.com/wordbench/wordwinnow
+uv tool install --python 3.14 https://github.com/wordbench/wordwinnow/releases/download/v2.0.0/wordwinnow-2.0.0-py3-none-any.whl
 ```
 
-That installs the `wordwinnow` command in an environment of its own, with the
-packages it needs.
+That installs the `wordwinnow` command from the wheel attached to the 2.0.0
+release, in an environment of its own, with the packages it needs.
 
 `--python 3.14` names the Python version Wordwinnow is tested on, which uv
 fetches if your system lacks it.
@@ -69,7 +67,7 @@ in place of a URL, then sets it up.
 ## The first analysis
 
 ```sh
-curl -sSfL https://raw.githubusercontent.com/wordbench/wordwinnow/main/data/corpus/a-scandal-in-bohemia.txt | wordwinnow analyze - --level A2 --target B1 --no-dictionary
+curl -sSfL https://raw.githubusercontent.com/wordbench/wordwinnow/v2.0.0/data/corpus/a-scandal-in-bohemia.txt | wordwinnow analyze - --level A2 --target B1 --no-dictionary
 ```
 
 The `-` makes `analyze` read the text from standard input, which here is the story
