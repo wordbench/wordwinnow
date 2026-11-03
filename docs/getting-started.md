@@ -255,3 +255,7 @@ the `commit-msg` hook checks each message, and the `pre-push` hook runs
 [`operating.md`](operating.md) covers every command, the configuration, and recovery.
 
 [`domain.md`](domain.md) defines the terms and says how a word gets its level.
+
+If a command fails, `wordwinnow doctor` says what is present and what is
+missing; [an issue](https://github.com/wordbench/wordwinnow/issues) with its output, the command, and your system is the way
+to report it.

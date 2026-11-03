@@ -24,7 +24,7 @@ CHECK_COMMIT := $(RUN) python3 tools/check_commit_message.py
 # which reproduces licensors' own wording.
 #
 # `NOTICE` is prose too, but it has no extension, so the checker would read it as Python; it is reviewed by hand.
-PROSE := README.md docs data/corpus/README.md
+PROSE := README.md SECURITY.md docs data/corpus/README.md
 
 # NOTE:
 # The rest of what the checker reads: the notebook, cell by cell, and the record of downloaded artifacts with the

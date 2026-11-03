@@ -150,7 +150,7 @@ release may still add to what it does; my later work on the same problem is
 Wordbench, a separate project, as [`docs/product.md`](docs/product.md) explains.
 
 Its license does not permit changing the code, so it takes no pull requests;
-an issue is the way to report an error.
+[an issue](https://github.com/wordbench/wordwinnow/issues) is the way to report an error.
 
 ## Who made it, and how
 

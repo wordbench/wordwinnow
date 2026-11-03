@@ -1,0 +1,61 @@
+# NOTE:
+# The form asks for what an install problem needs and a bare report lacks: the system, the uv version, the install
+# command, Wordwinnow's version, and what `wordwinnow doctor` found.
+#
+# The label must already exist in the repository, because GitHub does not create one that is missing.
+name: A failed install or command
+description: An install or a command that failed, or that printed something you did not expect.
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: A home directory or a user name in a path may be shortened before you post.
+
+  - type: textarea
+    id: command
+    attributes:
+      label: What you ran
+      description: The command exactly as you typed it, or the install command you used.
+      render: bash
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: What it printed
+      description: Everything it printed, from the first line to the last.
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: system
+    attributes:
+      label: Your system and its version
+      placeholder: macOS 26 or Ubuntu 24.04
+
+  - type: input
+    id: uv-version
+    attributes:
+      label: The output of uv --version
+      placeholder: uv 0.13.6
+
+  - type: input
+    id: install-command
+    attributes:
+      label: The install command you used
+
+  - type: input
+    id: wordwinnow-version
+    attributes:
+      label: Wordwinnow's version, as uv tool list names it
+      placeholder: wordwinnow v2.0.0
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: The output of wordwinnow doctor
+      description: Run it after the failure, in the same place.
+      render: text
