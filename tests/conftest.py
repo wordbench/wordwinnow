@@ -68,6 +68,15 @@ _DATA_HOME: Final = "XDG_DATA_HOME"
 
 _CACHE_HOME: Final = "XDG_CACHE_HOME"
 
+# NOTE:
+# Rich draws no live display on a terminal whose `TERM` is `dumb`, even where a console is forced to be a terminal, so
+# a test that reads a display would pass or fail by the `TERM` of the shell that runs it.
+#
+# Every test gets a terminal that can move its cursor, and the one test that needs a dumb terminal names it itself.
+_TERM: Final = "TERM"
+
+_TERMINAL: Final = "xterm-256color"
+
 _REFERENCE_DIR: Final = (
     Path(
         __file__,
@@ -120,6 +129,19 @@ def isolated_user_directories(
         value=str(
             object=tmp_path / "xdg" / "cache",
         ),
+    )
+
+
+@fixture(
+    autouse=True,
+)
+def isolated_terminal(
+    *,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        name=_TERM,
+        value=_TERMINAL,
     )
 
 
