@@ -305,8 +305,8 @@ def _render(
     /,
 ) -> str:
     console = Console(
-        record=True,
         width=200,
+        record=True,
     )
 
     render_summary(
@@ -399,8 +399,8 @@ class TestRendering:
         self,
     ) -> None:
         console = Console(
-            record=True,
             width=200,
+            record=True,
         )
 
         render_items(
@@ -461,8 +461,8 @@ class TestRendering:
             render_cards,
         ):
             console = Console(
-                record=True,
                 width=200,
+                record=True,
             )
 
             render(
@@ -593,8 +593,8 @@ class TestRendering:
             render_cards,
         ):
             console = Console(
-                record=True,
                 width=200,
+                record=True,
             )
 
             render(
@@ -660,8 +660,8 @@ class TestRendering:
         self,
     ) -> None:
         console = Console(
-            record=True,
             width=200,
+            record=True,
         )
 
         render_cards(
@@ -685,8 +685,8 @@ class TestRendering:
         self,
     ) -> None:
         console = Console(
-            record=True,
             width=300,
+            record=True,
         )
 
         render_cards(
@@ -722,8 +722,8 @@ class TestRendering:
         self,
     ) -> None:
         console = Console(
-            record=True,
             width=200,
+            record=True,
         )
 
         render_cards(
@@ -764,8 +764,8 @@ class TestRendering:
         hint = "Each word shows one meaning, which may not be the one the text uses; --detail lists the others."
 
         with_others = Console(
-            record=True,
             width=200,
+            record=True,
         )
 
         render_items(
@@ -777,8 +777,8 @@ class TestRendering:
         )
 
         without_others = Console(
-            record=True,
             width=200,
+            record=True,
         )
 
         render_items(

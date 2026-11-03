@@ -502,16 +502,16 @@ def _framed(
         ),
         title_align="left",
         border_style=color,
-        padding=(
-            0,
-            1,
-        ),
         width=max(
             min(
                 width - 1,
                 _PANEL_WIDTH,
             ),
             40,
+        ),
+        padding=(
+            0,
+            1,
         ),
     )
 
@@ -955,14 +955,14 @@ def _in_flight(
     )
 
     rows.add_column(
+        overflow="ellipsis",
         width=_LEMMA_WIDTH,
         no_wrap=True,
-        overflow="ellipsis",
     )
 
     rows.add_column(
-        no_wrap=True,
         overflow="ellipsis",
+        no_wrap=True,
     )
 
     rows.add_column(

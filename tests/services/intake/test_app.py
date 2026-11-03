@@ -170,10 +170,10 @@ async def harness() -> AsyncIterator[tuple[Harness, AsyncClient]]:
     )
 
     async with AsyncClient(
+        base_url="http://intake.test",
         transport=ASGITransport(
             app=built.app,
         ),
-        base_url="http://intake.test",
     ) as client:
         yield (
             built,
@@ -416,10 +416,10 @@ class TestCreateAnalysis:
         )
 
         async with AsyncClient(
+            base_url="http://intake.test",
             transport=ASGITransport(
                 app=built.app,
             ),
-            base_url="http://intake.test",
         ) as client:
             response = await client.post(
                 url="/analyses",
@@ -624,10 +624,10 @@ class TestReadAnalyses:
         )
 
         async with AsyncClient(
+            base_url="http://intake.test",
             transport=ASGITransport(
                 app=built.app,
             ),
-            base_url="http://intake.test",
         ) as client:
             await client.post(
                 url="/analyses",

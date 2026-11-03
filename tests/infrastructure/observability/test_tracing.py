@@ -147,10 +147,10 @@ class TestTracing:
         # NOTE:
         # Each word looked up here is, or contains, the name of a route the service leaves untraced.
         async with AsyncClient(
+            base_url="http://enrichment.test",
             transport=ASGITransport(
                 app=app,
             ),
-            base_url="http://enrichment.test",
         ) as client:
             for path in (
                 "/health",

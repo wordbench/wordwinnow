@@ -157,10 +157,10 @@ class TestEnrichmentApp:
         )
 
         async with AsyncClient(
+            base_url="http://enrichment.test",
             transport=ASGITransport(
                 app=app,
             ),
-            base_url="http://enrichment.test",
         ) as client:
             first = await client.get(
                 url="/lookups/photograph",
@@ -239,11 +239,11 @@ class TestProviderHooks:
             )
 
         async with AsyncClient(
-            transport=MockTransport(
-                handler=handler,
-            ),
             event_hooks=provider_hooks(
                 metrics=metrics,
+            ),
+            transport=MockTransport(
+                handler=handler,
             ),
         ) as client:
             await client.get(
@@ -408,10 +408,10 @@ class TestActivity:
         )
 
         async with AsyncClient(
+            base_url="http://enrichment.test",
             transport=ASGITransport(
                 app=app,
             ),
-            base_url="http://enrichment.test",
         ) as service:
             closed = (
                 await service.get(
@@ -484,10 +484,10 @@ class TestActivity:
         )
 
         async with AsyncClient(
+            base_url="http://enrichment.test",
             transport=ASGITransport(
                 app=app,
             ),
-            base_url="http://enrichment.test",
         ) as service:
             read = await service.get(
                 url="/activity",

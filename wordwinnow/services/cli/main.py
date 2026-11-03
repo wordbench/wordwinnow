@@ -695,9 +695,9 @@ def analyze(
     limit: Annotated[
         int,
         Option(
+            help="How many items of the source to combine.",
             min=1,
             max=100,
-            help="How many items of the source to combine.",
         ),
     ] = 15,
     target: Annotated[
@@ -745,8 +745,8 @@ def analyze(
     timeout: Annotated[
         float,
         Option(
-            min=1,
             help="Seconds to wait for a remote result.",
+            min=1,
             rich_help_panel=_RUNNING,
         ),
     ] = 900.0,
@@ -760,8 +760,8 @@ def analyze(
     rows: Annotated[
         int | None,
         Option(
-            min=1,
             help="How many words to show.",
+            min=1,
             rich_help_panel=_SHOWING,
         ),
     ] = DEFAULT_ROW_LIMIT,
@@ -948,8 +948,8 @@ def show(
     timeout: Annotated[
         float,
         Option(
-            min=1,
             help="Seconds --wait waits for the result.",
+            min=1,
             rich_help_panel=_RUNNING,
         ),
     ] = 900.0,

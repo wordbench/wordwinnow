@@ -368,8 +368,8 @@ class TestLocalFlow:
         assert tuple(summary.analysis_id for summary in summaries) == (analysis.id,)
 
         console = Console(
-            record=True,
             width=80,
+            record=True,
         )
 
         render_listing(
