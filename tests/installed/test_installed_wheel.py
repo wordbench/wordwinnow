@@ -16,6 +16,9 @@ from collections.abc import (
 from dataclasses import (
     dataclass,
 )
+from hashlib import (
+    sha256,
+)
 from json import (
     loads,
 )
@@ -50,6 +53,7 @@ from zipfile import (
 )
 
 from pytest import (
+    FixtureRequest,
     TempPathFactory,
     fixture,
     mark,
@@ -310,6 +314,7 @@ def _readme_install_command() -> tuple[str, ...]:
 )
 def installation(
     *,
+    request: FixtureRequest,
     tmp_path_factory: TempPathFactory,
 ) -> Installation:
     found = which(
@@ -411,6 +416,26 @@ def installation(
 
     (wheel,) = wheels.glob(
         pattern="*.whl",
+    )
+
+    # NOTE:
+    # The digest of the file the next command installs, in the form `sha256sum` writes, so that the log of a run shows
+    # which bytes were tested and a reader can compare them with a release's notes.
+    #
+    # It goes through the terminal reporter, which ends the line pytest has open before it writes, and not through
+    # `print`, which pytest captures and shows only for a failure.
+    digest = sha256(
+        data=wheel.read_bytes(),
+    ).hexdigest()
+
+    reporter = request.config.pluginmanager.get_plugin(
+        name="terminalreporter",
+    )
+
+    assert reporter is not None, "the digest of the installed wheel needs pytest's terminal reporter"
+
+    reporter.write_line(
+        line=f"{digest}  {wheel.name}",
     )
 
     install = _succeeded(

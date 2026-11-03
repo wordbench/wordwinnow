@@ -1,0 +1,69 @@
+# NOTE:
+# A file of its own, not a schedule in `ci.yml`, because a schedule there would run every job on the default branch's
+# newest commit, which is not what a learner installs while a stage is in progress, and would make every other job
+# conditional.
+#
+# It checks out the newest `v*` tag reachable from the default branch, says which, and runs that tree's own
+# `make setup` and `make test-installed`: the wheel built from the tagged tree, installed with the dependencies a
+# learner would resolve today, against the installed tests of that release, which the tests on the default branch may
+# have outgrown.
+#
+# The actions, uv, and runners are those of the `installed` job in `ci.yml`, so a change to any of those pins is made
+# in both files.
+name: installed-release
+
+# WARN:
+# GitHub disables a public repository's scheduled workflow after 60 days without repository activity, and the check
+# then stops without a failure to notice.
+#
+# Enable it again from the Actions tab, by choosing this workflow and then "Enable workflow", or with
+# `gh workflow enable installed-release.yml`.
+on:
+  schedule:
+    - cron: "1 1 * * 0"
+  workflow_dispatch:
+
+# NOTE:
+# The job only reads the repository, so the token it receives can do nothing else.
+permissions:
+  contents: read
+
+jobs:
+  installed:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-24.04
+          - macos-26
+    runs-on: ${{ matrix.os }}
+    steps:
+      # NOTE:
+      # The whole history and every tag, because the newest release is found among the tags that the default branch
+      # reaches.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # NOTE:
+      # A scheduled run starts at the default branch's latest commit, so the tags reachable from `HEAD` are the tags
+      # the default branch reaches, and a run that finds none fails rather than testing the branch itself.
+      - name: Check out the newest release
+        run: |
+          tag="$(git for-each-ref --count=1 --merged=HEAD --sort=-version:refname \
+            --format='%(refname:strip=2)' 'refs/tags/v*')"
+          test -n "$tag" || { echo "no v* tag is reachable from the default branch" >&2; exit 1; }
+          echo "The newest release is $tag, at $(git rev-parse --short "refs/tags/$tag^{commit}")"
+          git checkout --quiet --detach "refs/tags/$tag"
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.13.6"
+          enable-cache: true
+
+      - name: Create the environment
+        run: make setup
+
+      - name: Install the release's wheel as a learner does
+        run: make test-installed

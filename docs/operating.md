@@ -707,3 +707,10 @@ It needs the network, for the packages, the NLTK data, and the reference
 lists, so `make verify` leaves it out.
 
 CI runs it on Linux and macOS.
+
+CI prints the SHA-256 digest of the wheel it installed, in the form `sha256sum`
+writes, so that it can be compared with a release's notes and with the digest
+GitHub shows for the release's wheel.
+
+A weekly run checks the latest release the same way: it checks out the newest
+release tag, and runs that tree's own `make setup` and `make test-installed`.
