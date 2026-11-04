@@ -43,6 +43,9 @@ from pydantic import (
 from rich.console import (
     Console,
 )
+from rich.markup import (
+    escape,
+)
 from typer import (
     Argument,
     BadParameter,
@@ -102,6 +105,7 @@ from wordwinnow.services.cli import (
     commands,
 )
 from wordwinnow.services.cli.intake_client import (
+    IntakeAddressError,
     IntakeRejectedError,
     IntakeUnavailableError,
     WatchedAnalysis,
@@ -282,6 +286,7 @@ _EXPECTED: Final = (
     InvalidDocumentError,
     InvalidIdentifierError,
     InvalidLearnerProfileError,
+    IntakeAddressError,
     IntakeUnavailableError,
     IntakeRejectedError,
     commands.AnalysisTimedOutError,
@@ -308,8 +313,19 @@ def _fail(
     exception: Exception,
     /,
 ) -> Exit:
+    # NOTE:
+    # What an error echoes back, such as an address with a bracket in it, prints as it was given: the message is
+    # escaped so that Rich does not read it as markup, and emoji codes are left alone, while the highlighting of a URL
+    # or a number stays what it was.
     _errors.print(
-        f"[red]error:[/] {exception}",
+        f"[red]error:[/] {
+            escape(
+                markup=str(
+                    object=exception,
+                ),
+            )
+        }",
+        emoji=False,
     )
 
     return Exit(

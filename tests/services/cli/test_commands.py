@@ -32,7 +32,9 @@ from typing import (
 
 from httpx2 import (
     ASGITransport,
+    AsyncBaseTransport,
     AsyncClient,
+    ConnectError,
     MockTransport,
     Request,
     Response,
@@ -131,6 +133,7 @@ from wordwinnow.services.cli.commands import (
     requeue,
     set_up,
     show,
+    summarize,
     wait_remotely,
 )
 from wordwinnow.services.cli.intake_client import (
@@ -160,6 +163,14 @@ from wordwinnow.services.progress import (
 
 _TEXT: Final = (
     "The King wanted the photograph back. The groom looked very drunken, but Irene Adler kept the photograph."
+)
+
+# NOTE:
+# The sentence that every command's no-connection message carries, as the decided text writes it; the commands differ
+# in what comes before it and what follows.
+_NEEDS: Final = (
+    "needs the distributed mode's services, started from a clone of github.com/wordbench/wordwinnow as its "
+    "getting-started guide describes and reached at WORDWINNOW_INTAKE_URL"
 )
 
 
@@ -487,6 +498,69 @@ async def intake() -> AsyncIterator[tuple[InMemoryStorage, ASGITransport]]:
 
     finally:
         await transport.aclose()
+
+
+async def _asked(
+    command: str,
+    settings: Settings,
+    transport: AsyncBaseTransport,
+    /,
+) -> None:
+    """
+    Run `command`, as the command line names it, against `transport`.
+    """
+
+    match command:
+        case "analyze":
+            await analyze_remotely(
+                request=_request(),
+                settings=settings,
+                wait=False,
+                timeout_seconds=5,
+                transport=transport,
+            )
+
+        case "show":
+            await show(
+                analysis_id=AnalysisId.new(),
+                settings=settings,
+                local=False,
+                transport=transport,
+            )
+
+        case "show --wait":
+            await wait_remotely(
+                analysis_id=AnalysisId.new(),
+                settings=settings,
+                timeout_seconds=5,
+                transport=transport,
+            )
+
+        case "list":
+            await list_recent(
+                settings=settings,
+                local=False,
+                limit=5,
+                transport=transport,
+            )
+
+        case "stats":
+            await summarize(
+                settings=settings,
+                focus_limit=5,
+                transport=transport,
+            )
+
+        case "admin requeue":
+            await requeue(
+                settings=settings,
+                transport=transport,
+            )
+
+        case _:
+            raise ValueError(
+                f"no such command: {command}",
+            )
 
 
 @final
@@ -1048,7 +1122,8 @@ class TestRemoteFlow:
 
         # NOTE:
         # A refused connection is what a learner meets when a command asked for the distributed mode with --remote and
-        # its services are not running, so the error says what to check and that the commands run without it.
+        # its services are not running, so the error names the address it tried and says what the command does without
+        # it.
         with raises(
             expected_exception=IntakeUnavailableError,
         ) as caught:
@@ -1062,12 +1137,91 @@ class TestRemoteFlow:
             object=caught.value,
         )
 
+        assert message.startswith(
+            "no intake service answered at http://127.0.0.1:9 (",
+        )
+
         assert message.endswith(
-            "; is the distributed mode running, and does WORDWINNOW_INTAKE_URL name its intake service? Without "
-            "--remote, analyze, show, and list run in this process",
+            "; without --remote, list shows the analyses stored on this machine",
         )
 
         assert "make" not in message
+
+        assert "Without --remote, analyze, show, and list" not in message
+
+    @mark.parametrize(
+        argnames=(
+            "command",
+            "ending",
+            "names_remote",
+        ),
+        argvalues=(
+            (
+                "analyze",
+                f"--remote {_NEEDS}; to analyze on this machine instead, run the command without --remote",
+                True,
+            ),
+            (
+                "show",
+                f"--remote {_NEEDS}; without --remote, show reads the analyses stored on this machine",
+                True,
+            ),
+            (
+                "show --wait",
+                f"--remote {_NEEDS}; without --remote, show reads the analyses stored on this machine",
+                True,
+            ),
+            (
+                "list",
+                f"--remote {_NEEDS}; without --remote, list shows the analyses stored on this machine",
+                True,
+            ),
+            (
+                "stats",
+                f"stats {_NEEDS}",
+                False,
+            ),
+            (
+                "admin requeue",
+                f"admin requeue {_NEEDS}",
+                False,
+            ),
+        ),
+    )
+    async def test_each_command_ends_no_connection_with_its_own_sentence(
+        self,
+        *,
+        settings: Settings,
+        command: str,
+        ending: str,
+        names_remote: bool,
+    ) -> None:
+        def handler(
+            request: Request,
+            /,
+        ) -> Response:
+            raise ConnectError(
+                message="foo",
+            )
+
+        with raises(
+            expected_exception=IntakeUnavailableError,
+        ) as caught:
+            await _asked(
+                command,
+                settings,
+                MockTransport(
+                    handler=handler,
+                ),
+            )
+
+        message = str(
+            object=caught.value,
+        )
+
+        assert message == f"no intake service answered at http://127.0.0.1:8010 (foo); {ending}"
+
+        assert ("--remote" in message) is names_remote
 
 
 @final

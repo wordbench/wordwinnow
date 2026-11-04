@@ -190,6 +190,23 @@ are a new container's every time, so `make down` removes them rather than
 leaving them behind; a Prometheus that keeps its samples between runs would
 need a named volume of its own.
 
+### When a command cannot reach intake
+
+A command that intake cannot serve prints one line that begins `error:` and
+exits with status 1, and the line says which of six things happened.
+
+`<address>` is the scheme, host, and port that `WORDWINNOW_INTAKE_URL` names,
+without any user, password, path, or query.
+
+| The line says | What happened | What to check |
+| --- | --- | --- |
+| `WORDWINNOW_INTAKE_URL is "<value>", which is not an http:// or https:// address with a host` | The setting is no address the command can use, which it finds before any request, so a command that does not need intake never meets it | The setting, in the environment and in a `.env` file in the working directory |
+| `no intake service answered at <address> (<reason>)` | Nothing accepted a connection at the address; the line ends with what the command does without `--remote`, where it has a local mode | That the services are running and that the address is theirs |
+| `the intake service at <address> took the connection but did not answer within 60 s`, or `… broke off without an answer (<reason>)` | A server accepted the connection and then did not answer in time, or ended the exchange | The log of the service at the address |
+| `something answered at <address>, but not as a Wordwinnow intake service (HTTP <status>, <media type>)` | A server answered with a 404, a 405, a 501, or a web page, none of which intake sends except as an error it names | That the address is intake's and not another program's |
+| `the service at <address> failed (HTTP <status>); if it is the intake service, its log says why` | A server answered with an error in the 500s that names no problem | The log of the service at the address |
+| The detail of the error intake named, or `intake <METHOD> <path> answered HTTP <status>` | Intake refused the request | The detail, or the request it describes |
+
 ## Configuration
 
 Every setting is an environment variable read once when a process starts, with

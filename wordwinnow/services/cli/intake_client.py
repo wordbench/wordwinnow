@@ -21,11 +21,17 @@ from typing import (
 )
 
 from httpx2 import (
+    URL,
     AsyncBaseTransport,
     AsyncClient,
     ConnectError,
+    ConnectTimeout,
     HTTPError,
+    InvalidURL,
+    PoolTimeout,
+    ReadTimeout,
     Response,
+    WriteTimeout,
 )
 
 from wordwinnow.application.dto import (
@@ -79,8 +85,45 @@ class IntakeRejectedError(
     Raised when the intake service answered with an error it did not name as a
     problem, such as a validation failure of the request itself.
 
+    What answered may not be the intake service, which the message says when
+    the answer shows it.
+
     Not retryable with the same request.
     """
+
+
+@final
+class IntakeAddressError(
+    RuntimeError,
+):
+    """
+    Raised when the configured address of the intake service is not an http://
+    or https:// address with a host.
+
+    Not retryable: an address does not mend by waiting.
+    """
+
+    def __init__(
+        self,
+        *,
+        value: str,
+    ) -> None:
+        (
+            _,
+            at,
+            tail,
+        ) = value.rpartition(
+            "@",
+        )
+
+        # NOTE:
+        # What comes before the last @ is where an address keeps its user and its password, so it never reaches a
+        # message that a terminal, a log, or a screenshot may carry.
+        shown = f"…@{tail}" if at else value
+
+        super().__init__(
+            f'WORDWINNOW_INTAKE_URL is "{shown}", which is not an http:// or https:// address with a host',
+        )
 
 
 # NOTE:
@@ -98,12 +141,36 @@ _ERRORS: Final = MappingProxyType(
 )
 
 # NOTE:
-# What a refused connection almost always means once a command has asked for the distributed mode with --remote: its
-# services are not running, or not where the setting says.
-_NOT_RUNNING: Final = (
-    "; is the distributed mode running, and does WORDWINNOW_INTAKE_URL name its intake service? Without --remote, "
-    "analyze, show, and list run in this process"
+# Where the distributed mode's services come from, which a learner with only the installed command cannot be left to
+# guess: that command has no Makefile and no Compose file, and the services start from a clone's.
+_SERVICES: Final = (
+    "the distributed mode's services, started from a clone of github.com/wordbench/wordwinnow as its getting-started "
+    "guide describes and reached at WORDWINNOW_INTAKE_URL"
 )
+
+# NOTE:
+# One timeout for every exchange, which the client applies and a message names, so that the two never differ.
+_TIMEOUT_SECONDS: Final = 60.0
+
+_SCHEMES: Final = frozenset(
+    (
+        "http",
+        "https",
+    ),
+)
+
+# NOTE:
+# What a server that is not intake answers with: intake's own routes send none of these statuses, and no web page,
+# except as a problem they name, so an answer without a named problem that has one of them came from another server.
+_NOT_INTAKE_STATUSES: Final = frozenset(
+    (
+        404,
+        405,
+        501,
+    ),
+)
+
+_NOT_INTAKE_MEDIA_TYPE: Final = "text/html"
 
 
 @dataclass(
@@ -127,6 +194,13 @@ class WatchedAnalysis:
 class IntakeClient:
     """
     Talks to one intake service over HTTP.
+
+    A service that does not answer is reported with `needed_by`, what needs
+    the distributed mode's services, and, when there is something, with
+    `otherwise`, what a learner can do instead.
+
+    Raises `IntakeAddressError` when `base_url` is not an http:// or https://
+    address with a host.
     """
 
     def __init__(
@@ -134,10 +208,24 @@ class IntakeClient:
         *,
         base_url: str,
         transport: AsyncBaseTransport | None = None,
+        needed_by: str = "this command",
+        otherwise: str | None = None,
     ) -> None:
+        url = _parsed(
+            base_url,
+        )
+
+        tail = "" if otherwise is None else f"; {otherwise}"
+
+        self._address: Final = _address(
+            url,
+        )
+
+        self._needs: Final = f"{needed_by} needs {_SERVICES}{tail}"
+
         self._client: Final = AsyncClient(
-            timeout=60.0,
-            base_url=base_url,
+            timeout=_TIMEOUT_SECONDS,
+            base_url=url,
             transport=transport,
         )
 
@@ -171,30 +259,65 @@ class IntakeClient:
             )
 
         except HTTPError as exception:
-            kind = type(
-                exception,
-            ).__name__
-
-            hint = (
-                _NOT_RUNNING
-                if isinstance(
-                    exception,
-                    ConnectError,
-                )
-                else ""
-            )
-
             raise IntakeUnavailableError(
-                f"the intake service could not be reached for {method} {path} ({kind}){hint}",
+                self._unavailable(
+                    exception,
+                ),
             ) from exception
 
         _raise_for(
             response,
             method,
             path,
+            self._address,
         )
 
         return response
+
+    def _unavailable(
+        self,
+        exception: HTTPError,
+        /,
+    ) -> str:
+        """
+        What is said of an exchange that failed before the service answered:
+        no connection, a connection that gave no answer, or one that broke
+        off.
+        """
+
+        text = str(
+            object=exception,
+        )
+
+        kind = type(
+            exception,
+        ).__name__
+
+        words = text or kind
+
+        if isinstance(
+            exception,
+            (
+                ConnectError,
+                ConnectTimeout,
+            ),
+        ):
+            return f"no intake service answered at {self._address} ({words}); {self._needs}"
+
+        if isinstance(
+            exception,
+            (
+                ReadTimeout,
+                WriteTimeout,
+                PoolTimeout,
+            ),
+        ):
+            return (
+                f"the intake service at {self._address} took the connection but did not answer within "
+                f"{_TIMEOUT_SECONDS:.0f} s"
+            )
+
+        return f"the intake service at {self._address} broke off without an answer ({words})"
 
     async def create(
         self,
@@ -314,26 +437,137 @@ class IntakeClient:
         )
 
 
+def _parsed(
+    base_url: str,
+    /,
+) -> URL:
+    """
+    The address as the client uses it, or `IntakeAddressError` when it is not
+    an http:// or https:// address with a host.
+    """
+
+    try:
+        url = URL(
+            url=base_url,
+        )
+
+    except InvalidURL as exception:
+        raise IntakeAddressError(
+            value=base_url,
+        ) from exception
+
+    if url.scheme not in _SCHEMES or not url.host:
+        raise IntakeAddressError(
+            value=base_url,
+        )
+
+    return url
+
+
+def _address(
+    url: URL,
+    /,
+) -> str:
+    """
+    The scheme, host, and port of `url`, which is what a message names of the
+    service.
+    """
+
+    # NOTE:
+    # Only where the client connects, never the user, the password, the path, the query, or the fragment, which may
+    # hold a secret that a terminal, a log, or a screenshot must not carry.
+    #
+    # An IPv6 host is written in brackets, as it is in an address.
+    host = f"[{url.host}]" if ":" in url.host else url.host
+
+    port = "" if url.port is None else f":{url.port}"
+
+    return f"{url.scheme}://{host}{port}"
+
+
+def _media_type(
+    response: Response,
+    /,
+) -> str:
+    """
+    The response's `Content-Type` without its parameters, in lower case, or an
+    empty string when it has none.
+    """
+
+    content_type = response.headers.get(
+        key="content-type",
+        default="",
+    )
+
+    return (
+        content_type.split(
+            sep=";",
+            maxsplit=1,
+        )[0]
+        .strip()
+        .lower()
+    )
+
+
+def _rejection(
+    response: Response,
+    method: str,
+    path: str,
+    address: str,
+    /,
+) -> IntakeRejectedError:
+    """
+    The error for a failing answer that names no problem: that of another
+    server, that of a service that failed, or that of a request refused.
+    """
+
+    status = response.status_code
+
+    media_type = _media_type(
+        response,
+    )
+
+    if status in _NOT_INTAKE_STATUSES or media_type == _NOT_INTAKE_MEDIA_TYPE:
+        return IntakeRejectedError(
+            f"something answered at {address}, but not as a Wordwinnow intake service (HTTP {status}, "
+            f"{media_type or 'no content type'})",
+        )
+
+    if status >= 500:
+        return IntakeRejectedError(
+            f"the service at {address} failed (HTTP {status}); if it is the intake service, its log says why",
+        )
+
+    return IntakeRejectedError(
+        f"intake {method} {path} answered HTTP {status}",
+    )
+
+
 def _raise_for(
     response: Response,
     method: str,
     path: str,
+    address: str,
     /,
 ) -> None:
     if response.status_code < 400:
         return
 
     # NOTE:
-    # A problem the service named is raised as the error it stands for; anything else, such as a validation error
-    # FastAPI produced itself, is a rejection of the request as sent.
+    # A problem the service named is raised as the error it stands for, whatever its status; anything else is a
+    # rejection, of the request as sent when a validation error FastAPI produced itself says so, and of the address
+    # when the status or the media type says that another server answered.
     try:
         problem = Problem.model_validate_json(
             json_data=response.content,
         )
 
     except ValueError:
-        raise IntakeRejectedError(
-            f"intake {method} {path} answered HTTP {response.status_code}",
+        raise _rejection(
+            response,
+            method,
+            path,
+            address,
         ) from None
 
     raise _ERRORS[problem.type](

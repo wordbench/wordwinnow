@@ -28,6 +28,9 @@ from re import (
     match,
     search,
 )
+from types import (
+    MappingProxyType,
+)
 from typing import (
     Final,
     final,
@@ -110,6 +113,7 @@ from wordwinnow.services.cli import (
     main,
 )
 from wordwinnow.services.cli.intake_client import (
+    IntakeAddressError,
     WatchedAnalysis,
 )
 from wordwinnow.services.cli.main import (
@@ -130,6 +134,15 @@ _TEXT: Final = (
 )
 
 _runner: Final = CliRunner()
+
+# NOTE:
+# An error line is longer than the 80 columns Rich assumes of an output that is no terminal, and Rich breaks a longer
+# line at the console's width, so a test that reads such a line as one gives the console room for the whole of it.
+_WIDE: Final = MappingProxyType(
+    mapping={
+        "COLUMNS": "200",
+    },
+)
 
 
 def _words(
@@ -275,6 +288,8 @@ def services_called(
         *,
         base_url: str,
         transport: AsyncBaseTransport | None = None,
+        needed_by: str = "this command",
+        otherwise: str | None = None,
     ) -> None:
         called.append(
             "IntakeClient",
@@ -1712,6 +1727,98 @@ class TestOptionsOfTheDistributedMode:
         )
 
         assert not (workspace / "wordwinnow.db").exists()
+
+        assert not services_called
+
+
+@final
+class TestAnIntakeThatCannotServe:
+    def test_an_error_line_prints_brackets_as_written(
+        self,
+        *,
+        workspace: Path,
+        monkeypatch: MonkeyPatch,
+    ) -> None:
+        async def list_recent(
+            *,
+            settings: Settings,
+            local: bool,
+            limit: int,
+            transport: AsyncBaseTransport | None = None,
+        ) -> tuple[AnalysisSummary, ...]:
+            raise IntakeAddressError(
+                value="[bold]foo[/bold]",
+            )
+
+        monkeypatch.setattr(
+            target=commands,
+            name="list_recent",
+            value=list_recent,
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "list",
+                "--remote",
+            ],
+            env=_WIDE,
+        )
+
+        assert result.exit_code == 1
+
+        assert result.output.splitlines() == [
+            'error: WORDWINNOW_INTAKE_URL is "[bold]foo[/bold]", which is not an http:// or https:// address with a '
+            "host",
+        ]
+
+    def test_an_invalid_intake_address_fails_with_one_line(
+        self,
+        *,
+        workspace: Path,
+        monkeypatch: MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv(
+            name="WORDWINNOW_INTAKE_URL",
+            value="localhost:8010",
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "list",
+                "--remote",
+            ],
+            env=_WIDE,
+        )
+
+        assert result.exit_code == 1
+
+        assert result.output.splitlines() == [
+            'error: WORDWINNOW_INTAKE_URL is "localhost:8010", which is not an http:// or https:// address with a '
+            "host",
+        ]
+
+    def test_an_invalid_intake_address_leaves_the_local_mode_alone(
+        self,
+        *,
+        workspace: Path,
+        services_called: list[str],
+        monkeypatch: MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv(
+            name="WORDWINNOW_INTAKE_URL",
+            value="localhost:8010",
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "list",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
 
         assert not services_called
 

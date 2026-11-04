@@ -219,6 +219,17 @@ _FINISHED: Final = frozenset(
     ),
 )
 
+# NOTE:
+# What a learner can do when the services do not answer, in each command's own words, for the commands that have a
+# local mode; `stats` and `admin requeue` have none, so they are told only that they need the services.
+_REMOTE: Final = "--remote"
+
+_ANALYZE_WITHOUT_REMOTE: Final = "to analyze on this machine instead, run the command without --remote"
+
+_SHOW_WITHOUT_REMOTE: Final = "without --remote, show reads the analyses stored on this machine"
+
+_LIST_WITHOUT_REMOTE: Final = "without --remote, list shows the analyses stored on this machine"
+
 _logger: Final = getLogger(
     name="wordwinnow.cli",
 )
@@ -367,6 +378,7 @@ async def analyze_remotely(
         client = await _intake(
             stack,
             settings,
+            _ANALYZE_WITHOUT_REMOTE,
             transport,
             watch,
             enrichment_transport,
@@ -425,6 +437,7 @@ async def wait_remotely(
         client = await _intake(
             stack,
             settings,
+            _SHOW_WITHOUT_REMOTE,
             transport,
             watch,
             enrichment_transport,
@@ -441,6 +454,7 @@ async def wait_remotely(
 async def _intake(
     stack: AsyncExitStack,
     settings: Settings,
+    otherwise: str,
     transport: AsyncBaseTransport | None,
     watch: DictionaryWatch | None,
     enrichment_transport: AsyncBaseTransport | None,
@@ -449,6 +463,8 @@ async def _intake(
     client = IntakeClient(
         base_url=settings.intake_url,
         transport=transport,
+        needed_by=_REMOTE,
+        otherwise=otherwise,
     )
 
     stack.push_async_callback(
@@ -582,6 +598,8 @@ async def show(
     client = IntakeClient(
         base_url=settings.intake_url,
         transport=transport,
+        needed_by=_REMOTE,
+        otherwise=_SHOW_WITHOUT_REMOTE,
     )
 
     try:
@@ -616,6 +634,8 @@ async def list_recent(
     client = IntakeClient(
         base_url=settings.intake_url,
         transport=transport,
+        needed_by=_REMOTE,
+        otherwise=_LIST_WITHOUT_REMOTE,
     )
 
     try:
@@ -640,6 +660,7 @@ async def summarize(
     client = IntakeClient(
         base_url=settings.intake_url,
         transport=transport,
+        needed_by="stats",
     )
 
     try:
@@ -663,6 +684,7 @@ async def requeue(
     client = IntakeClient(
         base_url=settings.intake_url,
         transport=transport,
+        needed_by="admin requeue",
     )
 
     try:
