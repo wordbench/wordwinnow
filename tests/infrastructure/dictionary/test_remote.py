@@ -166,6 +166,36 @@ class TestRemoteDictionary:
 
         assert "x-correlation-id" not in harness.requests[0].headers
 
+    # NOTE:
+    # The enrichment service refuses a request that another site's page sent, as its `Origin` or its `Sec-Fetch-Site`
+    # says, so the one client of the project that reaches it must send neither.
+    async def test_a_lookup_sends_no_header_only_a_browser_sends(
+        self,
+    ) -> None:
+        harness = Harness(
+            handler=lambda request: _answer(
+                _FOUND,
+            ),
+        )
+
+        await harness.dictionary.look_up(
+            lemma="photograph",
+        )
+
+        (request,) = harness.requests
+
+        assert (
+            tuple(
+                name
+                for name in request.headers
+                if name.lower() == "origin"
+                or name.lower().startswith(
+                    "sec-fetch-",
+                )
+            )
+            == ()
+        )
+
     async def test_an_unavailable_answer_is_the_service_s_own_outcome(
         self,
     ) -> None:

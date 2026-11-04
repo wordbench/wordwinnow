@@ -161,14 +161,16 @@ class Metrics:
         self,
         *,
         port: int,
+        address: str,
     ) -> None:
         """
-        Expose the registry over HTTP from a background thread, for a worker
-        that has no HTTP server of its own.
+        Expose the registry over HTTP on `address` from a background thread,
+        for a worker that has no HTTP server of its own.
         """
 
         start_http_server(
             port=port,
+            addr=address,
             registry=self.registry,
         )
 

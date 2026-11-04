@@ -5,6 +5,9 @@ The intake service over HTTP, against fakes.
 from collections.abc import (
     AsyncIterator,
 )
+from collections.abc import (
+    Set as AbstractSet,
+)
 from datetime import (
     timedelta,
 )
@@ -30,6 +33,7 @@ from pytest import (
     LogCaptureFixture,
     MonkeyPatch,
     fixture,
+    mark,
 )
 
 from tests.fakes.ports import (
@@ -136,6 +140,7 @@ class Harness:
         self,
         *,
         publisher: RecordingPublisher | RaisingPublisher,
+        allowed_hosts: AbstractSet[str] = frozenset(),
     ) -> None:
         self.storage: Final = InMemoryStorage()
 
@@ -160,6 +165,7 @@ class Harness:
                 ),
                 metrics=self.metrics,
             ),
+            allowed_hosts=allowed_hosts,
         )
 
 
@@ -170,7 +176,7 @@ async def harness() -> AsyncIterator[tuple[Harness, AsyncClient]]:
     )
 
     async with AsyncClient(
-        base_url="http://intake.test",
+        base_url="http://127.0.0.1:8010",
         transport=ASGITransport(
             app=built.app,
         ),
@@ -179,6 +185,14 @@ async def harness() -> AsyncIterator[tuple[Harness, AsyncClient]]:
             built,
             client,
         )
+
+
+@fixture
+def client(
+    *,
+    harness: tuple[Harness, AsyncClient],
+) -> AsyncClient:
+    return harness[1]
 
 
 @final
@@ -416,7 +430,7 @@ class TestCreateAnalysis:
         )
 
         async with AsyncClient(
-            base_url="http://intake.test",
+            base_url="http://127.0.0.1:8010",
             transport=ASGITransport(
                 app=built.app,
             ),
@@ -624,7 +638,7 @@ class TestReadAnalyses:
         )
 
         async with AsyncClient(
-            base_url="http://intake.test",
+            base_url="http://127.0.0.1:8010",
             transport=ASGITransport(
                 app=built.app,
             ),
@@ -760,3 +774,373 @@ class TestTelemetry:
             get_meter_provider(),
             MeterProvider,
         )
+
+
+_NOT_ANSWERED: Final = (
+    'intake does not answer to the name "{name}", so that a web page cannot reach it under a name of its own; '
+    "address it as localhost, 127.0.0.1, or [::1]"
+)
+
+_ANOTHER_SITE: Final = "intake refuses a request sent by another site's page"
+
+
+@final
+class TestTheHostAndTheSite:
+    @mark.parametrize(
+        argnames="host",
+        argvalues=(
+            "127.0.0.1:8010",
+            "localhost:8010",
+            "[::1]:8010",
+            "LOCALHOST:8010",
+        ),
+    )
+    async def test_a_name_of_the_loopback_interface_is_answered_in_any_case(
+        self,
+        *,
+        client: AsyncClient,
+        host: str,
+    ) -> None:
+        response = await client.get(
+            url="/health",
+            headers={
+                "Host": host,
+            },
+        )
+
+        assert response.status_code == 200
+
+    @mark.parametrize(
+        argnames=(
+            "host",
+            "name",
+        ),
+        argvalues=(
+            (
+                "attacker.example",
+                "attacker.example",
+            ),
+            (
+                "0.0.0.0:8010",
+                "0.0.0.0",
+            ),
+        ),
+    )
+    async def test_another_name_is_refused_as_a_problem_that_names_it(
+        self,
+        *,
+        client: AsyncClient,
+        host: str,
+        name: str,
+    ) -> None:
+        response = await client.get(
+            url="/health",
+            headers={
+                "Host": host,
+            },
+        )
+
+        assert response.status_code == 400
+
+        assert response.json() == {
+            "type": "host_not_allowed",
+            "detail": _NOT_ANSWERED.format(
+                name=name,
+            ),
+        }
+
+    async def test_an_empty_host_is_refused_as_the_empty_name(
+        self,
+        *,
+        client: AsyncClient,
+    ) -> None:
+        response = await client.get(
+            url="/health",
+            headers={
+                "Host": "",
+            },
+        )
+
+        assert response.status_code == 400
+
+        assert response.json() == {
+            "type": "host_not_allowed",
+            "detail": _NOT_ANSWERED.format(
+                name="",
+            ),
+        }
+
+    async def test_a_name_the_builder_is_given_is_answered_and_the_same_name_without_it_is_not(
+        self,
+    ) -> None:
+        for (
+            allowed_hosts,
+            status,
+        ) in (
+            (
+                frozenset(
+                    ("intake",),
+                ),
+                200,
+            ),
+            (
+                frozenset(),
+                400,
+            ),
+        ):
+            built = Harness(
+                publisher=RecordingPublisher(),
+                allowed_hosts=allowed_hosts,
+            )
+
+            async with AsyncClient(
+                base_url="http://127.0.0.1:8010",
+                transport=ASGITransport(
+                    app=built.app,
+                ),
+            ) as client:
+                response = await client.get(
+                    url="/health",
+                    headers={
+                        "Host": "intake:8010",
+                    },
+                )
+
+            assert response.status_code == status
+
+    async def test_a_form_another_site_posts_to_the_requeue_requeues_nothing(
+        self,
+        *,
+        harness: tuple[Harness, AsyncClient],
+    ) -> None:
+        (
+            built,
+            client,
+        ) = harness
+
+        await client.post(
+            url="/analyses",
+            json={
+                "level": "B1",
+                "text": "Irene Adler kept the photograph.",
+            },
+        )
+
+        for analysis in built.storage.analyses.values():
+            analysis.requested_at = EPOCH - timedelta(
+                hours=1,
+            )
+
+        assert isinstance(
+            built.publisher,
+            RecordingPublisher,
+        )
+
+        published = len(
+            built.publisher.published,
+        )
+
+        form = await client.post(
+            url="/analyses/requeue",
+            data={
+                "foo": "bar",
+            },
+            headers={
+                "Origin": "https://example.com",
+            },
+        )
+
+        assert form.status_code == 403
+
+        assert (
+            len(
+                built.publisher.published,
+            )
+            == published
+        )
+
+        # NOTE:
+        # The control: the same analysis, stale as it is, is requeued when the request is not another site's.
+        requeued = await client.post(
+            url="/analyses/requeue",
+        )
+
+        assert requeued.status_code == 200
+
+        assert (
+            len(
+                requeued.json()["analysis_ids"],
+            )
+            == 1
+        )
+
+    async def test_a_json_body_sent_as_text_is_refused_as_unprocessable(
+        self,
+        *,
+        harness: tuple[Harness, AsyncClient],
+    ) -> None:
+        (
+            built,
+            client,
+        ) = harness
+
+        response = await client.post(
+            url="/analyses",
+            content='{"text": "Irene Adler kept the photograph.", "level": "A2"}',
+            headers={
+                "Content-Type": "text/plain",
+            },
+        )
+
+        assert response.status_code == 422
+
+        assert built.storage.analyses == {}
+
+    @mark.parametrize(
+        argnames=(
+            "headers",
+            "status",
+        ),
+        argvalues=(
+            (
+                {
+                    "Origin": "https://example.com",
+                },
+                403,
+            ),
+            (
+                {
+                    "Origin": "null",
+                },
+                403,
+            ),
+            (
+                {
+                    "Sec-Fetch-Site": "cross-site",
+                },
+                403,
+            ),
+            (
+                {
+                    "Sec-Fetch-Site": "same-site",
+                },
+                403,
+            ),
+            (
+                {
+                    "Sec-Fetch-Site": "none",
+                },
+                200,
+            ),
+            (
+                {
+                    "Sec-Fetch-Site": "same-origin",
+                    "Origin": "http://127.0.0.1:8010",
+                },
+                200,
+            ),
+            (
+                {
+                    "Origin": "http://127.0.0.1:8010",
+                },
+                200,
+            ),
+            (
+                {
+                    "Origin": "http://localhost:8010",
+                },
+                403,
+            ),
+        ),
+    )
+    async def test_a_request_another_sites_page_sent_is_refused_with_its_detail_and_no_problem(
+        self,
+        *,
+        client: AsyncClient,
+        headers: dict[str, str],
+        status: int,
+    ) -> None:
+        response = await client.get(
+            url="/health",
+            headers=headers,
+        )
+
+        assert response.status_code == status
+
+        if status == 403:
+            assert response.json() == {
+                "detail": _ANOTHER_SITE,
+            }
+
+    @mark.parametrize(
+        argnames="path",
+        argvalues=(
+            "/docs",
+            "/openapi.json",
+        ),
+    )
+    async def test_the_pages_the_service_serves_itself_are_open_to_the_page_that_loaded_them(
+        self,
+        *,
+        client: AsyncClient,
+        path: str,
+    ) -> None:
+        response = await client.get(
+            url=path,
+            headers={
+                "Sec-Fetch-Site": "same-origin",
+            },
+        )
+
+        assert response.status_code == 200
+
+    @mark.parametrize(
+        argnames="path",
+        argvalues=(
+            "/health",
+            "/metrics",
+            "/docs",
+            "/openapi.json",
+        ),
+    )
+    async def test_every_route_is_covered_the_documentation_included(
+        self,
+        *,
+        client: AsyncClient,
+        path: str,
+    ) -> None:
+        foreign = await client.get(
+            url=path,
+            headers={
+                "Host": "attacker.example",
+            },
+        )
+
+        another_site = await client.get(
+            url=path,
+            headers={
+                "Origin": "https://example.com",
+            },
+        )
+
+        assert foreign.status_code == 400
+
+        assert another_site.status_code == 403
+
+    async def test_the_host_is_judged_before_the_site(
+        self,
+        *,
+        client: AsyncClient,
+    ) -> None:
+        response = await client.get(
+            url="/health",
+            headers={
+                "Host": "attacker.example",
+                "Origin": "https://example.com",
+                "Sec-Fetch-Site": "cross-site",
+            },
+        )
+
+        assert response.status_code == 400
+
+        assert response.json()["type"] == "host_not_allowed"

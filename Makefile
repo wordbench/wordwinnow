@@ -94,7 +94,7 @@ typecheck: ## Run the type checker
 
 conventions: ## Run the vendored checker, positive control first
 	$(CHECK) --self-test
-	$(CHECK) $(PROSE) $(NOTEBOOKS) wordwinnow tests $(SUPPLY_CHAIN)
+	$(CHECK) $(PROSE) $(NOTEBOOKS) wordwinnow tests stack $(SUPPLY_CHAIN)
 
 test: ## Run the tests that need no backing service
 	$(RUN) pytest -m "not integration and not live and not installed"
@@ -156,11 +156,23 @@ hooks: ## Point this clone at the repository's Git hooks
 build: ## Build the wheel and the source distribution into dist/
 	uv build
 
+# NOTE:
+# Both targets first write the stack's generated passwords into `.env`, where they are absent, and then check what
+# Compose would start, override files and `COMPOSE_FILE` included: nothing starts if a port would be published beyond
+# this host's loopback interface, if a service would use the host's network, or if Compose cannot resolve its
+# configuration, which leaves the check no input.
+#
+# The `full` profile makes `up` check the whole stack too, though it starts the stores alone.
 up: ## Start the backing services (postgres, redis, kafka, clickhouse)
+	$(RUN) python3 stack/credentials.py
+	docker compose --profile full config --format json | $(RUN) python3 stack/publication.py
 	docker compose up -d --wait postgres redis kafka clickhouse
 
 up-full: ## Start everything, including the application services and observability
+	$(RUN) python3 stack/credentials.py
+	docker compose --profile full config --format json | $(RUN) python3 stack/publication.py
 	docker compose --profile full up -d --build --wait
+	@echo "Grafana is at http://localhost:3000, user admin, its password on the GRAFANA_ADMIN_PASSWORD line of .env"
 
 # NOTE:
 # `down` keeps the named volumes, so the analyses, the queue, the dictionary cache, the facts, and the traces outlive

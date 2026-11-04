@@ -104,6 +104,9 @@ from wordwinnow.infrastructure.observability.tracing import (
 from wordwinnow.infrastructure.settings import (
     Settings,
 )
+from wordwinnow.services.exposure import (
+    require_supported_listener,
+)
 from wordwinnow.services.progress import (
     StoredProgress,
 )
@@ -304,6 +307,12 @@ async def run_analysis_worker(
         service_name="wordwinnow-analysis-worker",
     )
 
+    require_supported_listener(
+        service="the analysis worker's metrics",
+        settings=settings,
+        port=settings.metrics_port,
+    )
+
     stop = Event()
 
     _stop_on_signal(
@@ -319,6 +328,9 @@ async def run_analysis_worker(
 
         profile.metrics.serve(
             port=settings.metrics_port,
+            address=str(
+                object=settings.listen_address,
+            ),
         )
 
         await ensure_topics(
@@ -483,6 +495,12 @@ async def run_aggregation_worker(
         service_name="wordwinnow-aggregation-worker",
     )
 
+    require_supported_listener(
+        service="the aggregation worker's metrics",
+        settings=settings,
+        port=settings.metrics_port,
+    )
+
     stop = Event()
 
     _stop_on_signal(
@@ -493,6 +511,9 @@ async def run_aggregation_worker(
 
     metrics.serve(
         port=settings.metrics_port,
+        address=str(
+            object=settings.listen_address,
+        ),
     )
 
     facts = build_facts(

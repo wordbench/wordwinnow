@@ -3,6 +3,9 @@ The enrichment service over HTTP, against a fake dictionary behind the real
 cache.
 """
 
+from collections.abc import (
+    AsyncIterator,
+)
 from types import (
     MappingProxyType,
 )
@@ -27,6 +30,8 @@ from opentelemetry.sdk.metrics import (
 )
 from pytest import (
     MonkeyPatch,
+    fixture,
+    mark,
 )
 
 from tests.fakes.ports import (
@@ -124,6 +129,24 @@ def _refusing(
     )
 
 
+@fixture
+async def client() -> AsyncIterator[AsyncClient]:
+    app = build_enrichment_app(
+        dependencies=EnrichmentDependencies(
+            dictionary=FakeDictionary(),
+            metrics=build_metrics(),
+        ),
+    )
+
+    async with AsyncClient(
+        base_url="http://127.0.0.1:8100",
+        transport=ASGITransport(
+            app=app,
+        ),
+    ) as service:
+        yield service
+
+
 @final
 class TestEnrichmentApp:
     async def test_a_lookup_is_served_then_cached_and_both_are_counted(
@@ -157,7 +180,7 @@ class TestEnrichmentApp:
         )
 
         async with AsyncClient(
-            base_url="http://enrichment.test",
+            base_url="http://127.0.0.1:8100",
             transport=ASGITransport(
                 app=app,
             ),
@@ -408,7 +431,7 @@ class TestActivity:
         )
 
         async with AsyncClient(
-            base_url="http://enrichment.test",
+            base_url="http://127.0.0.1:8100",
             transport=ASGITransport(
                 app=app,
             ),
@@ -484,7 +507,7 @@ class TestActivity:
         )
 
         async with AsyncClient(
-            base_url="http://enrichment.test",
+            base_url="http://127.0.0.1:8100",
             transport=ASGITransport(
                 app=app,
             ),
@@ -528,3 +551,288 @@ class TestTelemetry:
             get_meter_provider(),
             MeterProvider,
         )
+
+
+_NOT_ANSWERED: Final = (
+    'enrichment does not answer to the name "{name}", so that a web page cannot reach it under a name of its own; '
+    "address it as localhost, 127.0.0.1, or [::1]"
+)
+
+_ANOTHER_SITE: Final = "enrichment refuses a request sent by another site's page"
+
+
+@final
+class TestTheHostAndTheSite:
+    @mark.parametrize(
+        argnames="host",
+        argvalues=(
+            "127.0.0.1:8100",
+            "localhost:8100",
+            "[::1]:8100",
+            "LOCALHOST:8100",
+        ),
+    )
+    async def test_a_name_of_the_loopback_interface_is_answered_in_any_case(
+        self,
+        *,
+        client: AsyncClient,
+        host: str,
+    ) -> None:
+        response = await client.get(
+            url="/health",
+            headers={
+                "Host": host,
+            },
+        )
+
+        assert response.status_code == 200
+
+    @mark.parametrize(
+        argnames=(
+            "host",
+            "name",
+        ),
+        argvalues=(
+            (
+                "attacker.example",
+                "attacker.example",
+            ),
+            (
+                "0.0.0.0:8100",
+                "0.0.0.0",
+            ),
+        ),
+    )
+    async def test_another_name_is_refused_as_a_problem_that_names_it(
+        self,
+        *,
+        client: AsyncClient,
+        host: str,
+        name: str,
+    ) -> None:
+        response = await client.get(
+            url="/health",
+            headers={
+                "Host": host,
+            },
+        )
+
+        assert response.status_code == 400
+
+        assert response.json() == {
+            "type": "host_not_allowed",
+            "detail": _NOT_ANSWERED.format(
+                name=name,
+            ),
+        }
+
+    async def test_an_empty_host_is_refused_as_the_empty_name(
+        self,
+        *,
+        client: AsyncClient,
+    ) -> None:
+        response = await client.get(
+            url="/health",
+            headers={
+                "Host": "",
+            },
+        )
+
+        assert response.status_code == 400
+
+        assert response.json() == {
+            "type": "host_not_allowed",
+            "detail": _NOT_ANSWERED.format(
+                name="",
+            ),
+        }
+
+    async def test_a_name_the_builder_is_given_is_answered_and_the_same_name_without_it_is_not(
+        self,
+    ) -> None:
+        for (
+            allowed_hosts,
+            status,
+        ) in (
+            (
+                frozenset(
+                    ("enrichment",),
+                ),
+                200,
+            ),
+            (
+                frozenset(),
+                400,
+            ),
+        ):
+            app = build_enrichment_app(
+                dependencies=EnrichmentDependencies(
+                    dictionary=FakeDictionary(),
+                    metrics=build_metrics(),
+                ),
+                allowed_hosts=allowed_hosts,
+            )
+
+            async with AsyncClient(
+                base_url="http://127.0.0.1:8100",
+                transport=ASGITransport(
+                    app=app,
+                ),
+            ) as client:
+                response = await client.get(
+                    url="/health",
+                    headers={
+                        "Host": "enrichment:8100",
+                    },
+                )
+
+            assert response.status_code == status
+
+    @mark.parametrize(
+        argnames=(
+            "headers",
+            "status",
+        ),
+        argvalues=(
+            (
+                {
+                    "Origin": "https://example.com",
+                },
+                403,
+            ),
+            (
+                {
+                    "Origin": "null",
+                },
+                403,
+            ),
+            (
+                {
+                    "Sec-Fetch-Site": "cross-site",
+                },
+                403,
+            ),
+            (
+                {
+                    "Sec-Fetch-Site": "same-site",
+                },
+                403,
+            ),
+            (
+                {
+                    "Sec-Fetch-Site": "none",
+                },
+                200,
+            ),
+            (
+                {
+                    "Sec-Fetch-Site": "same-origin",
+                    "Origin": "http://127.0.0.1:8100",
+                },
+                200,
+            ),
+            (
+                {
+                    "Origin": "http://127.0.0.1:8100",
+                },
+                200,
+            ),
+            (
+                {
+                    "Origin": "http://localhost:8100",
+                },
+                403,
+            ),
+        ),
+    )
+    async def test_a_request_another_sites_page_sent_is_refused_with_its_detail_and_no_problem(
+        self,
+        *,
+        client: AsyncClient,
+        headers: dict[str, str],
+        status: int,
+    ) -> None:
+        response = await client.get(
+            url="/health",
+            headers=headers,
+        )
+
+        assert response.status_code == status
+
+        if status == 403:
+            assert response.json() == {
+                "detail": _ANOTHER_SITE,
+            }
+
+    @mark.parametrize(
+        argnames="path",
+        argvalues=(
+            "/docs",
+            "/openapi.json",
+        ),
+    )
+    async def test_the_pages_the_service_serves_itself_are_open_to_the_page_that_loaded_them(
+        self,
+        *,
+        client: AsyncClient,
+        path: str,
+    ) -> None:
+        response = await client.get(
+            url=path,
+            headers={
+                "Sec-Fetch-Site": "same-origin",
+            },
+        )
+
+        assert response.status_code == 200
+
+    @mark.parametrize(
+        argnames="path",
+        argvalues=(
+            "/health",
+            "/metrics",
+            "/docs",
+            "/openapi.json",
+        ),
+    )
+    async def test_every_route_is_covered_the_documentation_included(
+        self,
+        *,
+        client: AsyncClient,
+        path: str,
+    ) -> None:
+        foreign = await client.get(
+            url=path,
+            headers={
+                "Host": "attacker.example",
+            },
+        )
+
+        another_site = await client.get(
+            url=path,
+            headers={
+                "Origin": "https://example.com",
+            },
+        )
+
+        assert foreign.status_code == 400
+
+        assert another_site.status_code == 403
+
+    async def test_the_host_is_judged_before_the_site(
+        self,
+        *,
+        client: AsyncClient,
+    ) -> None:
+        response = await client.get(
+            url="/health",
+            headers={
+                "Host": "attacker.example",
+                "Origin": "https://example.com",
+                "Sec-Fetch-Site": "cross-site",
+            },
+        )
+
+        assert response.status_code == 400
+
+        assert response.json()["type"] == "host_not_allowed"

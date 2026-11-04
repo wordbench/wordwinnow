@@ -34,8 +34,27 @@ x-application: &application
     WORDWINNOW_KAFKA_BOOTSTRAP_SERVERS: kafka:19092
     WORDWINNOW_REDIS_URL: redis://redis:6379/0
     WORDWINNOW_CLICKHOUSE_HOST: clickhouse
+    # NOTE:
+    # The one substitution that feeds the server's `CLICKHOUSE_PASSWORD` below and the applications alike, so that the
+    # two cannot disagree: `.env` and the shell both reach it, and `secrets.env` cannot override it.
+    WORDWINNOW_CLICKHOUSE_PASSWORD: ${WORDWINNOW_CLICKHOUSE_PASSWORD:?make up and make up-full generate it into .env}
     WORDWINNOW_ENRICHMENT_URL: http://enrichment:8100
     WORDWINNOW_INTAKE_URL: http://intake:8010
+    # NOTE:
+    # Inside a container, a published port arrives on the container's own interface, so the services listen on every
+    # one of the container's interfaces, and the stack's network keeps that address inside while Compose publishes
+    # each port on 127.0.0.1 alone.
+    #
+    # The process cannot see how its ports are published, so this file says that it is one of the stack's services,
+    # which is what lets an address beyond loopback through.
+    #
+    # `make up` and `make up-full` check what Compose resolved.
+    WORDWINNOW_LISTEN_ADDRESS: 0.0.0.0
+    WORDWINNOW_COMPOSE_STACK: "true"
+    # NOTE:
+    # The names the other containers use for the two services, which Prometheus scrapes and the workers call: a
+    # service answers to them besides the three names of the loopback interface.
+    WORDWINNOW_ALLOWED_HOSTS: intake,enrichment
     WORDWINNOW_LOG_FORMAT: json
     WORDWINNOW_TRACING_ENABLED: "true"
     OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4318
@@ -132,7 +151,7 @@ services:
     environment:
       CLICKHOUSE_DB: wordwinnow
       CLICKHOUSE_USER: wordwinnow
-      CLICKHOUSE_PASSWORD: wordwinnow
+      CLICKHOUSE_PASSWORD: ${WORDWINNOW_CLICKHOUSE_PASSWORD:?make up and make up-full generate it into .env}
     ports:
       - "127.0.0.1:8123:8123"
     volumes:
@@ -230,12 +249,14 @@ services:
       clickhouse:
         condition: service_healthy
 
+  # NOTE:
+  # Prometheus and Tempo publish no port: any web page can read Prometheus's API, and Tempo's traces hold the words
+  # looked up, so Grafana, which reads both over the stack's network, is the interface to them, its Explore in place
+  # of Prometheus's own page.
   prometheus:
     image: prom/prometheus:v3.13.4@sha256:87861b8cf91579109319ebc300f3f1060e6da9c05d6ae8ad15a20c879e84e32e
     profiles:
       - full
-    ports:
-      - "127.0.0.1:9090:9090"
     volumes:
       - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
 
@@ -245,8 +266,6 @@ services:
       - full
     command:
       - -config.file=/etc/tempo.yml
-    ports:
-      - "127.0.0.1:3200:3200"
     volumes:
       - ./observability/tempo.yml:/etc/tempo.yml:ro
       - tempo-data:/var/tempo
@@ -256,7 +275,12 @@ services:
     profiles:
       - full
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-wordwinnow}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?make up and make up-full generate it into .env}
+      # NOTE:
+      # Grafana answers only to the name it was told, so a page that makes another name resolve to this host, by DNS
+      # rebinding, is redirected and never reaches its login.
+      GF_SERVER_DOMAIN: localhost
+      GF_SERVER_ENFORCE_DOMAIN: "true"
       # NOTE:
       # A local stack sends Grafana Labs no usage report and does not check grafana.com for updates.
       GF_ANALYTICS_REPORTING_ENABLED: "false"

@@ -15,6 +15,9 @@ from collections.abc import (
     Callable,
     Coroutine,
 )
+from collections.abc import (
+    Set as AbstractSet,
+)
 from functools import (
     partial,
 )
@@ -73,6 +76,9 @@ from wordwinnow.infrastructure.dictionary.wire import (
 from wordwinnow.infrastructure.observability.metrics import (
     Metrics,
     status_class_of,
+)
+from wordwinnow.services.exposure import (
+    install_exposure_middleware,
 )
 from wordwinnow.services.http_context import (
     install_correlation_middleware,
@@ -265,9 +271,14 @@ def provider_hooks(
 def build_enrichment_app(
     *,
     dependencies: EnrichmentDependencies,
+    allowed_hosts: AbstractSet[str] = frozenset(),
 ) -> FastAPI:
     """
     Assemble the application around its dependencies.
+
+    Every route answers only a request addressed to a name of this host's
+    loopback interface or one of `allowed_hosts`, and refuses one that another
+    site's page sent.
     """
 
     # NOTE:
@@ -284,6 +295,15 @@ def build_enrichment_app(
 
     install_correlation_middleware(
         app=app,
+    )
+
+    # NOTE:
+    # Installed after the correlation middleware, so that it is the outer one: a request it refuses reaches nothing
+    # that binds an identifier or touches the dictionary.
+    install_exposure_middleware(
+        app=app,
+        service="enrichment",
+        allowed_hosts=allowed_hosts,
     )
 
     if dependencies.activity is not None:

@@ -3,6 +3,10 @@ Settings: read from the environment with the project's prefix, secrets never
 printed.
 """
 
+from ipaddress import (
+    IPv4Address,
+    IPv6Address,
+)
 from pathlib import (
     Path,
 )
@@ -310,3 +314,118 @@ class TestSettings:
         assert settings.log_format is LogFormat.JSON
 
         assert settings.otel_exporter_otlp_endpoint == "http://collector.example.com:4318"
+
+    def test_a_process_listens_on_loopback_and_answers_to_no_name_but_its_own_unless_told_otherwise(
+        self,
+        *,
+        monkeypatch: MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.chdir(
+            path=tmp_path,
+        )
+
+        settings = Settings()
+
+        assert settings.listen_address == IPv4Address(
+            address="127.0.0.1",
+        )
+
+        assert settings.compose_stack is False
+
+        assert settings.allowed_hosts == frozenset()
+
+    def test_a_listening_address_is_an_ip_address_and_a_name_is_refused(
+        self,
+        *,
+        monkeypatch: MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.chdir(
+            path=tmp_path,
+        )
+
+        for (
+            value,
+            expected,
+        ) in (
+            (
+                "::1",
+                IPv6Address(
+                    address="::1",
+                ),
+            ),
+            (
+                "0.0.0.0",
+                IPv4Address(
+                    address="0.0.0.0",
+                ),
+            ),
+        ):
+            monkeypatch.setenv(
+                name="WORDWINNOW_LISTEN_ADDRESS",
+                value=value,
+            )
+
+            assert Settings().listen_address == expected
+
+        monkeypatch.setenv(
+            name="WORDWINNOW_LISTEN_ADDRESS",
+            value="localhost",
+        )
+
+        with raises(
+            expected_exception=ValidationError,
+        ):
+            Settings()
+
+    def test_the_compose_stack_is_a_boolean(
+        self,
+        *,
+        monkeypatch: MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.chdir(
+            path=tmp_path,
+        )
+
+        monkeypatch.setenv(
+            name="WORDWINNOW_COMPOSE_STACK",
+            value="true",
+        )
+
+        assert Settings().compose_stack is True
+
+    def test_allowed_hosts_are_names_separated_by_commas_without_case_or_blanks(
+        self,
+        *,
+        monkeypatch: MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.chdir(
+            path=tmp_path,
+        )
+
+        monkeypatch.setenv(
+            name="WORDWINNOW_ALLOWED_HOSTS",
+            value="intake,enrichment",
+        )
+
+        assert Settings().allowed_hosts == frozenset(
+            (
+                "intake",
+                "enrichment",
+            ),
+        )
+
+        monkeypatch.setenv(
+            name="WORDWINNOW_ALLOWED_HOSTS",
+            value=" Intake , ,ENRICHMENT,",
+        )
+
+        assert Settings().allowed_hosts == frozenset(
+            (
+                "intake",
+                "enrichment",
+            ),
+        )

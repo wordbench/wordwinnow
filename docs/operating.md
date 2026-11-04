@@ -171,6 +171,16 @@ docker compose --profile full up -d --scale analysis-worker=4
 That is how the worker count changes; the requested-analyses topic has four
 partitions, so a fifth worker would idle.
 
+A `docker compose` command run by hand skips the check that `make up` and
+`make up-full` make of what Compose would start, so it is safe only while no
+file of the stack has changed since `make up-full` checked it.
+
+Before either target starts anything, it writes the stack's two generated
+passwords into `.env` where they are absent, and `make up-full` ends by saying
+where Grafana's is.
+
+["Security"](#security) says what each password guards and how to change it.
+
 `make down` stops everything and keeps the named volumes, so the next
 `make up-full` finds the analyses, the queue, the dictionary cache, the facts,
 and the traces where they were; `make reset CONFIRM=1` stops everything and
@@ -207,12 +217,170 @@ without any user, password, path, or query.
 | `the service at <address> failed (HTTP <status>); if it is the intake service, its log says why` | A server answered with an error in the 500s that names no problem | The log of the service at the address |
 | The detail of the error intake named, or `intake <METHOD> <path> answered HTTP <status>` | Intake refused the request | The detail, or the request it describes |
 
+## Security
+
+The distributed mode runs from a clone of the repository, with its Compose
+file, on one host, for that host's one user.
+
+The clone is the only supported way to start, stop, upgrade, and observe its
+services.
+
+Nothing the distributed mode starts listens beyond its host unless an operator
+configures it to, which is unsupported.
+
+Intake and enrichment authenticate no one, and no web page but the pages they
+serve themselves may use them.
+
+Whatever else the Compose file publishes, the stores and Grafana, listens on
+the host's loopback interface alone.
+
+Reaching the services from beyond the host would need authentication and TLS
+that Wordwinnow does not have, so it is outside the product.
+
+This is the current boundary of the product, and it says where its protections
+stop: they stand against another machine and against a web page, none of them
+is authentication, and none protects the stack from another user or process of
+the same host.
+
+Supported, on a single-user machine with Docker:
+
+- Starting the full stack from a clone with `make up-full`, stopping it with
+  `make down`, and deleting its data with `make reset CONFIRM=1`.
+- Starting the stores alone with `make up`, for the integration lane.
+- The installed command, or a clone's `uv run wordwinnow`, sending `analyze`,
+  `show`, `list`, `stats`, and `admin requeue` to that stack on the same host, at the
+  default address or the one `WORDWINNOW_INTAKE_URL` names.
+- Opening, in a browser on that host, the services' own pages that
+  ["Watching it"](#watching-it) shows, and Grafana.
+- More analysis workers within Compose, `--scale analysis-worker=N`, up to the
+  topic's four partitions.
+
+Unsupported, whether or not it happens to work:
+
+- Running `db upgrade`, `serve`, or `work` from the installed wheel against
+  infrastructure you provide; these commands are what the Compose file runs.
+- A deployment bundle, a published image, or any other way to run the services
+  without a clone.
+- Reaching the services from another machine, from a shared or multi-user
+  host, or from the internet, including behind a proxy, TLS, or authentication
+  you add.
+- Another site's web page as a client of intake or enrichment.
+- More than one enrichment service, whose circuit breakers would not be
+  shared.
+- The distributed mode as a learner's first path, which the local mode is.
+
+### Three kinds of protection
+
+| Kind | What provides it | What it is not |
+| --- | --- | --- |
+| Against another machine | Every process listens on `127.0.0.1` unless told otherwise, and the Compose file publishes every port on `127.0.0.1` alone | Authentication |
+| Against a web page | The `Host` check, the check of the site, the JSON body that stays JSON, Grafana answering only as `localhost`, and Prometheus and Tempo unpublished | Authentication: a request that names an allowed `Host` and sends no browser header passes, as curl's does |
+| Authentication of one server | The generated ClickHouse and Grafana passwords | Protection from another user of the host: each keeps a page from using a credential it cannot know, and nothing more |
+
+### What each check rejects, and where it runs
+
+| Check | Where it runs | What it rejects |
+| --- | --- | --- |
+| The listening address | Intake, enrichment, and each worker, before they reach a store, the broker, or a port | An address outside `127.0.0.0/8` and other than `::1`, unless `WORDWINNOW_COMPOSE_STACK` is true: the process logs `listener.refused`, listens on nothing, and ends with status 1 |
+| The `Host` check | Every route of intake and enrichment, `/health`, `/metrics`, `/docs`, and `/openapi.json` included | HTTP 400 with the problem `host_not_allowed` for a `Host`, without its port and in any case, that is not `localhost`, `127.0.0.1`, or `[::1]` or a name `WORDWINNOW_ALLOWED_HOSTS` adds, and for a request with none |
+| The check of the site | The same routes, after the `Host` check | HTTP 403 for a request whose `Sec-Fetch-Site` is present and is neither `none` nor `same-origin`, or, without it, whose `Origin` is present and is not `http://` followed by the request's own `Host`; `Origin: null` is refused |
+| The JSON body | `POST /analyses` | A JSON body sent as `text/plain`, with HTTP 422, so that a form on another site cannot send one |
+| Compose's resolved configuration | `make up` and `make up-full`, before Compose starts anything, with the `full` profile, so that `make up` checks the whole stack | A service that publishes a port with no host address, which Docker binds on every interface, or with one outside `127.0.0.0/8` and other than `::1`, and a service on the host's network; Compose's configuration, override files and `COMPOSE_FILE` included, that cannot be resolved stops the stack too |
+| Grafana's domain | Grafana | A request that names any host but `localhost`, which Grafana redirects |
+
+The services listen on `0.0.0.0` inside their containers, where the network of
+the stack keeps that address inside and Compose publishes each port on
+`127.0.0.1`, so `docker-compose.yml` sets `WORDWINNOW_LISTEN_ADDRESS` to `0.0.0.0` and
+`WORDWINNOW_COMPOSE_STACK` to `true` for them, and adds `intake` and `enrichment`, the
+names Prometheus and the workers use, to the names a service answers to.
+
+A process cannot see how Compose publishes its ports, so the address a
+container listens on is allowed by that one setting and kept true by the check
+of Compose's configuration.
+
+A command whose `WORDWINNOW_INTAKE_URL` names the host by another name, such as
+`0.0.0.0`, prints `error:` and the refusal intake sent, which names the name it
+was given and says to use `localhost`, `127.0.0.1`, or `[::1]`.
+
+### Where each listener stands
+
+| Listener | Outside Compose | In Compose |
+| --- | --- | --- |
+| Intake, enrichment | `127.0.0.1` unless `WORDWINNOW_LISTEN_ADDRESS` says otherwise, and an address beyond loopback is refused; the `Host` check and the check of the site apply | `0.0.0.0` inside the container, published on `127.0.0.1`; the `Host` check with `intake` and `enrichment` added, and the check of the site |
+| A worker's metrics | `127.0.0.1`, by the same setting | `0.0.0.0` inside the container, not published |
+| PostgreSQL, Redis, Kafka | Not the project's | Published on `127.0.0.1`; PostgreSQL has a fixed password, and Redis and Kafka none, because no browser speaks their protocols |
+| ClickHouse | Not the project's | `127.0.0.1:8123`, with the password in `.env` |
+| Grafana | Not the project's | Port 3000 on `127.0.0.1`, answering only as `localhost`, with the password in `.env` |
+| Prometheus, Tempo | Not the project's | Not published |
+
+### The credentials
+
+| Service | User | Password | Why |
+| --- | --- | --- | --- |
+| ClickHouse | `wordwinnow` | `WORDWINNOW_CLICKHOUSE_PASSWORD` in `.env`, generated | A cross-site form can write to its HTTP interface with a known password |
+| Grafana | `admin` | `GRAFANA_ADMIN_PASSWORD` in `.env`, generated | An administrator can add data sources that reach every service by name |
+| PostgreSQL | `wordwinnow` | `wordwinnow`, fixed in `docker-compose.yml` | No browser speaks its protocol, and its image applies a password only when it creates its cluster |
+| Redis, Kafka | none | none | No browser speaks their protocols |
+
+`make up` and `make up-full` generate the two passwords into `.env` when it lacks
+them, with at least 128 bits from the standard library's `secrets` module, and
+say which line they wrote and what it is for; no step prints a value.
+
+A password already in `.env` is never replaced, so a stack made before the
+passwords were generated keeps its data: the next `make up` or `make up-full`
+generates them and recreates the containers whose environment changed, and
+ClickHouse's image writes its user's password at every start.
+
+A line that holds `wordwinnow`, which this repository once published, is kept
+and named each time, and a line with an empty value stops the step, since
+Compose refuses an empty value too.
+
+To read a password, open `.env` in an editor.
+
+To change a generated password, edit its line, or delete the line to have a
+new one generated, and then run `make up-full` while the full stack runs, or
+`make up` for the stores alone, which recreate every container whose environment
+changed while ClickHouse keeps its facts.
+
+`docker compose restart` does not apply a change, because a container's
+environment is fixed when the container is created.
+
+Grafana keeps no volume, so a password changed in Grafana's own interface
+lasts only until its container is recreated, and `.env` is the one place to
+change it.
+
+A shell that exports either name wins over `.env`, for Compose and for the
+settings alike.
+
+None of these passwords protects the stack from another user of the host.
+
+### What the protections do not cover
+
+- Another user or process of the host, which only authentication of every
+  listener would stop.
+- Exposure on purpose, by a proxy, a port forward, or a non-loopback address,
+  which would need authentication and TLS and a new decision.
+- A browser that sends neither `Origin` nor `Sec-Fetch-Site`, which the check of
+  the site cannot tell from curl.
+- A name added to `WORDWINNOW_ALLOWED_HOSTS` that a page can make resolve to
+  this host, which the `Host` check then lets through.
+- The `/docs` page of each service, whose scripts come from a CDN and run as the
+  service's own page.
+- A changed Compose configuration started by a `docker compose` command run by
+  hand, and the image started by `docker run`, neither of which meets the checks
+  that `make up` and `make up-full` make.
+- `WORDWINNOW_COMPOSE_STACK` set anywhere but `docker-compose.yml`, which makes a
+  process listen beyond the host with nothing to keep it there.
+- On a Linux host, how Docker handles a port published on `127.0.0.1`, which
+  Wordwinnow does not test.
+
 ## Configuration
 
 Every setting is an environment variable read once when a process starts, with
 the `WORDWINNOW_` prefix except the OpenTelemetry endpoint, which keeps its
-standard name; `.env.example` starts a `.env` with the two settings a reader is
-most likely to fill in.
+standard name; `.env.example` starts a `.env` with the settings a reader is most
+likely to fill in, and `make up` and `make up-full` write the stack's two
+generated passwords into the same file.
 
 The defaults are what a process uses when nothing sets the variable, as for
 the command line in a plain shell; inside the Compose stack,
@@ -233,10 +401,13 @@ those variables are set.
 | `WORDWINNOW_KAFKA_CONSUMER_GROUP` | `wordwinnow-analysis-workers` | The analysis workers' consumer group |
 | `WORDWINNOW_REDIS_URL` | unset | The enrichment service's dictionary cache, in its own process when unset; the command line caches in its own file, and a worker without an enrichment URL in its own process |
 | `WORDWINNOW_CLICKHOUSE_HOST`, `_PORT`, `_DATABASE` | `127.0.0.1`, `8123`, `wordwinnow` | The fact store |
-| `WORDWINNOW_CLICKHOUSE_USER`, `_PASSWORD` | `wordwinnow`, `wordwinnow` | The fact store's account, the one the Compose stack creates |
+| `WORDWINNOW_CLICKHOUSE_USER`, `_PASSWORD` | `wordwinnow`, `wordwinnow` | The fact store's account, which the Compose stack creates with the password `make up` generated into `.env`: a process started in the repository's root reads it there, and one started elsewhere keeps the default and is refused |
 | `WORDWINNOW_INTAKE_URL` | `http://127.0.0.1:8010` | Where the CLI finds intake |
 | `WORDWINNOW_ENRICHMENT_URL` | unset | Where a worker finds enrichment, the provider directly when unset; where the operator view reads the enrichment service's activity, `http://127.0.0.1:8100` when unset |
 | `WORDWINNOW_INTAKE_PORT`, `WORDWINNOW_ENRICHMENT_PORT`, `WORDWINNOW_METRICS_PORT` | `8010`, `8100`, `9464` | Where the services listen |
+| `WORDWINNOW_LISTEN_ADDRESS` | `127.0.0.1` | The IP address, not a name, that intake, enrichment, and each worker's metrics listen on; an address beyond loopback is refused outside the Compose stack, which ["Security"](#security) describes |
+| `WORDWINNOW_COMPOSE_STACK` | false | `docker-compose.yml` sets it to `true` for the stack's own services, whose network keeps their address inside and whose ports it publishes on `127.0.0.1` alone; it is unsupported anywhere else |
+| `WORDWINNOW_ALLOWED_HOSTS` | unset | Names, separated by commas, that intake and enrichment answer to besides `localhost`, `127.0.0.1`, and `[::1]`, none of which it removes; the stack sets `intake,enrichment` |
 | `WORDWINNOW_LEVEL_MODEL_PATH` | `cefr_level_model.joblib` in the user data directory | The level model, which `wordwinnow setup` trains; the frequency heuristic when the file is absent |
 | `WORDWINNOW_REFERENCE_LISTS_DIR` | `reference` in the user data directory | The reference lists, which `wordwinnow setup` downloads |
 | `WORDWINNOW_NLTK_DATA` | unset | A directory added to NLTK's own search path for its data |
@@ -258,10 +429,10 @@ The New York Times key is a secret value that is never printed, and it is
 redacted from the URLs it travels in; `wordwinnow doctor` prints the analysis
 store's address with its password redacted.
 
-The key is the only secret that is not a throwaway: the stores' passwords in
-`docker-compose.yml`, which the ClickHouse settings also default to, are fixed
-for a stack whose every published port listens on 127.0.0.1, and Redis and
-Kafka there have no password at all.
+The key is the only secret that is neither generated nor fixed for the stack:
+ClickHouse's and Grafana's passwords are generated into `.env`, PostgreSQL's is
+fixed in `docker-compose.yml`, and Redis and Kafka there have no password at
+all, which ["Security"](#the-credentials) says the reason for.
 
 A secret reaches a process only through its environment or an env file that
 neither Git nor the image carries: `~/.config/wordwinnow/secrets.env`, outside
@@ -284,8 +455,9 @@ and intake calls it in the distributed mode:
 | The Compose services | Their values in `docker-compose.yml`, then `secrets.env`, then `.env` in the repository, both files read by Compose itself, then the image's own paths | The first that holds the variable |
 
 The services never see your shell's environment, so direnv makes no difference
-to them; the one exception is the Grafana password, which `docker-compose.yml`
-takes from the shell or from `.env`, and not from `secrets.env` directly.
+to them; the exceptions are the two generated passwords, which
+`docker-compose.yml` takes from the shell or from `.env`, and not from
+`secrets.env`.
 
 The command line never opens `secrets.env` itself, so the key reaches it from
 there only through the shell it runs in.
@@ -331,8 +503,7 @@ uv run wordwinnow doctor
 
 | Where | What |
 | --- | --- |
-| `http://127.0.0.1:3000` | Grafana, dashboard `wordwinnow`, user `admin` |
-| `http://127.0.0.1:9090` | Prometheus |
+| `http://localhost:3000` | Grafana, dashboard `wordwinnow`, user `admin`, its password on the `GRAFANA_ADMIN_PASSWORD` line of `.env`; it answers only to the name `localhost`, and its Explore reads Prometheus's metrics and Tempo's traces, which publish no port of their own |
 | `http://127.0.0.1:8010/metrics`, `:8100/metrics` | The services' raw metrics |
 | `http://127.0.0.1:8100/activity` | What the enrichment service's dictionary is doing now, as JSON: what `analyze --view operator` shows |
 | `http://127.0.0.1:8010/docs`, `:8100/docs` | Each service's HTTP API, which FastAPI generates from its routes and schemas, to read and to try; `/openapi.json` on either port is the same contract as a document another program can read, and the `/docs` page loads its scripts from a CDN |
@@ -710,6 +881,12 @@ matching cannot pass as a clean scan.
 `make up` then `make test-integration` runs the lane that needs PostgreSQL, Kafka,
 and ClickHouse; `uv run pytest -m live` runs the one test that reads a real New
 York Times feed.
+
+The lane's ClickHouse test reads the password from
+`WORDWINNOW_TEST_CLICKHOUSE_PASSWORD` when that is set, and otherwise from the
+`.env` that `make up` wrote, the environment first, as Compose reads it.
+
+With neither, a server that answers fails the test instead of skipping it.
 
 `make test-installed` builds the wheel, installs it as a learner does, in a
 temporary home, sets it up, and analyzes the sample story with the network

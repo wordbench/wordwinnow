@@ -8,10 +8,15 @@ Every field has a default that works for the local mode, and every secret is a
 from enum import (
     auto,
 )
+from ipaddress import (
+    IPv4Address,
+    IPv6Address,
+)
 from pathlib import (
     Path,
 )
 from typing import (
+    Annotated,
     Final,
     final,
 )
@@ -27,6 +32,7 @@ from pydantic import (
 )
 from pydantic_settings import (
     BaseSettings,
+    NoDecode,
     SettingsConfigDict,
 )
 
@@ -142,8 +148,10 @@ class Settings(
     clickhouse_database: str = "wordwinnow"
 
     # NOTE:
-    # The account the Compose stack creates, so a process started outside Compose reaches its fact store with nothing
-    # set; like the stack's other passwords, it guards a server that listens on 127.0.0.1 alone.
+    # The account the Compose stack creates, so a process finds its fact store by name.
+    #
+    # The stack's password is generated into `.env` by `make up` and `make up-full`, which a process started in the
+    # repository's root reads; a process started anywhere else keeps the default below and is refused by the server.
     clickhouse_user: str = "wordwinnow"
 
     clickhouse_password: SecretStr = SecretStr(
@@ -163,6 +171,25 @@ class Settings(
     enrichment_port: int = 8100
 
     metrics_port: int = 9464
+
+    # NOTE:
+    # Where a service and a worker's metrics listen, and who may reach them.
+    #
+    # An address is an IP address, since a name cannot be judged loopback without resolving it; one beyond loopback is
+    # refused unless the Compose file says the process is one of its stack's services, whose network keeps the address
+    # inside and whose ports it publishes on 127.0.0.1 alone.
+    listen_address: IPv4Address | IPv6Address = IPv4Address(
+        address="127.0.0.1",
+    )
+
+    compose_stack: bool = False
+
+    # NOTE:
+    # Names a service answers to in addition to the three loopback names, separated by commas in the environment.
+    allowed_hosts: Annotated[
+        frozenset[str],
+        NoDecode,
+    ] = frozenset()
 
     # NOTE:
     # The dictionary, and how hard the process may lean on the Free Dictionary API when that is the one named.
@@ -283,6 +310,32 @@ class Settings(
             return None
 
         return value
+
+    # NOTE:
+    # The environment holds the names as one string, which the settings source would otherwise read as JSON.
+    @field_validator(
+        "allowed_hosts",
+        mode="before",
+    )
+    @classmethod
+    def _names_separated_by_commas(
+        cls,
+        value: object,
+        /,
+    ) -> object:
+        if not isinstance(
+            value,
+            str,
+        ):
+            return value
+
+        return frozenset(
+            name.strip().lower()
+            for name in value.split(
+                sep=",",
+            )
+            if name.strip()
+        )
 
 
 def load_settings() -> Settings:

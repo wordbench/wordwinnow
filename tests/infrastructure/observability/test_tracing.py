@@ -147,7 +147,7 @@ class TestTracing:
         # NOTE:
         # Each word looked up here is, or contains, the name of a route the service leaves untraced.
         async with AsyncClient(
-            base_url="http://enrichment.test",
+            base_url="http://127.0.0.1:8100",
             transport=ASGITransport(
                 app=app,
             ),

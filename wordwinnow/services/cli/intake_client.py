@@ -82,8 +82,10 @@ class IntakeRejectedError(
     RuntimeError,
 ):
     """
-    Raised when the intake service answered with an error it did not name as a
-    problem, such as a validation failure of the request itself.
+    Raised when the intake service answered with an error that no application
+    error stands for: one it did not name as a problem, such as a validation
+    failure of the request itself, or one it named that only a remote command
+    can meet, such as an address it does not answer to.
 
     What answered may not be the intake service, which the message says when
     the answer shows it.
@@ -127,7 +129,8 @@ class IntakeAddressError(
 
 
 # NOTE:
-# The application error each problem type stands for, so the caller sees the same class in both modes.
+# The error each problem type stands for, so the caller sees the same class in both modes wherever the local mode has
+# one; the address a command used is no part of the local mode, so `host_not_allowed` stands for the rejection.
 _ERRORS: Final = MappingProxyType(
     mapping={
         ProblemType.ANALYSIS_NOT_FOUND: AnalysisNotFoundError,
@@ -137,6 +140,7 @@ _ERRORS: Final = MappingProxyType(
         ProblemType.ANALYSIS_NOT_PUBLISHED: AnalysisNotPublishedError,
         ProblemType.MESSAGING_UNAVAILABLE: MessagingUnavailableError,
         ProblemType.STORE_UNAVAILABLE: FactStoreUnavailableError,
+        ProblemType.HOST_NOT_ALLOWED: IntakeRejectedError,
     },
 )
 

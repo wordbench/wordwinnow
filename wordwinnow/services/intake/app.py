@@ -9,6 +9,9 @@ problem types the application's error taxonomy prescribes.
 from collections.abc import (
     Mapping,
 )
+from collections.abc import (
+    Set as AbstractSet,
+)
 from logging import (
     getLogger,
 )
@@ -94,6 +97,9 @@ from wordwinnow.infrastructure.observability.metrics import (
 )
 from wordwinnow.infrastructure.sources.custom_text import (
     document_from_text,
+)
+from wordwinnow.services.exposure import (
+    install_exposure_middleware,
 )
 from wordwinnow.services.http_context import (
     install_correlation_middleware,
@@ -191,6 +197,7 @@ async def _purge(
 def build_intake_app(
     *,
     dependencies: IntakeDependencies,
+    allowed_hosts: AbstractSet[str] = frozenset(),
 ) -> FastAPI:
     """
     Assemble the application around its dependencies.
@@ -198,6 +205,10 @@ def build_intake_app(
     Every route that reads the store first deletes the analyses whose text may
     no longer be kept, so nothing outlives its retention by more than the
     quiet between two requests.
+
+    Every route answers only a request addressed to a name of this host's
+    loopback interface or one of `allowed_hosts`, and refuses one that another
+    site's page sent.
     """
 
     # NOTE:
@@ -214,6 +225,15 @@ def build_intake_app(
 
     install_correlation_middleware(
         app=app,
+    )
+
+    # NOTE:
+    # Installed after the correlation middleware, so that it is the outer one: a request it refuses reaches nothing
+    # that binds an identifier or touches a store.
+    install_exposure_middleware(
+        app=app,
+        service="intake",
+        allowed_hosts=allowed_hosts,
     )
 
     # WARN:

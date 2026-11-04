@@ -21,6 +21,10 @@ from dataclasses import (
     dataclass,
     replace,
 )
+from ipaddress import (
+    IPv4Address,
+    IPv6Address,
+)
 from logging import (
     getLogger,
 )
@@ -144,6 +148,9 @@ from wordwinnow.services.enrichment.app import (
     lookup_observer,
     provider_hooks,
     provider_observer,
+)
+from wordwinnow.services.exposure import (
+    require_supported_listener,
 )
 from wordwinnow.services.intake.app import (
     PASTED_TEXT,
@@ -720,6 +727,12 @@ async def serve_intake(
         service_name="wordwinnow-intake",
     )
 
+    require_supported_listener(
+        service="intake",
+        settings=settings,
+        port=settings.intake_port,
+    )
+
     async with intake_profile(
         settings=settings,
     ) as profile:
@@ -733,10 +746,12 @@ async def serve_intake(
                 clock=profile.clock,
                 metrics=profile.metrics,
             ),
+            allowed_hosts=settings.allowed_hosts,
         )
 
         await _serve(
             app,
+            settings.listen_address,
             settings.intake_port,
         )
 
@@ -755,6 +770,12 @@ async def serve_enrichment(
     tracing = configure_process(
         settings=settings,
         service_name="wordwinnow-enrichment",
+    )
+
+    require_supported_listener(
+        service="enrichment",
+        settings=settings,
+        port=settings.enrichment_port,
     )
 
     metrics = build_metrics()
@@ -778,10 +799,12 @@ async def serve_enrichment(
                 metrics=profile.metrics,
                 activity=profile.activity,
             ),
+            allowed_hosts=settings.allowed_hosts,
         )
 
         await _serve(
             app,
+            settings.listen_address,
             settings.enrichment_port,
         )
 
@@ -791,6 +814,7 @@ async def serve_enrichment(
 
 async def _serve(
     app: FastAPI,
+    address: IPv4Address | IPv6Address,
     port: int,
     /,
 ) -> None:
@@ -803,7 +827,9 @@ async def _serve(
     server = Server(
         config=Config(
             app=app,
-            host="0.0.0.0",
+            host=str(
+                object=address,
+            ),
             port=port,
             log_config=None,
             access_log=False,
@@ -814,6 +840,9 @@ async def _serve(
         msg="service.listening",
         extra={
             "service": app.title,
+            "address": str(
+                object=address,
+            ),
             "port": port,
         },
     )

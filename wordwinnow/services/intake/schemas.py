@@ -110,6 +110,8 @@ class ProblemType(
 
     STORE_UNAVAILABLE = auto()
 
+    HOST_NOT_ALLOWED = auto()
+
 
 class Problem(
     BaseModel,

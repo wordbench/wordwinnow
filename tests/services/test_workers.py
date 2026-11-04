@@ -13,13 +13,26 @@ from asyncio import (
     wait_for,
 )
 from collections.abc import (
+    AsyncGenerator,
+    Callable,
+    Coroutine,
     Mapping,
     Sequence,
 )
 from collections.abc import (
     Set as AbstractSet,
 )
+from contextlib import (
+    asynccontextmanager,
+)
+from logging import (
+    WARNING,
+)
+from types import (
+    SimpleNamespace,
+)
 from typing import (
+    Any,
     Final,
     final,
 )
@@ -35,6 +48,10 @@ from opentelemetry.context import (
     Context,
 )
 from pytest import (
+    LogCaptureFixture,
+    MonkeyPatch,
+    fixture,
+    mark,
     raises,
 )
 
@@ -51,9 +68,17 @@ from wordwinnow.infrastructure.messaging.topics import (
 from wordwinnow.infrastructure.observability.metrics import (
     build_metrics,
 )
+from wordwinnow.infrastructure.settings import (
+    Settings,
+)
+from wordwinnow.services import (
+    workers,
+)
 from wordwinnow.services.workers import (
     LagObserver,
     request_stop,
+    run_aggregation_worker,
+    run_analysis_worker,
 )
 
 _PARTITION: Final = TopicPartition(
@@ -378,3 +403,286 @@ class TestLagObserver:
             )
             is None
         )
+
+
+@final
+class StoppedError(
+    Exception,
+):
+    """
+    Ends a worker where the test has seen what it came for.
+    """
+
+
+@final
+class ServedMetrics:
+    """
+    A worker's metrics that serve nothing and remember where they were told
+    to.
+    """
+
+    def __init__(
+        self,
+    ) -> None:
+        self.served: Final[list[tuple[int, str]]] = []
+
+    def serve(
+        self,
+        *,
+        port: int,
+        address: str,
+    ) -> None:
+        self.served.append(
+            (
+                port,
+                address,
+            ),
+        )
+
+
+@final
+class Reached:
+    """
+    What a worker reached past its check of the listening address, and the
+    metrics it served.
+    """
+
+    def __init__(
+        self,
+    ) -> None:
+        self.names: Final[list[str]] = []
+
+        self.metrics: Final = ServedMetrics()
+
+
+@fixture
+def reached(
+    *,
+    monkeypatch: MonkeyPatch,
+) -> Reached:
+    """
+    The workers with every store and the broker replaced by a double that
+    notes it was reached, and `StoppedError` raised at the first topic.
+    """
+
+    seen = Reached()
+
+    def configure_process(
+        *,
+        settings: Settings,
+        service_name: str,
+        tracing: bool = True,
+        default_log_level: str = "INFO",
+    ) -> None:
+        return None
+
+    @asynccontextmanager
+    async def worker_profile(
+        *,
+        settings: Settings,
+    ) -> AsyncGenerator[SimpleNamespace]:
+        seen.names.append(
+            "profile",
+        )
+
+        yield SimpleNamespace(
+            metrics=seen.metrics,
+        )
+
+    def build_facts(
+        *,
+        settings: Settings,
+    ) -> SimpleNamespace:
+        seen.names.append(
+            "facts",
+        )
+
+        async def ensure_schema() -> None:
+            raise StoppedError
+
+        return SimpleNamespace(
+            ensure_schema=ensure_schema,
+        )
+
+    def build_metrics_double() -> ServedMetrics:
+        seen.names.append(
+            "metrics",
+        )
+
+        return seen.metrics
+
+    async def ensure_topics(
+        *,
+        topics: Sequence[str],
+        partitions: int,
+        bootstrap_servers: str,
+    ) -> None:
+        seen.names.append(
+            "topics",
+        )
+
+        raise StoppedError
+
+    for (
+        name,
+        value,
+    ) in (
+        (
+            "configure_process",
+            configure_process,
+        ),
+        (
+            "worker_profile",
+            worker_profile,
+        ),
+        (
+            "build_facts",
+            build_facts,
+        ),
+        (
+            "build_metrics",
+            build_metrics_double,
+        ),
+        (
+            "ensure_topics",
+            ensure_topics,
+        ),
+    ):
+        monkeypatch.setattr(
+            target=workers,
+            name=name,
+            value=value,
+        )
+
+    return seen
+
+
+_WORKERS: Final[tuple[tuple[Callable[..., Coroutine[Any, Any, None]], str], ...]] = (
+    (
+        run_analysis_worker,
+        "the analysis worker's metrics",
+    ),
+    (
+        run_aggregation_worker,
+        "the aggregation worker's metrics",
+    ),
+)
+
+
+@final
+class TestTheMetricsAddress:
+    @mark.parametrize(
+        argnames=(
+            "run",
+            "service",
+        ),
+        argvalues=_WORKERS,
+    )
+    async def test_an_address_beyond_loopback_outside_the_stack_ends_the_worker_before_it_reaches_anything(
+        self,
+        *,
+        run: Callable[..., Coroutine[Any, Any, None]],
+        service: str,
+        reached: Reached,
+        caplog: LogCaptureFixture,
+    ) -> None:
+        with (
+            caplog.at_level(
+                level=WARNING,
+            ),
+            raises(
+                expected_exception=SystemExit,
+            ) as ended,
+        ):
+            await run(
+                settings=Settings(
+                    listen_address="0.0.0.0",
+                    compose_stack=False,
+                ),
+            )
+
+        assert ended.value.code == 1
+
+        assert reached.names == []
+
+        assert reached.metrics.served == []
+
+        (record,) = caplog.records
+
+        assert record.getMessage() == "listener.refused"
+
+        assert (
+            vars(
+                record,
+            )["service"]
+            == service
+        )
+
+        assert (
+            vars(
+                record,
+            )["port"]
+            == 9464
+        )
+
+    @mark.parametrize(
+        argnames=(
+            "run",
+            "service",
+        ),
+        argvalues=_WORKERS,
+    )
+    @mark.parametrize(
+        argnames=(
+            "address",
+            "in_the_stack",
+        ),
+        argvalues=(
+            (
+                "127.0.0.1",
+                False,
+            ),
+            (
+                "::1",
+                False,
+            ),
+            (
+                "0.0.0.0",
+                True,
+            ),
+        ),
+    )
+    async def test_a_worker_serves_its_metrics_on_the_address_the_settings_name_and_logs_no_warning(
+        self,
+        *,
+        run: Callable[..., Coroutine[Any, Any, None]],
+        service: str,
+        address: str,
+        in_the_stack: bool,
+        reached: Reached,
+        caplog: LogCaptureFixture,
+    ) -> None:
+        with (
+            caplog.at_level(
+                level=WARNING,
+            ),
+            raises(
+                expected_exception=StoppedError,
+            ),
+        ):
+            await run(
+                settings=Settings(
+                    listen_address=address,
+                    compose_stack=in_the_stack,
+                    metrics_port=9465,
+                ),
+            )
+
+        assert reached.metrics.served == [
+            (
+                9465,
+                address,
+            ),
+        ]
+
+        assert caplog.records == []

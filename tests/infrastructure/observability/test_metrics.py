@@ -12,6 +12,13 @@ from typing import (
     final,
 )
 
+from prometheus_client import (
+    CollectorRegistry,
+)
+from pytest import (
+    MonkeyPatch,
+)
+
 from wordwinnow.domain.analysis import (
     AnalysisOptions,
     Stage,
@@ -27,6 +34,9 @@ from wordwinnow.domain.document import (
 )
 from wordwinnow.domain.learner import (
     LearnerProfile,
+)
+from wordwinnow.infrastructure.observability import (
+    metrics as metrics_module,
 )
 from wordwinnow.infrastructure.observability.metrics import (
     build_metrics,
@@ -123,3 +133,50 @@ class TestMetrics:
             )
             == ()
         )
+
+    def test_the_metrics_are_served_on_the_address_and_the_port_given(
+        self,
+        *,
+        monkeypatch: MonkeyPatch,
+    ) -> None:
+        calls: list[tuple[int, str, CollectorRegistry]] = []
+
+        # NOTE:
+        # The double takes the callee's own parameters, `port`, `addr`, and `registry`, so that a call that leaves the
+        # address out serves on every interface again, as the callee's default does, and fails the assertion below.
+        def start_http_server(
+            *,
+            port: int,
+            addr: str = "0.0.0.0",
+            registry: CollectorRegistry | None = None,
+        ) -> None:
+            assert registry is not None
+
+            calls.append(
+                (
+                    port,
+                    addr,
+                    registry,
+                ),
+            )
+
+        monkeypatch.setattr(
+            target=metrics_module,
+            name="start_http_server",
+            value=start_http_server,
+        )
+
+        metrics = build_metrics()
+
+        metrics.serve(
+            port=9464,
+            address="127.0.0.1",
+        )
+
+        assert calls == [
+            (
+                9464,
+                "127.0.0.1",
+                metrics.registry,
+            ),
+        ]

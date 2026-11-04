@@ -12,6 +12,9 @@ from datetime import (
 from os import (
     environ,
 )
+from pathlib import (
+    Path,
+)
 from typing import (
     Final,
     final,
@@ -28,6 +31,7 @@ from pydantic import (
     SecretStr,
 )
 from pytest import (
+    fail,
     fixture,
     mark,
     skip,
@@ -60,9 +64,15 @@ from wordwinnow.infrastructure.analytics.clickhouse import (
     ClickHouseVocabularyFacts,
     build_client,
 )
+from wordwinnow.infrastructure.settings import (
+    Settings,
+)
 
 # NOTE:
 # The server `make up` starts, or another one named in the environment; the test skips when none answers.
+#
+# The password is the one `make up` generated into the checkout's `.env`, unless `WORDWINNOW_TEST_CLICKHOUSE_PASSWORD`
+# names another.
 _HOST: Final = environ.get(
     key="WORDWINNOW_TEST_CLICKHOUSE_HOST",
     default="127.0.0.1",
@@ -82,7 +92,13 @@ _USER: Final = environ.get(
 
 _PASSWORD: Final = environ.get(
     key="WORDWINNOW_TEST_CLICKHOUSE_PASSWORD",
-    default="wordwinnow",
+)
+
+_ENV: Final = (
+    Path(
+        __file__,
+    ).parents[3]
+    / ".env"
 )
 
 # NOTE:
@@ -95,10 +111,27 @@ _EPOCH: Final = datetime(
 )
 
 
+def _generated_password() -> SecretStr | None:
+    """
+    The password the services would use, read the way they read it, the
+    environment first and then the checkout's `.env`, or `None` when neither
+    sets one, which the settings' default must not stand in for.
+    """
+
+    settings = Settings(
+        _env_file=_ENV,
+    )
+
+    if "clickhouse_password" not in settings.model_fields_set:
+        return None
+
+    return settings.clickhouse_password
+
+
 @fixture(
     scope="module",
 )
-def clickhouse() -> None:
+def clickhouse() -> SecretStr:
     try:
         answered = (
             get(
@@ -115,6 +148,28 @@ def clickhouse() -> None:
         skip(
             reason=f"no ClickHouse server answers on {_HOST}:{_PORT}; run `make up`",
         )
+
+    password = (
+        SecretStr(
+            secret_value=_PASSWORD,
+        )
+        if _PASSWORD
+        else _generated_password()
+    )
+
+    # NOTE:
+    # A server that answers has a password, and without the one `make up` generated the test would only be guessing
+    # it, so it fails and says where the password comes from, where a skip would read as a server that is not there.
+    if password is None:
+        fail(
+            reason=(
+                f"the ClickHouse server on {_HOST}:{_PORT} answers, and no password is known for it: `make up` "
+                "generates one into `.env`, and WORDWINNOW_TEST_CLICKHOUSE_PASSWORD names another"
+            ),
+            pytrace=False,
+        )
+
+    return password
 
 
 # NOTE:
@@ -149,7 +204,7 @@ class TestClickHouse:
     async def test_facts_recorded_twice_are_summarized_once(
         self,
         *,
-        clickhouse: None,
+        clickhouse: SecretStr,
     ) -> None:
         store = ClickHouseVocabularyFacts(
             database="baz",
@@ -157,9 +212,7 @@ class TestClickHouse:
                 host=_HOST,
                 port=_PORT,
                 user=_USER,
-                password=SecretStr(
-                    secret_value=_PASSWORD,
-                ),
+                password=clickhouse,
             ),
         )
 

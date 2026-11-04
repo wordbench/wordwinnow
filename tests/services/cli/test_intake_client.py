@@ -42,6 +42,7 @@ from wordwinnow.services.cli.intake_client import (
 )
 from wordwinnow.services.intake.schemas import (
     AnalysisRequest,
+    ProblemType,
 )
 
 _ADDRESS: Final = "http://intake.invalid:8010"
@@ -596,3 +597,118 @@ class TestAnAnswerThatIsNoService:
             )
             == "intake POST /analyses answered HTTP 422"
         )
+
+
+@final
+class TestEveryProblemType:
+    @mark.parametrize(
+        argnames="problem",
+        argvalues=tuple(
+            ProblemType,
+        ),
+    )
+    async def test_each_stands_for_an_error_that_carries_the_detail_and_none_is_a_key_error(
+        self,
+        *,
+        problem: ProblemType,
+    ) -> None:
+        error = await _fails(
+            _answering(
+                Response(
+                    status_code=400,
+                    json={
+                        "type": problem,
+                        "detail": "foo",
+                    },
+                ),
+            ),
+            Exception,
+        )
+
+        assert not isinstance(
+            error,
+            KeyError,
+        )
+
+        assert error.args == ("foo",)
+
+    async def test_an_address_the_service_does_not_answer_to_is_a_rejection(
+        self,
+    ) -> None:
+        error = await _fails(
+            _answering(
+                Response(
+                    status_code=400,
+                    json={
+                        "type": "host_not_allowed",
+                        "detail": "foo",
+                    },
+                ),
+            ),
+            IntakeRejectedError,
+        )
+
+        assert error.args == ("foo",)
+
+
+@final
+class TestWhatTheClientSends:
+    # NOTE:
+    # Intake refuses a request that another site's page sent, as its `Origin` or its `Sec-Fetch-Site` says, so the
+    # command's client must send neither, on the read and on the one write that needs no body.
+    async def test_a_request_carries_no_header_only_a_browser_sends(
+        self,
+    ) -> None:
+        seen: list[Request] = []
+
+        def handler(
+            request: Request,
+            /,
+        ) -> Response:
+            seen.append(
+                request,
+            )
+
+            return Response(
+                status_code=200,
+                json={
+                    "analysis_ids": [],
+                }
+                if request.method == "POST"
+                else [],
+            )
+
+        client = IntakeClient(
+            base_url=_ADDRESS,
+            transport=MockTransport(
+                handler=handler,
+            ),
+        )
+
+        try:
+            await client.list_recent(
+                limit=1,
+            )
+
+            await client.requeue()
+
+        finally:
+            await client.close()
+
+        assert tuple(request.method for request in seen) == (
+            "GET",
+            "POST",
+        )
+
+        for request in seen:
+            assert (
+                tuple(
+                    name
+                    for name in request.headers
+                    if name.lower() == "origin"
+                    or name.lower().startswith(
+                        "sec-fetch-",
+                    )
+                )
+                == ()
+            )

@@ -12,24 +12,37 @@ from asyncio import (
     sleep as asyncio_sleep,
 )
 from collections.abc import (
+    AsyncGenerator,
     AsyncIterator,
     Callable,
+    Coroutine,
     Sequence,
+)
+from contextlib import (
+    asynccontextmanager,
 )
 from io import (
     StringIO,
+)
+from logging import (
+    INFO,
 )
 from pathlib import (
     Path,
 )
 from types import (
     MappingProxyType,
+    SimpleNamespace,
 )
 from typing import (
+    Any,
     Final,
     final,
 )
 
+from fastapi import (
+    FastAPI,
+)
 from httpx2 import (
     ASGITransport,
     AsyncBaseTransport,
@@ -40,6 +53,7 @@ from httpx2 import (
     Response,
 )
 from pytest import (
+    LogCaptureFixture,
     MonkeyPatch,
     fixture,
     mark,
@@ -47,6 +61,9 @@ from pytest import (
 )
 from rich.console import (
     Console,
+)
+from uvicorn import (
+    Config,
 )
 
 from tests.fakes.ports import (
@@ -131,12 +148,18 @@ from wordwinnow.services.cli.commands import (
     doctor,
     list_recent,
     requeue,
+    serve_enrichment,
+    serve_intake,
     set_up,
     show,
     summarize,
     wait_remotely,
 )
+from wordwinnow.services.cli.enrichment_client import (
+    EnrichmentClient,
+)
 from wordwinnow.services.cli.intake_client import (
+    IntakeRejectedError,
     IntakeUnavailableError,
 )
 from wordwinnow.services.cli.progress import (
@@ -158,6 +181,7 @@ from wordwinnow.services.intake.schemas import (
 )
 from wordwinnow.services.progress import (
     UNWATCHED,
+    ActivityUnreadableError,
     WorkProgress,
 )
 
@@ -2157,3 +2181,445 @@ class TestSetUp:
             )
 
         assert trained == []
+
+
+@final
+class TestAnAddressIntakeDoesNotAnswerTo:
+    # NOTE:
+    # `0.0.0.0` reaches a service on this host on most systems, and a browser would send it as the name, so a command
+    # that names the host that way reads the refusal as an error it can act on, with the names to use instead.
+    async def test_a_command_that_names_the_host_as_0_0_0_0_prints_what_to_use_instead(
+        self,
+        *,
+        intake: tuple[InMemoryStorage, ASGITransport],
+        monkeypatch: MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        (
+            _,
+            transport,
+        ) = intake
+
+        monkeypatch.chdir(
+            path=tmp_path,
+        )
+
+        monkeypatch.setenv(
+            name="WORDWINNOW_INTAKE_URL",
+            value="http://0.0.0.0:8010",
+        )
+
+        with raises(
+            expected_exception=IntakeRejectedError,
+        ) as caught:
+            await list_recent(
+                settings=Settings(),
+                local=False,
+                limit=5,
+                transport=transport,
+            )
+
+        assert (
+            str(
+                object=caught.value,
+            )
+            == 'intake does not answer to the name "0.0.0.0", so that a web page cannot reach it under a name of its '
+            "own; address it as localhost, 127.0.0.1, or [::1]"
+        )
+
+
+@final
+class Listening:
+    """
+    What the services were given to listen on, and what they reached before
+    that, with uvicorn and every store replaced by a double.
+    """
+
+    def __init__(
+        self,
+    ) -> None:
+        self.configs: Final[list[Config]] = []
+
+        self.reached: Final[list[str]] = []
+
+
+@fixture
+def listening(
+    *,
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> Listening:
+    monkeypatch.chdir(
+        path=tmp_path,
+    )
+
+    seen = Listening()
+
+    @final
+    class Server:
+        def __init__(
+            self,
+            *,
+            config: Config,
+        ) -> None:
+            seen.configs.append(
+                config,
+            )
+
+        async def serve(
+            self,
+        ) -> None:
+            return None
+
+    def configure_process(
+        *,
+        settings: Settings,
+        service_name: str,
+        tracing: bool = True,
+        default_log_level: str = "INFO",
+    ) -> None:
+        return None
+
+    @asynccontextmanager
+    async def intake_profile(
+        *,
+        settings: Settings,
+    ) -> AsyncGenerator[SimpleNamespace]:
+        seen.reached.append(
+            "intake",
+        )
+
+        yield SimpleNamespace(
+            new_unit_of_work=InMemoryStorage().new_unit_of_work,
+            publisher=RecordingPublisher(),
+            sources={},
+            facts=EmptyFactQuery(),
+            clock=FakeClock(
+                at=EPOCH,
+            ),
+            metrics=build_metrics(),
+        )
+
+    @asynccontextmanager
+    async def enrichment_profile(
+        *,
+        settings: Settings,
+        metrics: object,
+        on_lookup: object,
+        observer: object,
+        provider_hooks: object,
+    ) -> AsyncGenerator[SimpleNamespace]:
+        seen.reached.append(
+            "enrichment",
+        )
+
+        yield SimpleNamespace(
+            dictionary=FakeDictionary(),
+            metrics=build_metrics(),
+            activity=None,
+        )
+
+    for (
+        name,
+        value,
+    ) in (
+        (
+            "Server",
+            Server,
+        ),
+        (
+            "configure_process",
+            configure_process,
+        ),
+        (
+            "intake_profile",
+            intake_profile,
+        ),
+        (
+            "enrichment_profile",
+            enrichment_profile,
+        ),
+    ):
+        monkeypatch.setattr(
+            target=commands,
+            name=name,
+            value=value,
+        )
+
+    return seen
+
+
+_SERVICES: Final[tuple[tuple[Callable[..., Coroutine[Any, Any, None]], str, int], ...]] = (
+    (
+        serve_intake,
+        "intake",
+        8010,
+    ),
+    (
+        serve_enrichment,
+        "enrichment",
+        8100,
+    ),
+)
+
+
+@final
+class TestServing:
+    @mark.parametrize(
+        argnames=(
+            "serve",
+            "service",
+            "port",
+        ),
+        argvalues=_SERVICES,
+    )
+    async def test_a_service_listens_on_loopback_unless_the_settings_name_an_address_the_stack_allows(
+        self,
+        *,
+        serve: Callable[..., Coroutine[Any, Any, None]],
+        service: str,
+        port: int,
+        listening: Listening,
+    ) -> None:
+        for settings in (
+            Settings(),
+            Settings(
+                listen_address="::1",
+            ),
+            Settings(
+                listen_address="0.0.0.0",
+                compose_stack=True,
+            ),
+        ):
+            await serve(
+                settings=settings,
+            )
+
+        assert [
+            (
+                config.host,
+                config.port,
+            )
+            for config in listening.configs
+        ] == [
+            (
+                "127.0.0.1",
+                port,
+            ),
+            (
+                "::1",
+                port,
+            ),
+            (
+                "0.0.0.0",
+                port,
+            ),
+        ]
+
+    @mark.parametrize(
+        argnames=(
+            "serve",
+            "service",
+            "port",
+        ),
+        argvalues=_SERVICES,
+    )
+    async def test_the_address_is_named_in_the_listening_event(
+        self,
+        *,
+        serve: Callable[..., Coroutine[Any, Any, None]],
+        service: str,
+        port: int,
+        listening: Listening,
+        caplog: LogCaptureFixture,
+    ) -> None:
+        with caplog.at_level(
+            level=INFO,
+            logger="wordwinnow.cli",
+        ):
+            await serve(
+                settings=Settings(
+                    listen_address="0.0.0.0",
+                    compose_stack=True,
+                ),
+            )
+
+        (record,) = caplog.records
+
+        assert record.getMessage() == "service.listening"
+
+        assert (
+            vars(
+                record,
+            )["address"]
+            == "0.0.0.0"
+        )
+
+        assert (
+            vars(
+                record,
+            )["port"]
+            == port
+        )
+
+    @mark.parametrize(
+        argnames=(
+            "serve",
+            "service",
+            "port",
+        ),
+        argvalues=_SERVICES,
+    )
+    async def test_the_application_it_serves_answers_to_the_names_in_the_settings(
+        self,
+        *,
+        serve: Callable[..., Coroutine[Any, Any, None]],
+        service: str,
+        port: int,
+        listening: Listening,
+    ) -> None:
+        await serve(
+            settings=Settings(
+                allowed_hosts=frozenset(
+                    ("foo",),
+                ),
+            ),
+        )
+
+        (config,) = listening.configs
+
+        assert isinstance(
+            config.app,
+            FastAPI,
+        )
+
+        async with AsyncClient(
+            base_url=f"http://127.0.0.1:{port}",
+            transport=ASGITransport(
+                app=config.app,
+            ),
+        ) as client:
+            named = await client.get(
+                url="/health",
+                headers={
+                    "Host": "foo",
+                },
+            )
+
+            other = await client.get(
+                url="/health",
+                headers={
+                    "Host": "bar",
+                },
+            )
+
+        assert (
+            named.status_code,
+            other.status_code,
+        ) == (
+            200,
+            400,
+        )
+
+    @mark.parametrize(
+        argnames=(
+            "serve",
+            "service",
+            "port",
+        ),
+        argvalues=_SERVICES,
+    )
+    async def test_an_address_beyond_loopback_outside_the_stack_is_refused_before_the_profile_is_built(
+        self,
+        *,
+        serve: Callable[..., Coroutine[Any, Any, None]],
+        service: str,
+        port: int,
+        listening: Listening,
+        caplog: LogCaptureFixture,
+    ) -> None:
+        with raises(
+            expected_exception=SystemExit,
+        ) as ended:
+            await serve(
+                settings=Settings(
+                    listen_address="0.0.0.0",
+                ),
+            )
+
+        assert ended.value.code == 1
+
+        assert listening.reached == []
+
+        assert listening.configs == []
+
+        (record,) = caplog.records
+
+        assert record.getMessage() == "listener.refused"
+
+        assert (
+            vars(
+                record,
+            )["service"]
+            == service
+        )
+
+        assert (
+            vars(
+                record,
+            )["port"]
+            == port
+        )
+
+
+@final
+class TestWhatTheEnrichmentClientSends:
+    # NOTE:
+    # The enrichment service refuses a request that another site's page sent, as its `Origin` or its `Sec-Fetch-Site`
+    # says, so the operator view's client must send neither.
+    async def test_a_request_carries_no_header_only_a_browser_sends(
+        self,
+    ) -> None:
+        seen: list[Request] = []
+
+        def handler(
+            request: Request,
+            /,
+        ) -> Response:
+            seen.append(
+                request,
+            )
+
+            return Response(
+                status_code=404,
+            )
+
+        client = EnrichmentClient(
+            base_url="http://127.0.0.1:8100",
+            transport=MockTransport(
+                handler=handler,
+            ),
+        )
+
+        try:
+            with raises(
+                expected_exception=ActivityUnreadableError,
+            ):
+                await client.activity()
+
+        finally:
+            await client.close()
+
+        (request,) = seen
+
+        assert (
+            tuple(
+                name
+                for name in request.headers
+                if name.lower() == "origin"
+                or name.lower().startswith(
+                    "sec-fetch-",
+                )
+            )
+            == ()
+        )

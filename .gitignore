@@ -52,7 +52,8 @@ dist/
 # NOTE:
 # Local secrets.
 #
-# Nothing in the project requires a .env file: every setting has a documented default, and operating.md lists them.
+# Only the Compose stack needs a .env file, where `make up` and `make up-full` write its generated passwords; every
+# setting has a documented default, and operating.md lists them.
 #
 # The New York Times key belongs in `~/.config/wordwinnow/secrets.env`, outside the repository, and a `.env` beside
 # `.env.example` is the supported alternative; this rule keeps the alternative, and any other env file, out of Git.
