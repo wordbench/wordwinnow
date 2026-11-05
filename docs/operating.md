@@ -285,7 +285,7 @@ Unsupported, whether or not it happens to work:
 | The `Host` check | Every route of intake and enrichment, `/health`, `/metrics`, `/docs`, and `/openapi.json` included | HTTP 400 with the problem `host_not_allowed` for a `Host`, without its port and in any case, that is not `localhost`, `127.0.0.1`, or `[::1]` or a name `WORDWINNOW_ALLOWED_HOSTS` adds, and for a request with none |
 | The check of the site | The same routes, after the `Host` check | HTTP 403 for a request whose `Sec-Fetch-Site` is present and is neither `none` nor `same-origin`, or, without it, whose `Origin` is present and is not `http://` followed by the request's own `Host`; `Origin: null` is refused |
 | The JSON body | `POST /analyses` | A JSON body sent as `text/plain`, with HTTP 422, so that a form on another site cannot send one |
-| Compose's resolved configuration | `make up` and `make up-full`, before Compose starts anything, with the `full` profile, so that `make up` checks the whole stack | A service that publishes a port with no host address, which Docker binds on every interface, or with one outside `127.0.0.0/8` and other than `::1`, and a service on the host's network; Compose's configuration, override files and `COMPOSE_FILE` included, that cannot be resolved stops the stack too |
+| Compose's resolved configuration | `make up` and `make up-full`, before Compose starts anything, with the `full` profile, so that `make up` checks the whole stack | A service that publishes a port with no host address, which Docker binds on every interface, or with one outside `127.0.0.0/8` and other than `::1`; a service on the host's network; a service on any other network mode than the stack's own network, `none`, or another service of the stack; a service on a network the configuration does not declare; a service with any setting of its own on a network, such as an alias or an address; a network with any setting but its `name`, which must be the project's name as Compose resolved it for this run, an underscore, and the network's key, the `bridge` driver, no IPAM settings, and `external` false, so that an external network, another driver, `driver_opts`, IPAM, and IPv6 are refused, harmless settings such as a subnet or an MTU included; each refusal names the setting and never its value; Compose's configuration, override files and `COMPOSE_FILE` included, that cannot be resolved, or that holds a network entry the check cannot read, stops the stack too |
 | Grafana's domain | Grafana | A request that names any host but `localhost`, which Grafana redirects |
 
 The services listen on `0.0.0.0` inside their containers, where the network of
@@ -295,8 +295,14 @@ the stack keeps that address inside and Compose publishes each port on
 names Prometheus and the workers use, to the names a service answers to.
 
 A process cannot see how Compose publishes its ports, so the address a
-container listens on is allowed by that one setting and kept true by the check
-of Compose's configuration.
+container listens on is allowed by that one setting, and the check of
+Compose's configuration keeps it to what that configuration shows, ports on
+loopback and the stack's own bridge networks, and cannot see Docker's own
+settings on the host.
+
+The check reads the configuration Compose resolved and asks Docker nothing, so
+it cannot tell what a network that already exists is, or how the host routes
+and filters packets.
 
 A command whose `WORDWINNOW_INTAKE_URL` names the host by another name, such as
 `0.0.0.0`, prints `error:` and the refusal intake sent, which names the name it
@@ -371,8 +377,20 @@ None of these passwords protects the stack from another user of the host.
   that `make up` and `make up-full` make.
 - `WORDWINNOW_COMPOSE_STACK` set anywhere but `docker-compose.yml`, which makes a
   process listen beyond the host with nothing to keep it there.
-- On a Linux host, how Docker handles a port published on `127.0.0.1`, which
-  Wordwinnow does not test.
+- On a Linux host, an Engine before 28.0.0, where Docker's documentation says
+  that hosts on the same network segment can reach a port published on
+  `127.0.0.1`.
+- On a Linux host, Docker's own configuration, which Compose's configuration
+  does not show: `iptables` or `ip6tables` set to false, which Docker's
+  documentation says leaves every port of a container reachable from the local
+  network, `allow-direct-routing`, and `default-network-opts`, which gives new
+  networks options that the Compose file does not show.
+- A network that already exists under the stack's network name, whether or not
+  Compose made it, which Compose joins as it is, whatever the configuration
+  says of it.
+- The host's firewall and its routes, which decide whether another machine can
+  reach the stack's networks at all.
+- How Docker handles any of these, which Wordwinnow does not test.
 
 ## Configuration
 

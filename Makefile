@@ -159,8 +159,9 @@ build: ## Build the wheel and the source distribution into dist/
 # NOTE:
 # Both targets first write the stack's generated passwords into `.env`, where they are absent, and then check what
 # Compose would start, override files and `COMPOSE_FILE` included: nothing starts if a port would be published beyond
-# this host's loopback interface, if a service would use the host's network, or if Compose cannot resolve its
-# configuration, which leaves the check no input.
+# this host's loopback interface, if a service would use the host's network, if a network setting is one the check
+# cannot confirm keeps the stack on its own network, or if Compose cannot resolve its configuration, which leaves the
+# check no input.
 #
 # The `full` profile makes `up` check the whole stack too, though it starts the stores alone.
 up: ## Start the backing services (postgres, redis, kafka, clickhouse)
