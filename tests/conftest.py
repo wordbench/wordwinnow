@@ -44,6 +44,9 @@ from wordwinnow.infrastructure.ml.model import (
     save,
     train,
 )
+from wordwinnow.infrastructure.settings import (
+    Settings,
+)
 from wordwinnow.services.cli import (
     commands,
 )
@@ -77,12 +80,51 @@ _TERM: Final = "TERM"
 
 _TERMINAL: Final = "xterm-256color"
 
+# NOTE:
+# Rich and Typer take an output's colors, its width, and whether it is a terminal from these variables, so a test that
+# reads what they draw would pass or fail by the shell that runs it.
+#
+# Rich fixes a console's width and colors when the console is made, and Typer reads its own when it is imported, so
+# the command line's consoles, which its module makes on import, keep whatever the environment held then: the
+# variables leave the session before any test module is imported, not each test as it starts.
+#
+# `GITHUB_ACTIONS` stays as the shell has it, because the gate runs once with it and once without.
+_TERMINAL_VARIABLES: Final = frozenset(
+    (
+        "COLORTERM",
+        "COLUMNS",
+        "FORCE_COLOR",
+        "LINES",
+        "NO_COLOR",
+        "PY_COLORS",
+        "TERMINAL_WIDTH",
+        "TTY_COMPATIBLE",
+        "TTY_INTERACTIVE",
+        "TYPER_USE_RICH",
+        "_TYPER_FORCE_DISABLE_TERMINAL",
+    ),
+)
+
+_session_environment: Final = MonkeyPatch()
+
 _REFERENCE_DIR: Final = (
     Path(
         __file__,
     ).parents[1]
     / "data/reference"
 )
+
+
+def pytest_sessionstart() -> None:
+    for name in _TERMINAL_VARIABLES:
+        _session_environment.delenv(
+            name=name,
+            raising=False,
+        )
+
+
+def pytest_sessionfinish() -> None:
+    _session_environment.undo()
 
 
 @fixture(
@@ -107,6 +149,21 @@ def isolated_settings(
             monkeypatch.delenv(
                 name=name,
             )
+
+    # NOTE:
+    # The settings also read the `.env` in the working directory each time they are made, where `make up` writes the
+    # stack's passwords and an operator keeps their settings, so a test that makes them would take whatever that file
+    # holds in the folder the suite runs from.
+    #
+    # A test reads a `.env` only by naming the file, as the ClickHouse integration test names the checkout's.
+    monkeypatch.setattr(
+        target=Settings,
+        name="model_config",
+        value={
+            **Settings.model_config,
+            "env_file": None,
+        },
+    )
 
 
 @fixture(
