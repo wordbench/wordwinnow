@@ -203,19 +203,24 @@ need a named volume of its own.
 ### When a command cannot reach intake
 
 A command that intake cannot serve prints one line that begins `error:` and
-exits with status 1, and the line says which of six things happened.
+exits with status 1, and the line says which of eight things happened.
 
-`<address>` is the scheme, host, and port that `WORDWINNOW_INTAKE_URL` names,
-without any user, password, path, or query.
+`<address>` is the scheme, host, and port that `WORDWINNOW_INTAKE_URL` names.
 
 | The line says | What happened | What to check |
 | --- | --- | --- |
 | `WORDWINNOW_INTAKE_URL is "<value>", which is not an http:// or https:// address with a host` | The setting is no address the command can use, which it finds before any request, so a command that does not need intake never meets it | The setting, in the environment and in a `.env` file in the working directory |
+| `WORDWINNOW_INTAKE_URL has more than a scheme, a host, and a port; set it to the address alone, <address>` | The setting holds a path, a query, a fragment, or a user and a password, which the command finds before any request; intake serves its routes at the root of its address and authenticates no one, so none of them helps | The setting, in the environment and in a `.env` file in the working directory, which `<address>` says what to set it to |
 | `no intake service answered at <address> (<reason>)` | Nothing accepted a connection at the address; the line ends with what the command does without `--remote`, where it has a local mode | That the services are running and that the address is theirs |
 | `the intake service at <address> took the connection but did not answer within 60 s`, or `… broke off without an answer (<reason>)` | A server accepted the connection and then did not answer in time, or ended the exchange | The log of the service at the address |
-| `something answered at <address>, but not as a Wordwinnow intake service (HTTP <status>, <media type>)` | A server answered with a 404, a 405, a 501, or a web page, none of which intake sends except as an error it names | That the address is intake's and not another program's |
+| `something answered at <address>, but not as a Wordwinnow intake service (HTTP <status>, <media type>)` | A server answered with a 404, a 405, a 501, or a web page, none of which intake sends except as an error it names, or with a redirect, which the command never follows, or with an answer below 400 whose body is not JSON | That the address is intake's and not another program's |
+| `the service at <address> answered HTTP <status> with JSON this command cannot read; if it is the intake service, its version may not match this command's` | A server answered below 300 with JSON that is not the answer the command asked for, as another version of the intake service may send | That the address is intake's, and that the command and the services are of one version |
 | `the service at <address> failed (HTTP <status>); if it is the intake service, its log says why` | A server answered with an error in the 500s that names no problem | The log of the service at the address |
 | The detail of the error intake named, or `intake <METHOD> <path> answered HTTP <status>` | Intake refused the request | The detail, or the request it describes |
+
+Every `error:` line is one line, however long, and a control character in it,
+such as a line feed or an escape in what a server sent, is shown as `\n` or
+`\x1b`.
 
 ## Security
 
@@ -285,7 +290,7 @@ Unsupported, whether or not it happens to work:
 | The `Host` check | Every route of intake and enrichment, `/health`, `/metrics`, `/docs`, and `/openapi.json` included | HTTP 400 with the problem `host_not_allowed` for a `Host`, without its port and in any case, that is not `localhost`, `127.0.0.1`, or `[::1]` or a name `WORDWINNOW_ALLOWED_HOSTS` adds, and for a request with none |
 | The check of the site | The same routes, after the `Host` check | HTTP 403 for a request whose `Sec-Fetch-Site` is present and is neither `none` nor `same-origin`, or, without it, whose `Origin` is present and is not `http://` followed by the request's own `Host`; `Origin: null` is refused |
 | The JSON body | `POST /analyses` | A JSON body sent as `text/plain`, with HTTP 422, so that a form on another site cannot send one |
-| Compose's resolved configuration | `make up` and `make up-full`, before Compose starts anything, with the `full` profile, so that `make up` checks the whole stack | A service that publishes a port with no host address, which Docker binds on every interface, or with one outside `127.0.0.0/8` and other than `::1`; a service on the host's network; a service on any other network mode than the stack's own network, `none`, or another service of the stack; a service on a network the configuration does not declare; a service with any setting of its own on a network, such as an alias or an address; a network with any setting but its `name`, which must be the project's name as Compose resolved it for this run, an underscore, and the network's key, the `bridge` driver, no IPAM settings, and `external` false, so that an external network, another driver, `driver_opts`, IPAM, and IPv6 are refused, harmless settings such as a subnet or an MTU included; each refusal names the setting and never its value; Compose's configuration, override files and `COMPOSE_FILE` included, that cannot be resolved, or that holds a network entry the check cannot read, stops the stack too |
+| Compose's resolved configuration | `make up` and `make up-full`, before Compose starts anything, with the `full` profile, so that `make up` checks the whole stack | A service that publishes a port with no host address, which Docker binds on every interface, or with one outside `127.0.0.0/8` and other than `::1`; a service on the host's network; a service on any other network mode than the stack's own network, `none`, or another service of the stack; a service on a network the configuration does not declare; a service with any setting of its own on a network, such as an alias or an address; a network with any setting but its `name`, which must be the project's name as Compose resolved it for this run, an underscore, and the network's key, the `bridge` driver, no IPAM settings, and `external` false, so that an external network, another driver, `driver_opts`, IPAM, and IPv6 are refused, harmless settings such as a subnet or an MTU included; the refusal of a published port names the service, the port, and the host address, and every other refusal names the service or the setting and prints none of its value; Compose's configuration, override files and `COMPOSE_FILE` included, that cannot be resolved, or that holds a network entry the check cannot read, stops the stack too |
 | Grafana's domain | Grafana | A request that names any host but `localhost`, which Grafana redirects |
 
 The services listen on `0.0.0.0` inside their containers, where the network of
@@ -420,7 +425,7 @@ those variables are set.
 | `WORDWINNOW_REDIS_URL` | unset | The enrichment service's dictionary cache, in its own process when unset; the command line caches in its own file, and a worker without an enrichment URL in its own process |
 | `WORDWINNOW_CLICKHOUSE_HOST`, `_PORT`, `_DATABASE` | `127.0.0.1`, `8123`, `wordwinnow` | The fact store |
 | `WORDWINNOW_CLICKHOUSE_USER`, `_PASSWORD` | `wordwinnow`, `wordwinnow` | The fact store's account, which the Compose stack creates with the password `make up` generated into `.env`: a process started in the repository's root reads it there, and one started elsewhere keeps the default and is refused |
-| `WORDWINNOW_INTAKE_URL` | `http://127.0.0.1:8010` | Where the CLI finds intake |
+| `WORDWINNOW_INTAKE_URL` | `http://127.0.0.1:8010` | Where the CLI finds intake, as a scheme, a host, and a port alone |
 | `WORDWINNOW_ENRICHMENT_URL` | unset | Where a worker finds enrichment, the provider directly when unset; where the operator view reads the enrichment service's activity, `http://127.0.0.1:8100` when unset |
 | `WORDWINNOW_INTAKE_PORT`, `WORDWINNOW_ENRICHMENT_PORT`, `WORDWINNOW_METRICS_PORT` | `8010`, `8100`, `9464` | Where the services listen |
 | `WORDWINNOW_LISTEN_ADDRESS` | `127.0.0.1` | The IP address, not a name, that intake, enrichment, and each worker's metrics listen on; an address beyond loopback is refused outside the Compose stack, which ["Security"](#security) describes |

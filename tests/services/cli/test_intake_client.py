@@ -4,9 +4,15 @@ address it names, and which of the cases it met, through a transport that
 raises or answers as a failing service would.
 """
 
+from json import (
+    dumps,
+)
 from typing import (
     Final,
     final,
+)
+from uuid import (
+    UUID,
 )
 
 from httpx2 import (
@@ -27,12 +33,30 @@ from pytest import (
     raises,
 )
 
+from tests.fakes.ports import (
+    EPOCH,
+)
 from wordwinnow.application.errors import (
     AnalysisNotFoundError,
     MessagingUnavailableError,
 )
+from wordwinnow.domain.analysis import (
+    AnalysisOptions,
+    request_an_analysis,
+)
 from wordwinnow.domain.cefr import (
     CefrLevel,
+)
+from wordwinnow.domain.document import (
+    Document,
+    DocumentOrigin,
+    InvalidDocumentError,
+)
+from wordwinnow.domain.identifiers import (
+    AnalysisId,
+)
+from wordwinnow.domain.learner import (
+    LearnerProfile,
 )
 from wordwinnow.services.cli.intake_client import (
     IntakeAddressError,
@@ -41,11 +65,29 @@ from wordwinnow.services.cli.intake_client import (
     IntakeUnavailableError,
 )
 from wordwinnow.services.intake.schemas import (
+    AnalysisOut,
     AnalysisRequest,
     ProblemType,
 )
 
 _ADDRESS: Final = "http://intake.invalid:8010"
+
+_ID: Final = AnalysisId(
+    value=UUID(
+        int=0,
+    ),
+)
+
+# NOTE:
+# The six methods that read an answer, which every one of them reads in the same order.
+_METHODS: Final = (
+    "create",
+    "get",
+    "watch",
+    "list_recent",
+    "summarize",
+    "requeue",
+)
 
 
 def _refusal(
@@ -57,6 +99,18 @@ def _refusal(
     """
 
     return f'WORDWINNOW_INTAKE_URL is "{value}", which is not an http:// or https:// address with a host'
+
+
+def _too_much(
+    address: str,
+    /,
+) -> str:
+    """
+    The line for an address that has more than a scheme, a host, and a port,
+    as the decided text writes it.
+    """
+
+    return f"WORDWINNOW_INTAKE_URL has more than a scheme, a host, and a port; set it to the address alone, {address}"
 
 
 def _raising(
@@ -97,15 +151,92 @@ def _answering(
     )
 
 
+def _recording(
+    response: Response,
+    seen: list[Request],
+    /,
+) -> MockTransport:
+    """
+    A transport whose every exchange ends in `response`, and which keeps each
+    request it saw in `seen`.
+    """
+
+    def handler(
+        request: Request,
+        /,
+    ) -> Response:
+        seen.append(
+            request,
+        )
+
+        return response
+
+    return MockTransport(
+        handler=handler,
+    )
+
+
+async def _asks(
+    client: IntakeClient,
+    method: str,
+    /,
+) -> object:
+    """
+    What `client` returns when it is asked through `method`, with a request
+    that has no meaning of its own.
+    """
+
+    match method:
+        case "create":
+            return await client.create(
+                request=AnalysisRequest(
+                    text="foo",
+                    title="foo",
+                    reference="foo",
+                    level=CefrLevel.A2,
+                ),
+            )
+
+        case "get":
+            return await client.get(
+                analysis_id=_ID,
+            )
+
+        case "watch":
+            return await client.watch(
+                analysis_id=_ID,
+            )
+
+        case "list_recent":
+            return await client.list_recent(
+                limit=1,
+            )
+
+        case "summarize":
+            return await client.summarize(
+                focus_limit=1,
+            )
+
+        case "requeue":
+            return await client.requeue()
+
+        case _:
+            raise ValueError(
+                f"no such method: {method}",
+            )
+
+
 async def _fails[Failure: Exception](
     transport: AsyncBaseTransport,
     expected: type[Failure],
     /,
     *,
     base_url: str = _ADDRESS,
+    method: str = "list_recent",
 ) -> Failure:
     """
-    What the client raises when it asks `transport` for the listing.
+    What the client raises when it asks `transport` through `method`, for the
+    listing unless it is told otherwise.
     """
 
     client = IntakeClient(
@@ -117,8 +248,9 @@ async def _fails[Failure: Exception](
         with raises(
             expected_exception=expected,
         ) as caught:
-            await client.list_recent(
-                limit=1,
+            await _asks(
+                client,
+                method,
             )
 
     finally:
@@ -235,24 +367,110 @@ class TestTheAddress:
             "http://intake.invalid:baz",
         )
 
-    async def test_the_address_shown_has_no_user_password_path_or_query(
+    @mark.parametrize(
+        argnames="value",
+        argvalues=(
+            "ftp://intake.invalid:8010",
+            "ws://intake.invalid:8010",
+        ),
+    )
+    def test_a_scheme_other_than_http_or_https_is_refused_before_any_request(
+        self,
+        *,
+        value: str,
+    ) -> None:
+        seen: list[Request] = []
+
+        with raises(
+            expected_exception=IntakeAddressError,
+        ) as caught:
+            IntakeClient(
+                base_url=value,
+                transport=_recording(
+                    Response(
+                        status_code=200,
+                    ),
+                    seen,
+                ),
+            )
+
+        assert not isinstance(
+            caught.value,
+            IntakeUnavailableError,
+        )
+
+        assert str(
+            object=caught.value,
+        ) == _refusal(
+            value,
+        )
+
+        assert seen == []
+
+    @mark.parametrize(
+        argnames="value",
+        argvalues=(
+            "http://intake.invalid:8010/foo",
+            "http://intake.invalid:8010//",
+            "http://intake.invalid:8010/?",
+            "http://intake.invalid:8010?qux=1",
+            "http://intake.invalid:8010#",
+            "http://intake.invalid:8010#baz",
+            "http://foo@intake.invalid:8010",
+            "http://foo:bar@intake.invalid:8010",
+            "http://@intake.invalid:8010",
+        ),
+    )
+    def test_an_address_with_more_than_a_scheme_a_host_and_a_port_is_refused_before_any_request(
+        self,
+        *,
+        value: str,
+    ) -> None:
+        seen: list[Request] = []
+
+        with raises(
+            expected_exception=IntakeAddressError,
+        ) as caught:
+            IntakeClient(
+                base_url=value,
+                transport=_recording(
+                    Response(
+                        status_code=200,
+                    ),
+                    seen,
+                ),
+            )
+
+        assert not isinstance(
+            caught.value,
+            IntakeUnavailableError,
+        )
+
+        assert str(
+            object=caught.value,
+        ) == _too_much(
+            _ADDRESS,
+        )
+
+        assert seen == []
+
+    def test_the_address_shown_has_no_user_password_path_or_query(
         self,
     ) -> None:
-        error = await _fails(
-            _raising(
-                ConnectError(
-                    message="All connection attempts failed",
-                ),
-            ),
-            IntakeUnavailableError,
-            base_url="http://foo:bar@intake.invalid:8010/baz?qux=1",
-        )
+        with raises(
+            expected_exception=IntakeAddressError,
+        ) as caught:
+            IntakeClient(
+                base_url="http://foo:bar@intake.invalid:8010/baz?qux=1",
+            )
 
         message = str(
-            object=error,
+            object=caught.value,
         )
 
-        assert "http://intake.invalid:8010" in message
+        assert message == _too_much(
+            _ADDRESS,
+        )
 
         for hidden in (
             "foo",
@@ -261,6 +479,65 @@ class TestTheAddress:
             "qux",
         ):
             assert hidden not in message
+
+        with raises(
+            expected_exception=IntakeAddressError,
+        ) as ipv6:
+            IntakeClient(
+                base_url="http://[::1]:8010/foo",
+            )
+
+        assert str(
+            object=ipv6.value,
+        ) == _too_much(
+            "http://[::1]:8010",
+        )
+
+    @mark.parametrize(
+        argnames="value",
+        argvalues=(
+            _ADDRESS,
+            f"{_ADDRESS}/",
+        ),
+    )
+    async def test_an_address_alone_is_accepted_with_or_without_a_final_slash(
+        self,
+        *,
+        value: str,
+    ) -> None:
+        seen: list[Request] = []
+
+        client = IntakeClient(
+            base_url=value,
+            transport=_recording(
+                Response(
+                    status_code=200,
+                    json=[],
+                ),
+                seen,
+            ),
+        )
+
+        try:
+            await client.list_recent(
+                limit=1,
+            )
+
+        finally:
+            await client.close()
+
+        assert [
+            (
+                request.method,
+                request.url.raw_path,
+            )
+            for request in seen
+        ] == [
+            (
+                "GET",
+                b"/analyses?limit=1",
+            ),
+        ]
 
     async def test_an_ipv6_host_is_shown_in_brackets(
         self,
@@ -596,6 +873,271 @@ class TestAnAnswerThatIsNoService:
                 object=caught.value,
             )
             == "intake POST /analyses answered HTTP 422"
+        )
+
+
+@final
+class TestAnAnswerTheCommandCannotUse:
+    @mark.parametrize(
+        argnames="method",
+        argvalues=_METHODS,
+    )
+    @mark.parametrize(
+        argnames=(
+            "status_code",
+            "headers",
+            "content",
+            "shown",
+        ),
+        argvalues=(
+            (
+                200,
+                {
+                    "content-type": "text/html; charset=utf-8",
+                },
+                b"<!doctype html><title>foo</title>",
+                "text/html",
+            ),
+            (
+                204,
+                {},
+                b"",
+                "no content type",
+            ),
+            (
+                200,
+                {
+                    "content-type": "application/json",
+                },
+                b"",
+                "application/json",
+            ),
+        ),
+    )
+    async def test_an_answer_below_300_that_is_not_json_is_another_server(
+        self,
+        *,
+        method: str,
+        status_code: int,
+        headers: dict[str, str],
+        content: bytes,
+        shown: str,
+    ) -> None:
+        error = await _fails(
+            _answering(
+                Response(
+                    status_code=status_code,
+                    headers=headers,
+                    content=content,
+                ),
+            ),
+            IntakeRejectedError,
+            method=method,
+        )
+
+        assert str(
+            object=error,
+        ) == (
+            "something answered at http://intake.invalid:8010, but not as a Wordwinnow intake service "
+            f"(HTTP {status_code}, {shown})"
+        )
+
+    @mark.parametrize(
+        argnames="method",
+        argvalues=(
+            "create",
+            "list_recent",
+        ),
+    )
+    @mark.parametrize(
+        argnames=(
+            "status_code",
+            "headers",
+            "content",
+            "shown",
+        ),
+        argvalues=(
+            (
+                301,
+                {},
+                b"",
+                "no content type",
+            ),
+            (
+                302,
+                {},
+                b"",
+                "no content type",
+            ),
+            (
+                307,
+                {},
+                b"",
+                "no content type",
+            ),
+            (
+                308,
+                {},
+                b"",
+                "no content type",
+            ),
+            (
+                307,
+                {
+                    "content-type": "application/json",
+                },
+                b"[]",
+                "application/json",
+            ),
+        ),
+    )
+    async def test_a_redirect_is_another_server_and_is_never_followed(
+        self,
+        *,
+        method: str,
+        status_code: int,
+        headers: dict[str, str],
+        content: bytes,
+        shown: str,
+    ) -> None:
+        seen: list[Request] = []
+
+        error = await _fails(
+            _recording(
+                Response(
+                    status_code=status_code,
+                    headers={
+                        "location": "http://intake.invalid:8011/",
+                        **headers,
+                    },
+                    content=content,
+                ),
+                seen,
+            ),
+            IntakeRejectedError,
+            method=method,
+        )
+
+        assert str(
+            object=error,
+        ) == (
+            "something answered at http://intake.invalid:8010, but not as a Wordwinnow intake service "
+            f"(HTTP {status_code}, {shown})"
+        )
+
+        assert (
+            len(
+                seen,
+            )
+            == 1
+        )
+
+    @mark.parametrize(
+        argnames="method",
+        argvalues=_METHODS,
+    )
+    @mark.parametrize(
+        argnames="content",
+        argvalues=(
+            b"42",
+            b"null",
+            b'{"foo": "bar"}',
+            b'[{"foo": "bar"}]',
+        ),
+    )
+    async def test_json_the_command_cannot_read_may_be_another_version(
+        self,
+        *,
+        method: str,
+        content: bytes,
+    ) -> None:
+        error = await _fails(
+            _answering(
+                Response(
+                    status_code=200,
+                    headers={
+                        "content-type": "application/json",
+                    },
+                    content=content,
+                ),
+            ),
+            IntakeRejectedError,
+            method=method,
+        )
+
+        assert str(
+            object=error,
+        ) == (
+            "the service at http://intake.invalid:8010 answered HTTP 200 with JSON this command cannot read; "
+            "if it is the intake service, its version may not match this command's"
+        )
+
+    # NOTE:
+    # The schema accepts a document of blank text and the domain refuses it, so an answer of intake's own shape can
+    # still be one the command cannot rebuild into its objects.
+    @mark.parametrize(
+        argnames="method",
+        argvalues=(
+            "get",
+            "watch",
+        ),
+    )
+    async def test_an_answer_the_command_cannot_rebuild_is_json_it_cannot_read(
+        self,
+        *,
+        method: str,
+    ) -> None:
+        wire = AnalysisOut.from_domain(
+            analysis=request_an_analysis(
+                document=Document(
+                    title="foo",
+                    text="foo",
+                    origin=DocumentOrigin.CUSTOM_TEXT,
+                    reference="foo",
+                ),
+                profile=LearnerProfile(
+                    level=CefrLevel.B1,
+                    target_level=CefrLevel.B2,
+                ),
+                options=AnalysisOptions(),
+                at=EPOCH,
+            ),
+        ).model_dump(
+            mode="json",
+        )
+
+        wire["document"]["text"] = "   "
+
+        content = dumps(
+            obj=wire,
+        ).encode()
+
+        with raises(
+            expected_exception=InvalidDocumentError,
+        ):
+            AnalysisOut.model_validate_json(
+                json_data=content,
+            ).to_domain()
+
+        error = await _fails(
+            _answering(
+                Response(
+                    status_code=200,
+                    headers={
+                        "content-type": "application/json",
+                    },
+                    content=content,
+                ),
+            ),
+            IntakeRejectedError,
+            method=method,
+        )
+
+        assert str(
+            object=error,
+        ) == (
+            "the service at http://intake.invalid:8010 answered HTTP 200 with JSON this command cannot read; "
+            "if it is the intake service, its version may not match this command's"
         )
 
 

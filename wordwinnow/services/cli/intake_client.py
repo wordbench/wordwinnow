@@ -7,7 +7,9 @@ a remote refusal the way it handles a local one.
 """
 
 from collections.abc import (
+    Callable,
     Mapping,
+    Sequence,
 )
 from dataclasses import (
     dataclass,
@@ -27,11 +29,14 @@ from httpx2 import (
     ConnectError,
     ConnectTimeout,
     HTTPError,
-    InvalidURL,
     PoolTimeout,
     ReadTimeout,
     Response,
     WriteTimeout,
+)
+from pydantic import (
+    TypeAdapter,
+    ValidationError,
 )
 
 from wordwinnow.application.dto import (
@@ -53,6 +58,11 @@ from wordwinnow.domain.analysis import (
 )
 from wordwinnow.domain.identifiers import (
     AnalysisId,
+)
+from wordwinnow.services.cli.addresses import (
+    name_address,
+    parse_address,
+    refusal,
 )
 from wordwinnow.services.intake.schemas import (
     AnalysisAccepted,
@@ -87,6 +97,9 @@ class IntakeRejectedError(
     failure of the request itself, or one it named that only a remote command
     can meet, such as an address it does not answer to.
 
+    It is raised too for an answer that the command cannot use: a redirect, a
+    body that is not JSON, or JSON that the command cannot read.
+
     What answered may not be the intake service, which the message says when
     the answer shows it.
 
@@ -100,7 +113,11 @@ class IntakeAddressError(
 ):
     """
     Raised when the configured address of the intake service is not an http://
-    or https:// address with a host.
+    or https:// address with a host, or has more than a scheme, a host, and a
+    port.
+
+    Given `alone`, the address of a value that has more, the message says to
+    set the setting to it.
 
     Not retryable: an address does not mend by waiting.
     """
@@ -109,22 +126,15 @@ class IntakeAddressError(
         self,
         *,
         value: str,
+        alone: str | None = None,
     ) -> None:
-        (
-            _,
-            at,
-            tail,
-        ) = value.rpartition(
-            "@",
-        )
-
-        # NOTE:
-        # What comes before the last @ is where an address keeps its user and its password, so it never reaches a
-        # message that a terminal, a log, or a screenshot may carry.
-        shown = f"…@{tail}" if at else value
-
         super().__init__(
-            f'WORDWINNOW_INTAKE_URL is "{shown}", which is not an http:// or https:// address with a host',
+            refusal(
+                setting=_SETTING,
+                value=value,
+            )
+            if alone is None
+            else f"{_SETTING} has more than a scheme, a host, and a port; set it to the address alone, {alone}",
         )
 
 
@@ -156,11 +166,18 @@ _SERVICES: Final = (
 # One timeout for every exchange, which the client applies and a message names, so that the two never differ.
 _TIMEOUT_SECONDS: Final = 60.0
 
-_SCHEMES: Final = frozenset(
-    (
-        "http",
-        "https",
-    ),
+# NOTE:
+# The setting the client's address comes from, which a message names so that a learner knows what to change.
+_SETTING: Final = "WORDWINNOW_INTAKE_URL"
+
+# NOTE:
+# Each of these in a value is more than a scheme, a host, and a port, wherever it stands: httpx2 keeps an empty `?` in
+# the path it sends, so that the request goes to `/?limit=1`, and drops an empty `#` and an empty `@`, so one rule on
+# the value as written keeps the refusal's line true of every value it refuses.
+_MORE_THAN_AN_ADDRESS: Final = (
+    "?",
+    "#",
+    "@",
 )
 
 # NOTE:
@@ -175,6 +192,29 @@ _NOT_INTAKE_STATUSES: Final = frozenset(
 )
 
 _NOT_INTAKE_MEDIA_TYPE: Final = "text/html"
+
+# NOTE:
+# Each answer's body is read as one value, so that a scalar, a null, or an object where a list belongs is JSON the
+# command cannot read, and no entry of a list is read by itself before the rest is known to be a list.
+_ACCEPTED: Final = TypeAdapter(
+    type=AnalysisAccepted,
+)
+
+_ANALYSIS: Final = TypeAdapter(
+    type=AnalysisOut,
+)
+
+_LISTING: Final = TypeAdapter(
+    type=list[AnalysisSummaryOut],
+)
+
+_SUMMARY: Final = TypeAdapter(
+    type=VocabularySummaryOut,
+)
+
+_REQUEUED: Final = TypeAdapter(
+    type=RequeueResult,
+)
 
 
 @dataclass(
@@ -204,7 +244,7 @@ class IntakeClient:
     `otherwise`, what a learner can do instead.
 
     Raises `IntakeAddressError` when `base_url` is not an http:// or https://
-    address with a host.
+    address with a host, or has more than a scheme, a host, and a port.
     """
 
     def __init__(
@@ -221,8 +261,8 @@ class IntakeClient:
 
         tail = "" if otherwise is None else f"; {otherwise}"
 
-        self._address: Final = _address(
-            url,
+        self._address: Final = name_address(
+            url=url,
         )
 
         self._needs: Final = f"{needed_by} needs {_SERVICES}{tail}"
@@ -244,16 +284,19 @@ class IntakeClient:
 
     # NOTE:
     # The method and the path are structural and the body and the query are configuration, which is the split httpx2's
-    # own `request(method, url, *, ...)` makes.
-    async def _request(
+    # own `request(method, url, *, ...)` makes; what the answer is read as and rebuilt into are structural too, and
+    # every method passes through here, so none can read an answer without the order `_raise_for` and `_read` keep.
+    async def _request[Wire, Answer](
         self,
         method: str,
         path: str,
+        wire: TypeAdapter[Wire],
+        build: Callable[[Wire], Answer],
         /,
         *,
         json: Mapping[str, object] | None = None,
         params: Mapping[str, int] | None = None,
-    ) -> Response:
+    ) -> Answer:
         try:
             response = await self._client.request(
                 method=method,
@@ -276,7 +319,12 @@ class IntakeClient:
             self._address,
         )
 
-        return response
+        return _read(
+            response,
+            self._address,
+            wire,
+            build,
+        )
 
     def _unavailable(
         self,
@@ -332,17 +380,15 @@ class IntakeClient:
         Ask for an analysis.
         """
 
-        response = await self._request(
+        return await self._request(
             "POST",
             "/analyses",
+            _ACCEPTED,
+            _unchanged,
             json=request.model_dump(
                 mode="json",
                 exclude_none=True,
             ),
-        )
-
-        return AnalysisAccepted.model_validate_json(
-            json_data=response.content,
         )
 
     async def get(
@@ -354,14 +400,12 @@ class IntakeClient:
         Read an analysis back.
         """
 
-        response = await self._request(
+        return await self._request(
             "GET",
             f"/analyses/{analysis_id}",
+            _ANALYSIS,
+            AnalysisOut.to_domain,
         )
-
-        return AnalysisOut.model_validate_json(
-            json_data=response.content,
-        ).to_domain()
 
     async def watch(
         self,
@@ -372,18 +416,11 @@ class IntakeClient:
         Read an analysis back with how far a worker has come with it.
         """
 
-        response = await self._request(
+        return await self._request(
             "GET",
             f"/analyses/{analysis_id}",
-        )
-
-        out = AnalysisOut.model_validate_json(
-            json_data=response.content,
-        )
-
-        return WatchedAnalysis(
-            analysis=out.to_domain(),
-            progress=out.processing_progress(),
+            _ANALYSIS,
+            _watched,
         )
 
     async def list_recent(
@@ -391,19 +428,14 @@ class IntakeClient:
         *,
         limit: int,
     ) -> tuple[AnalysisSummary, ...]:
-        response = await self._request(
+        return await self._request(
             "GET",
             "/analyses",
+            _LISTING,
+            _listed,
             params={
                 "limit": limit,
             },
-        )
-
-        return tuple(
-            AnalysisSummaryOut.model_validate(
-                obj=entry,
-            ).to_domain()
-            for entry in response.json()
         )
 
     async def summarize(
@@ -411,33 +443,24 @@ class IntakeClient:
         *,
         focus_limit: int,
     ) -> VocabularySummary:
-        response = await self._request(
+        return await self._request(
             "GET",
             "/vocabulary/summary",
+            _SUMMARY,
+            VocabularySummaryOut.to_domain,
             params={
                 "focus_limit": focus_limit,
             },
         )
 
-        return VocabularySummaryOut.model_validate_json(
-            json_data=response.content,
-        ).to_domain()
-
     async def requeue(
         self,
     ) -> tuple[AnalysisId, ...]:
-        response = await self._request(
+        return await self._request(
             "POST",
             "/analyses/requeue",
-        )
-
-        return tuple(
-            AnalysisId(
-                value=value,
-            )
-            for value in RequeueResult.model_validate_json(
-                json_data=response.content,
-            ).analysis_ids
+            _REQUEUED,
+            _requeued,
         )
 
 
@@ -447,46 +470,32 @@ def _parsed(
 ) -> URL:
     """
     The address as the client uses it, or `IntakeAddressError` when it is not
-    an http:// or https:// address with a host.
+    an http:// or https:// address with a host, or has more than a scheme, a
+    host, and a port.
     """
 
-    try:
-        url = URL(
-            url=base_url,
+    url = parse_address(
+        value=base_url,
+    )
+
+    if url is None:
+        raise IntakeAddressError(
+            value=base_url,
         )
 
-    except InvalidURL as exception:
+    # NOTE:
+    # Intake serves its routes at the root of its address and authenticates no one, so a path is always a mistake, and
+    # a user and a password protect nothing; the path is read as httpx2 parses it, which holds `/` for an address
+    # alone and `//` for a second slash, and the three marks are read in the value as written.
+    if url.path != "/" or any(mark in base_url for mark in _MORE_THAN_AN_ADDRESS):
         raise IntakeAddressError(
             value=base_url,
-        ) from exception
-
-    if url.scheme not in _SCHEMES or not url.host:
-        raise IntakeAddressError(
-            value=base_url,
+            alone=name_address(
+                url=url,
+            ),
         )
 
     return url
-
-
-def _address(
-    url: URL,
-    /,
-) -> str:
-    """
-    The scheme, host, and port of `url`, which is what a message names of the
-    service.
-    """
-
-    # NOTE:
-    # Only where the client connects, never the user, the password, the path, the query, or the fragment, which may
-    # hold a secret that a terminal, a log, or a screenshot must not carry.
-    #
-    # An IPv6 host is written in brackets, as it is in an address.
-    host = f"[{url.host}]" if ":" in url.host else url.host
-
-    port = "" if url.port is None else f":{url.port}"
-
-    return f"{url.scheme}://{host}{port}"
 
 
 def _media_type(
@@ -513,6 +522,42 @@ def _media_type(
     )
 
 
+def _not_intake(
+    response: Response,
+    address: str,
+    /,
+) -> IntakeRejectedError:
+    """
+    The error for an answer that another server gave, as its status and its
+    media type show.
+    """
+
+    media_type = _media_type(
+        response,
+    )
+
+    return IntakeRejectedError(
+        f"something answered at {address}, but not as a Wordwinnow intake service (HTTP {response.status_code}, "
+        f"{media_type or 'no content type'})",
+    )
+
+
+def _unreadable(
+    response: Response,
+    address: str,
+    /,
+) -> IntakeRejectedError:
+    """
+    The error for an answer that is JSON the command cannot read, which a
+    different version of the intake service may have given.
+    """
+
+    return IntakeRejectedError(
+        f"the service at {address} answered HTTP {response.status_code} with JSON this command cannot read; if it is "
+        "the intake service, its version may not match this command's",
+    )
+
+
 def _rejection(
     response: Response,
     method: str,
@@ -532,9 +577,9 @@ def _rejection(
     )
 
     if status in _NOT_INTAKE_STATUSES or media_type == _NOT_INTAKE_MEDIA_TYPE:
-        return IntakeRejectedError(
-            f"something answered at {address}, but not as a Wordwinnow intake service (HTTP {status}, "
-            f"{media_type or 'no content type'})",
+        return _not_intake(
+            response,
+            address,
         )
 
     if status >= 500:
@@ -554,8 +599,18 @@ def _raise_for(
     address: str,
     /,
 ) -> None:
-    if response.status_code < 400:
+    if response.status_code < 300:
         return
+
+    # NOTE:
+    # A redirect is never followed, as httpx2's default already has it, because a 307 or a 308 would send the body of
+    # a request, a learner's text among them, wherever the redirect points; intake gives no command a redirect, so one
+    # came from another server, whatever it sends as the body.
+    if response.status_code < 400:
+        raise _not_intake(
+            response,
+            address,
+        )
 
     # NOTE:
     # A problem the service named is raised as the error it stands for, whatever its status; anything else is a
@@ -576,4 +631,102 @@ def _raise_for(
 
     raise _ERRORS[problem.type](
         problem.detail,
+    )
+
+
+def _read[Wire, Answer](
+    response: Response,
+    address: str,
+    wire: TypeAdapter[Wire],
+    build: Callable[[Wire], Answer],
+    /,
+) -> Answer:
+    """
+    What an answer below 300 says, read as `wire` and rebuilt by `build`: the
+    error for another server when the body is not JSON, and the error for JSON
+    the command cannot read when the body is not what `wire` describes or
+    cannot be rebuilt.
+    """
+
+    try:
+        value = wire.validate_json(
+            response.content,
+        )
+
+    except ValidationError as exception:
+        # NOTE:
+        # Pydantic reports a body that is no JSON, an empty one included, as `json_invalid` and as nothing else, which
+        # is what tells it from JSON of another shape, so that the body decides and the media type does not.
+        if any(error["type"] == "json_invalid" for error in exception.errors()):
+            raise _not_intake(
+                response,
+                address,
+            ) from exception
+
+        raise _unreadable(
+            response,
+            address,
+        ) from exception
+
+    try:
+        return build(
+            value,
+        )
+
+    except ValueError as exception:
+        raise _unreadable(
+            response,
+            address,
+        ) from exception
+
+
+def _unchanged[Answer](
+    answer: Answer,
+    /,
+) -> Answer:
+    """
+    `answer` as it is, for an answer that the command uses as it was read.
+    """
+
+    return answer
+
+
+def _watched(
+    out: AnalysisOut,
+    /,
+) -> WatchedAnalysis:
+    """
+    The analysis `out` describes, with how far a worker has come with it.
+    """
+
+    return WatchedAnalysis(
+        analysis=out.to_domain(),
+        progress=out.processing_progress(),
+    )
+
+
+def _listed(
+    entries: Sequence[AnalysisSummaryOut],
+    /,
+) -> tuple[AnalysisSummary, ...]:
+    """
+    The analyses `entries` describe.
+    """
+
+    return tuple(entry.to_domain() for entry in entries)
+
+
+def _requeued(
+    result: RequeueResult,
+    /,
+) -> tuple[AnalysisId, ...]:
+    """
+    The analyses `result` says went back to the workers.
+    """
+
+    return tuple(
+        AnalysisId(
+            value=value,
+        )
+        for value in result.analysis_ids
     )

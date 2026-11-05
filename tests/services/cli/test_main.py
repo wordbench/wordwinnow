@@ -16,7 +16,8 @@ from datetime import (
     timedelta,
 )
 from io import (
-    StringIO,
+    BytesIO,
+    TextIOWrapper,
 )
 from json import (
     loads,
@@ -28,9 +29,6 @@ from re import (
     match,
     search,
 )
-from types import (
-    MappingProxyType,
-)
 from typing import (
     Final,
     final,
@@ -38,6 +36,9 @@ from typing import (
 
 from httpx2 import (
     AsyncBaseTransport,
+    MockTransport,
+    Request,
+    Response,
 )
 from platformdirs import (
     user_data_path,
@@ -114,6 +115,7 @@ from wordwinnow.services.cli import (
 )
 from wordwinnow.services.cli.intake_client import (
     IntakeAddressError,
+    IntakeRejectedError,
     WatchedAnalysis,
 )
 from wordwinnow.services.cli.main import (
@@ -127,6 +129,7 @@ from wordwinnow.services.progress import (
     UNWATCHED,
     AnalysisProgress,
     DictionaryWatch,
+    RemoteAnalysisProgress,
 )
 
 _TEXT: Final = (
@@ -135,14 +138,25 @@ _TEXT: Final = (
 
 _runner: Final = CliRunner()
 
-# NOTE:
-# An error line is longer than the 80 columns Rich assumes of an output that is no terminal, and Rich breaks a longer
-# line at the console's width, so a test that reads such a line as one gives the console room for the whole of it.
-_WIDE: Final = MappingProxyType(
-    mapping={
-        "COLUMNS": "200",
-    },
-)
+
+def _standard_input(
+    content: bytes,
+    /,
+    *,
+    errors: str = "strict",
+) -> TextIOWrapper:
+    """
+    A text stream over `content`, as standard input is: the command reads the
+    bytes from its buffer, and `errors` says how the stream itself decodes.
+    """
+
+    return TextIOWrapper(
+        buffer=BytesIO(
+            initial_bytes=content,
+        ),
+        encoding="utf-8",
+        errors=errors,
+    )
 
 
 def _words(
@@ -696,8 +710,8 @@ class TestCli:
         monkeypatch.setattr(
             target=main,
             name="stdin",
-            value=StringIO(
-                initial_value=_TEXT,
+            value=_standard_input(
+                _TEXT.encode(),
             ),
         )
 
@@ -727,8 +741,8 @@ class TestCli:
         monkeypatch.setattr(
             target=main,
             name="stdin",
-            value=StringIO(
-                initial_value="\f\n",
+            value=_standard_input(
+                b"\f\n",
             ),
         )
 
@@ -1762,7 +1776,6 @@ class TestAnIntakeThatCannotServe:
                 "list",
                 "--remote",
             ],
-            env=_WIDE,
         )
 
         assert result.exit_code == 1
@@ -1789,7 +1802,6 @@ class TestAnIntakeThatCannotServe:
                 "list",
                 "--remote",
             ],
-            env=_WIDE,
         )
 
         assert result.exit_code == 1
@@ -1819,6 +1831,233 @@ class TestAnIntakeThatCannotServe:
         )
 
         assert result.exit_code == 0, result.output
+
+        assert not services_called
+
+    @mark.parametrize(
+        argnames=(
+            "headers",
+            "content",
+            "line",
+        ),
+        argvalues=(
+            (
+                {
+                    "content-type": "text/html; charset=utf-8",
+                },
+                b"<!doctype html><title>foo</title>",
+                "error: something answered at http://intake.invalid:8010, but not as a Wordwinnow intake service "
+                "(HTTP 200, text/html)",
+            ),
+            (
+                {
+                    "content-type": "application/json",
+                },
+                b'{"foo": "bar"}',
+                "error: the service at http://intake.invalid:8010 answered HTTP 200 with JSON this command cannot "
+                "read; if it is the intake service, its version may not match this command's",
+            ),
+        ),
+        ids=(
+            "a page",
+            "json of another shape",
+        ),
+    )
+    def test_an_answer_that_is_not_intake_ends_analyze_in_one_line_with_status_one(
+        self,
+        *,
+        workspace: Path,
+        monkeypatch: MonkeyPatch,
+        headers: dict[str, str],
+        content: bytes,
+        line: str,
+    ) -> None:
+        monkeypatch.setenv(
+            name="WORDWINNOW_INTAKE_URL",
+            value="http://intake.invalid:8010",
+        )
+
+        monkeypatch.setattr(
+            target=main,
+            name="stdin",
+            value=_standard_input(
+                _TEXT.encode(),
+            ),
+        )
+
+        remotely = commands.analyze_remotely
+
+        def handler(
+            request: Request,
+            /,
+        ) -> Response:
+            return Response(
+                status_code=200,
+                headers=headers,
+                content=content,
+            )
+
+        async def analyze_remotely(
+            *,
+            request: AnalysisRequest,
+            settings: Settings,
+            wait: bool,
+            timeout_seconds: float,
+            progress: RemoteAnalysisProgress = UNWATCHED,
+            watch: DictionaryWatch | None = None,
+        ) -> Analysis:
+            return await remotely(
+                request=request,
+                settings=settings,
+                wait=wait,
+                timeout_seconds=timeout_seconds,
+                transport=MockTransport(
+                    handler=handler,
+                ),
+                progress=progress,
+                watch=watch,
+            )
+
+        monkeypatch.setattr(
+            target=commands,
+            name="analyze_remotely",
+            value=analyze_remotely,
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "analyze",
+                "-",
+                "--remote",
+                "--level",
+                "B1",
+                "--no-dictionary",
+            ],
+        )
+
+        assert result.exit_code == 1, result.output
+
+        assert result.output == f"{line}\n"
+
+    def test_a_control_character_in_an_error_line_is_shown_escaped(
+        self,
+        *,
+        workspace: Path,
+        monkeypatch: MonkeyPatch,
+    ) -> None:
+        async def list_recent(
+            *,
+            settings: Settings,
+            local: bool,
+            limit: int,
+            transport: AsyncBaseTransport | None = None,
+        ) -> tuple[AnalysisSummary, ...]:
+            raise IntakeRejectedError(
+                "foo\x1b[2Jbar\nbaz\rqux\t\x00\x7f\x9b",
+            )
+
+        monkeypatch.setattr(
+            target=commands,
+            name="list_recent",
+            value=list_recent,
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "list",
+                "--remote",
+            ],
+        )
+
+        assert result.exit_code == 1
+
+        assert result.output == "error: foo\\x1b[2Jbar\\nbaz\\rqux\\t\\x00\\x7f\\x9b\n"
+
+    def test_a_final_backslash_prints_as_written(
+        self,
+        *,
+        workspace: Path,
+        monkeypatch: MonkeyPatch,
+    ) -> None:
+        async def list_recent(
+            *,
+            settings: Settings,
+            local: bool,
+            limit: int,
+            transport: AsyncBaseTransport | None = None,
+        ) -> tuple[AnalysisSummary, ...]:
+            raise IntakeRejectedError(
+                "foo\\",
+            )
+
+        monkeypatch.setattr(
+            target=commands,
+            name="list_recent",
+            value=list_recent,
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "list",
+                "--remote",
+            ],
+        )
+
+        assert result.exit_code == 1
+
+        assert result.output == "error: foo\\\n"
+
+    @mark.parametrize(
+        argnames="remote",
+        argvalues=(
+            False,
+            True,
+        ),
+        ids=(
+            "local",
+            "remote",
+        ),
+    )
+    def test_standard_input_that_is_not_utf8_is_refused_in_one_line(
+        self,
+        *,
+        workspace: Path,
+        services_called: list[str],
+        monkeypatch: MonkeyPatch,
+        remote: bool,
+    ) -> None:
+        # NOTE:
+        # A stream that takes the bytes in as the POSIX locale does, with `surrogateescape`, where a stream's own
+        # `read` would hand the command text that fails later and not at once.
+        monkeypatch.setattr(
+            target=main,
+            name="stdin",
+            value=_standard_input(
+                b"caf\xe9",
+                errors="surrogateescape",
+            ),
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "analyze",
+                "-",
+                *(("--remote",) if remote else ()),
+                "--level",
+                "B1",
+                "--no-dictionary",
+            ],
+        )
+
+        assert result.exit_code == 1
+
+        assert result.output == "error: standard input is not UTF-8 text\n"
+
+        assert not (workspace / "wordwinnow.db").exists()
 
         assert not services_called
 

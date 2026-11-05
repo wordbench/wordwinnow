@@ -2623,3 +2623,158 @@ class TestWhatTheEnrichmentClientSends:
             )
             == ()
         )
+
+
+@final
+class TestTheAddressTheEnrichmentClientNames:
+    @mark.parametrize(
+        argnames=(
+            "base_url",
+            "refuses",
+            "line",
+        ),
+        argvalues=(
+            (
+                "http://foo:bar@enrichment.invalid:8100/baz?qux=1",
+                True,
+                "the enrichment service does not answer at http://enrichment.invalid:8100",
+            ),
+            (
+                "http://foo:bar@enrichment.invalid:8100/baz?qux=1",
+                False,
+                "the enrichment service at http://enrichment.invalid:8100 answered something other than its activity",
+            ),
+            (
+                "http://[::1]:8100",
+                True,
+                "the enrichment service does not answer at http://[::1]:8100",
+            ),
+        ),
+        ids=(
+            "no answer",
+            "something other than its activity",
+            "an IPv6 host",
+        ),
+    )
+    async def test_the_enrichment_address_shown_has_no_user_password_path_or_query(
+        self,
+        *,
+        base_url: str,
+        refuses: bool,
+        line: str,
+    ) -> None:
+        def handler(
+            request: Request,
+            /,
+        ) -> Response:
+            if refuses:
+                raise ConnectError(
+                    message="All connection attempts failed",
+                )
+
+            return Response(
+                status_code=200,
+                json={
+                    "status": "ok",
+                },
+            )
+
+        client = EnrichmentClient(
+            base_url=base_url,
+            transport=MockTransport(
+                handler=handler,
+            ),
+        )
+
+        try:
+            with raises(
+                expected_exception=ActivityUnreadableError,
+            ) as caught:
+                await client.activity()
+
+        finally:
+            await client.close()
+
+        message = str(
+            object=caught.value,
+        )
+
+        assert message == line
+
+        for hidden in (
+            "foo",
+            "bar",
+            "baz",
+            "qux",
+        ):
+            assert hidden not in message
+
+    @mark.parametrize(
+        argnames=(
+            "value",
+            "shown",
+        ),
+        argvalues=(
+            (
+                "localhost:8100",
+                "localhost:8100",
+            ),
+            (
+                "not a url",
+                "not a url",
+            ),
+            (
+                "ftp://enrichment.invalid:8100",
+                "ftp://enrichment.invalid:8100",
+            ),
+            (
+                "http://enrichment.invalid:baz",
+                "http://enrichment.invalid:baz",
+            ),
+            (
+                "foo:bar@localhost:8100",
+                "…@localhost:8100",
+            ),
+        ),
+    )
+    async def test_an_enrichment_value_that_is_no_address_is_named_and_asked_nothing(
+        self,
+        *,
+        value: str,
+        shown: str,
+    ) -> None:
+        seen: list[Request] = []
+
+        def handler(
+            request: Request,
+            /,
+        ) -> Response:
+            seen.append(
+                request,
+            )
+
+            return Response(
+                status_code=200,
+            )
+
+        client = EnrichmentClient(
+            base_url=value,
+            transport=MockTransport(
+                handler=handler,
+            ),
+        )
+
+        try:
+            with raises(
+                expected_exception=ActivityUnreadableError,
+            ) as caught:
+                await client.activity()
+
+        finally:
+            await client.close()
+
+        assert str(
+            object=caught.value,
+        ) == (f'WORDWINNOW_ENRICHMENT_URL is "{shown}", which is not an http:// or https:// address with a host')
+
+        assert seen == []

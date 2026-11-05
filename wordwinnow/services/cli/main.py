@@ -43,8 +43,8 @@ from pydantic import (
 from rich.console import (
     Console,
 )
-from rich.markup import (
-    escape,
+from rich.text import (
+    Text,
 )
 from typer import (
     Argument,
@@ -309,23 +309,77 @@ def _settings() -> Settings:
     return settings
 
 
+# NOTE:
+# The three control characters that have a name of their own, written as that name.
+_NAMED_CONTROLS: Final = MappingProxyType(
+    mapping={
+        9: "\\t",
+        10: "\\n",
+        13: "\\r",
+    },
+)
+
+# NOTE:
+# Every character whose Unicode general category is `Cc`, U+0000 to U+001F and U+007F to U+009F, and no other, with
+# its escape: a named one as `\n` is written, and each other as `\x` and two lower-case hexadecimal digits.
+#
+# A backslash already in a message stays one, so the form is for reading and is not reversible.
+_CONTROLS: Final = MappingProxyType(
+    mapping={
+        code: _NAMED_CONTROLS.get(
+            code,
+            f"\\x{code:02x}",
+        )
+        for code in (
+            *range(
+                0x20,
+            ),
+            *range(
+                0x7F,
+                0xA0,
+            ),
+        )
+    },
+)
+
+
+def _visible(
+    message: str,
+    /,
+) -> str:
+    """
+    `message` with each control character written as a visible escape.
+    """
+
+    return message.translate(
+        _CONTROLS,
+    )
+
+
 def _fail(
     exception: Exception,
     /,
 ) -> Exit:
     # NOTE:
-    # What an error echoes back, such as an address with a bracket in it, prints as it was given: the message is
-    # escaped so that Rich does not read it as markup, and emoji codes are left alone, while the highlighting of a URL
-    # or a number stays what it was.
+    # What an error echoes back prints as it was given, a bracket and a final backslash included: the prefix is a
+    # `Text` and the message prints with markup off, so that Rich reads no markup in it, emoji codes are left alone,
+    # and the highlighting of a URL or a number stays what it was.
+    #
+    # The line is one physical line whatever the width of the output, which `soft_wrap` keeps and the escapes make
+    # true of a message that holds a line feed, so that an answer cannot break the line or drive the terminal.
     _errors.print(
-        f"[red]error:[/] {
-            escape(
-                markup=str(
-                    object=exception,
-                ),
-            )
-        }",
+        Text(
+            text="error:",
+            style="red",
+        ),
+        _visible(
+            str(
+                object=exception,
+            ),
+        ),
         emoji=False,
+        markup=False,
+        soft_wrap=True,
     )
 
     return Exit(
@@ -619,8 +673,22 @@ def _request(
         )
         == "-"
     ):
+        # NOTE:
+        # The bytes are read and decoded here and not by the stream, whose decoding follows the locale: under the
+        # POSIX locale Python reads standard input with `surrogateescape`, which takes bytes that are no UTF-8 in and
+        # lets them fail later, so the stream's own `read` would refuse them in some locales and not in others.
+        try:
+            text = stdin.buffer.read().decode(
+                encoding="utf-8-sig",
+            )
+
+        except UnicodeDecodeError as exception:
+            raise SourceRejectedError(
+                "standard input is not UTF-8 text",
+            ) from exception
+
         return AnalysisRequest(
-            text=stdin.read(),
+            text=text,
             title="standard input",
             reference="stdin",
             level=level,

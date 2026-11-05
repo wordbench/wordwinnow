@@ -25,6 +25,11 @@ from wordwinnow.infrastructure.dictionary.activity import (
     DictionaryActivity,
     from_payload,
 )
+from wordwinnow.services.cli.addresses import (
+    name_address,
+    parse_address,
+    refusal,
+)
 from wordwinnow.services.progress import (
     ActivityUnreadableError,
 )
@@ -39,11 +44,19 @@ PUBLISHED_URL: Final = "http://127.0.0.1:8100"
 # The activity is read four times a second, so an answer slower than a second is of no use to the view.
 _TIMEOUT_SECONDS: Final = 1.0
 
+# NOTE:
+# The setting the client's address comes from, which a message names so that an operator knows what to change.
+_SETTING: Final = "WORDWINNOW_ENRICHMENT_URL"
+
 
 @final
 class EnrichmentClient:
     """
     Reads what the enrichment service's dictionary is doing.
+
+    A `base_url` that is not an http:// or https:// address with a host raises
+    nothing when the client is built; asking for the activity then raises an
+    `ActivityUnreadableError` that names the value, and makes no request.
     """
 
     def __init__(
@@ -52,11 +65,31 @@ class EnrichmentClient:
         base_url: str,
         transport: AsyncBaseTransport | None = None,
     ) -> None:
-        self._base_url: Final = base_url
+        url = parse_address(
+            value=base_url,
+        )
+
+        # NOTE:
+        # The address is parsed once, here, and never raises, whatever the string, because the view shows a value that
+        # is no address as its reason and the analysis goes on, which a raise here would stop; a message names the
+        # parsed address, as the intake client's does, and the path, the query, and the user and password of a usable
+        # one are kept and sent.
+        self._address: Final = (
+            None
+            if url is None
+            else name_address(
+                url=url,
+            )
+        )
+
+        self._refusal: Final = refusal(
+            setting=_SETTING,
+            value=base_url,
+        )
 
         self._client: Final = AsyncClient(
             timeout=_TIMEOUT_SECONDS,
-            base_url=base_url,
+            base_url="" if url is None else url,
             transport=transport,
         )
 
@@ -76,6 +109,11 @@ class EnrichmentClient:
         What the dictionary is doing now.
         """
 
+        if self._address is None:
+            raise ActivityUnreadableError(
+                self._refusal,
+            )
+
         try:
             response = await self._client.get(
                 url="/activity",
@@ -83,7 +121,7 @@ class EnrichmentClient:
 
         except HTTPError as exception:
             raise ActivityUnreadableError(
-                f"the enrichment service does not answer at {self._base_url}",
+                f"the enrichment service does not answer at {self._address}",
             ) from exception
 
         if response.status_code == 404:
@@ -103,7 +141,7 @@ class EnrichmentClient:
 
         except ValidationError as exception:
             raise ActivityUnreadableError(
-                f"the enrichment service at {self._base_url} answered something other than its activity",
+                f"the enrichment service at {self._address} answered something other than its activity",
             ) from exception
 
         return from_payload(
