@@ -778,12 +778,29 @@ class TestInstalledWheel:
             installation.listing,
         )
 
-        assert (
-            "completed"
-            in _succeeded(
-                installation.shown,
-            ).stdout
+        # NOTE:
+        # The report a learner meets first, from the wheel, at the 80 columns a pipe gives: the command that shows the
+        # analysis again with its id, within the budget of 90 lines for the sample story, and no cell cut.
+        shown = _succeeded(
+            installation.shown,
+        ).stdout
+
+        assert f"wordwinnow show {analysis_id} shows this again." in _words(
+            shown,
         ), _transcript(
+            installation.shown,
+        )
+
+        assert (
+            len(
+                shown.splitlines(),
+            )
+            <= 90
+        ), _transcript(
+            installation.shown,
+        )
+
+        assert "…" not in shown, _transcript(
             installation.shown,
         )
 

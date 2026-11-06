@@ -611,6 +611,16 @@ The activity names the words in flight, as each lookup a worker sends does,
 and like every port the stack publishes, the enrichment service's listens on
 127.0.0.1 alone.
 
+After the report, on standard error, the view prints the analysis's figures
+under a line that names it: a failed analysis's whole reason first, then the
+origin and reference of its text and its status, and, once it has completed,
+where its levels came from, what the dictionary answered when it was asked,
+the queue wait, and the seconds of each stage.
+
+`show --view operator` prints them for a stored analysis too, and with `--json` or
+`--csv` they stay on standard error, so what a program or a file reads from
+standard output is unchanged.
+
 ### The terms, and what each row counts
 
 The panel counts words, lookups, and requests, three different things, and

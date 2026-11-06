@@ -73,10 +73,13 @@ from wordwinnow.domain.analysis import (
     AnalysisOptions,
     AnalysisStatus,
     Stage,
+    StageTiming,
     request_an_analysis,
 )
 from wordwinnow.domain.cefr import (
     CefrLevel,
+    LevelAssessment,
+    LevelSource,
 )
 from wordwinnow.domain.document import (
     Document,
@@ -85,8 +88,21 @@ from wordwinnow.domain.document import (
 from wordwinnow.domain.identifiers import (
     AnalysisId,
 )
+from wordwinnow.domain.language import (
+    PartOfSpeech,
+)
 from wordwinnow.domain.learner import (
     LearnerProfile,
+)
+from wordwinnow.domain.senses import (
+    LexicalSense,
+)
+from wordwinnow.domain.study import (
+    StudyItem,
+    StudyTier,
+)
+from wordwinnow.domain.vocabulary import (
+    VocabularyItem,
 )
 from wordwinnow.infrastructure.composition import (
     API_SOURCES,
@@ -404,7 +420,9 @@ class TestCli:
 
         assert "drunken" in shown.output
 
-        assert "completed" in shown.output
+        assert f"wordwinnow show {analysis_id} shows this again." in _words(
+            shown.output,
+        )
 
         cards = _runner.invoke(
             app=app,
@@ -622,7 +640,7 @@ class TestCli:
 
         assert table.exit_code == 0, table.output
 
-        assert "showing 1 of" in table.output
+        assert "Showing 1 of" in table.output
 
         assert "--rows raises the limit" in table.output
 
@@ -825,7 +843,34 @@ class TestCli:
 
         assert result.exit_code == 1
 
-        assert "the tagger was not there" in result.output
+        # NOTE:
+        # The learner is told the code to quote and where the whole reason is, which only the operator's view prints.
+        assert "Status failed: Wordwinnow met an internal error, code RuntimeError; run wordwinnow doctor" in _words(
+            result.output,
+        )
+
+        assert "the tagger was not there" not in result.output
+
+        operator = _runner.invoke(
+            app=app,
+            args=[
+                "analyze",
+                "a-scandal-in-bohemia.txt",
+                "--local",
+                "--level",
+                "B1",
+                "--view",
+                "operator",
+            ],
+        )
+
+        assert operator.exit_code == 1
+
+        assert "Failure RuntimeError: the tagger was not there" in _words(
+            operator.stderr,
+        )
+
+        assert "the tagger was not there" not in operator.stdout
 
     def test_doctor_reports_an_unusable_model_and_exits_one(
         self,
@@ -1076,23 +1121,64 @@ class TestCli:
 
         assert result.exit_code == 0, result.output
 
-        assert (
-            loads(
-                s=result.stdout,
-            )["status"]
-            == "completed"
+        payload = loads(
+            s=result.stdout,
         )
+
+        assert payload["status"] == "completed"
+
+        lines = result.stderr.splitlines()
+
+        figures_at = next(
+            (
+                index
+                for (
+                    index,
+                    line,
+                ) in enumerate(
+                    iterable=lines,
+                )
+                if line.startswith(
+                    "Analysis ",
+                )
+            ),
+            None,
+        )
+
+        records = lines if figures_at is None else lines[: figures_at - 1]
 
         # NOTE:
         # Standard error holds log records and nothing else, not even the blank line a progress display leaves behind
-        # on a stream that is not a terminal.
+        # on a stream that is not a terminal; the operator's view then adds the analysis's figures after them, which
+        # the learner's view never prints.
         assert all(
             match(
                 pattern=r"\d\d:\d\d:\d\d\.\d{3} (?:DEBUG|INFO|WARNING|ERROR) ",
                 string=line,
             )
-            for line in result.stderr.splitlines()
+            for line in records
         )
+
+        if view == "learner":
+            assert figures_at is None
+
+        else:
+            assert figures_at is not None
+
+            assert lines[figures_at - 1] == ""
+
+            assert match(
+                pattern=(
+                    rf"Analysis {payload['analysis_id']} Document custom_text: a-scandal-in-bohemia\.txt Status "
+                    r"completed Levels reference list \d+, model \d+, frequency heuristic \d+ Timing queue wait "
+                    r"\d+\.\d\ds; \S+"
+                ),
+                string=_words(
+                    "\n".join(
+                        lines[figures_at:],
+                    ),
+                ),
+            )
 
     def test_the_help_of_analyze_says_what_every_source_takes(
         self,
@@ -1401,7 +1487,35 @@ class TestShowingAnAnalysisInProgress:
 
         assert analysis.status is AnalysisStatus.FAILED
 
-        assert "the tagger was not there" in result.output
+        assert "Status failed: Wordwinnow met an internal error, code RuntimeError; run wordwinnow doctor" in _words(
+            result.output,
+        )
+
+        assert "the tagger was not there" not in result.output
+
+        operator = _runner.invoke(
+            app=app,
+            args=[
+                "show",
+                str(
+                    object=analysis.id,
+                ),
+                "--remote",
+                "--wait",
+                "--timeout",
+                "5",
+                "--view",
+                "operator",
+            ],
+        )
+
+        assert operator.exit_code == 0
+
+        assert "Failure RuntimeError: the tagger was not there" in _words(
+            operator.stderr,
+        )
+
+        assert "the tagger was not there" not in operator.stdout
 
     @mark.parametrize(
         argnames="mode",
@@ -1509,6 +1623,84 @@ def _stored(
     )
 
 
+def _completed(
+    *,
+    meaning: str | None = None,
+) -> Analysis:
+    """
+    A completed analysis of one word, with no dictionary asked, and `meaning`
+    as WordNet's gloss of the word when there is one.
+    """
+
+    analysis = request_an_analysis(
+        document=Document(
+            title="foo",
+            text="foo",
+            origin=DocumentOrigin.CUSTOM_TEXT,
+            reference="foo.txt",
+        ),
+        profile=LearnerProfile(
+            level=CefrLevel.B1,
+            target_level=CefrLevel.B2,
+        ),
+        options=AnalysisOptions(
+            include_dictionary=False,
+        ),
+        at=_EPOCH,
+    )
+
+    analysis.start(
+        at=_EPOCH,
+    )
+
+    analysis.complete(
+        at=_EPOCH,
+        items=(
+            StudyItem(
+                item=VocabularyItem(
+                    lemma="foo",
+                    part_of_speech=PartOfSpeech.NOUN,
+                    occurrence_count=2,
+                    example_sentence="foo",
+                ),
+                zipf_frequency=4.0,
+                level=LevelAssessment(
+                    level=CefrLevel.B2,
+                    source=LevelSource.REFERENCE_LIST,
+                ),
+                tier=StudyTier.FOCUS,
+                dictionary=None,
+                senses=(
+                    ()
+                    if meaning is None
+                    else (
+                        LexicalSense(
+                            key="foo.n.01",
+                            part_of_speech=PartOfSpeech.NOUN,
+                            gloss=meaning,
+                            example=None,
+                            synonyms=(),
+                            hypernyms=(),
+                            antonyms=(),
+                            usage_count=1,
+                            hyponym_count=0,
+                            category="noun.attribute",
+                        ),
+                    )
+                ),
+            ),
+        ),
+        stage_timings=(
+            StageTiming(
+                stage=Stage.WINNOWING,
+                seconds=0.5,
+            ),
+        ),
+    )
+
+    return analysis
+
+
 @final
 class TestTheDefaultMode:
     def test_with_no_mode_option_the_commands_run_in_this_process_and_call_no_service(
@@ -1563,7 +1755,9 @@ class TestTheDefaultMode:
 
         assert shown.exit_code == 0, shown.output
 
-        assert "completed" in shown.output
+        assert f"wordwinnow show {payload['analysis_id']} shows this again." in _words(
+            shown.output,
+        )
 
         assert not services_called
 
@@ -2177,6 +2371,115 @@ class TestShowingALocalAnalysis:
             == "processing"
         )
 
+    def test_a_meaning_longer_than_its_column_is_not_cut_at_80_columns(
+        self,
+        *,
+        workspace: Path,
+        monkeypatch: MonkeyPatch,
+    ) -> None:
+        # NOTE:
+        # The positive control of the report's width tests: a console 80 columns wide, as macOS Terminal opens, and a
+        # word in the meaning that the earlier table's narrow column could not hold.
+        monkeypatch.setattr(
+            target=main,
+            name="_console",
+            value=Console(
+                width=80,
+            ),
+        )
+
+        meaning = " ".join(
+            (
+                "foo",
+                "bar",
+                "baz",
+                "qux",
+                "incomprehensibilities",
+            )
+            * 4,
+        )
+
+        analysis = _completed(
+            meaning=meaning,
+        )
+
+        _stored(
+            analysis,
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "show",
+                str(
+                    object=analysis.id,
+                ),
+                "--local",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+
+        assert "…" not in result.output
+
+        assert meaning in _words(
+            result.output,
+        )
+
+    def test_a_stored_analysis_shown_with_the_view_prints_its_figures_too(
+        self,
+        *,
+        workspace: Path,
+        monkeypatch: MonkeyPatch,
+    ) -> None:
+        analysis = _completed()
+
+        _stored(
+            analysis,
+        )
+
+        monkeypatch.setattr(
+            target=main,
+            name="_console",
+            value=Console(
+                width=100,
+            ),
+        )
+
+        arguments = [
+            "show",
+            str(
+                object=analysis.id,
+            ),
+        ]
+
+        learner = _runner.invoke(
+            app=app,
+            args=arguments,
+        )
+
+        operator = _runner.invoke(
+            app=app,
+            args=[
+                *arguments,
+                "--view",
+                "operator",
+            ],
+        )
+
+        assert operator.exit_code == 0, operator.output
+
+        assert operator.stdout == learner.stdout
+
+        assert learner.stderr == ""
+
+        assert _words(
+            operator.stderr,
+        ) == (
+            f"Analysis {analysis.id} Document custom_text: foo.txt Status completed Levels reference list 1, model "
+            "0, frequency heuristic 0 Timing queue wait 0.00s; winnowing=0.50s"
+        )
+
 
 @final
 class TestAnalyzingWithAnUnusableModel:
@@ -2298,7 +2601,9 @@ class TestAnalyzingWithAnUnusableModel:
 
         assert shown.exit_code == 0, shown.output
 
-        assert "completed" in shown.output
+        assert f"wordwinnow show {analysis_id} shows this again." in _words(
+            shown.output,
+        )
 
 
 @fixture
@@ -2583,4 +2888,47 @@ class TestSetup:
                 empty_directory.iterdir(),
             )
             == ()
+        )
+
+
+@final
+class TestTheHelpOfTheViewOption:
+    @mark.parametrize(
+        argnames=(
+            "command",
+            "said",
+        ),
+        argvalues=(
+            (
+                "analyze",
+                "What standard error shows: while the analysis runs, the learner's line, or, for an operator, that "
+                "line with what the dictionary is doing under it; and for an operator, the analysis's figures after "
+                "its report.",
+            ),
+            (
+                "show",
+                "What standard error shows: while --wait waits, the learner's line, or, for an operator, that line "
+                "with what the dictionary is doing under it; and for an operator, the analysis's figures after its "
+                "report, a stored analysis's too.",
+            ),
+        ),
+    )
+    def test_the_help_says_what_the_option_covers(
+        self,
+        *,
+        command: str,
+        said: str,
+    ) -> None:
+        result = _runner.invoke(
+            app=app,
+            args=[
+                command,
+                "--help",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+
+        assert said in _usage_error(
+            result.output,
         )

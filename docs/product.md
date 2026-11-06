@@ -166,9 +166,12 @@ WordNet example only when it uses the word, in any form WordNet reduces to it.
 
 When neither has a meaning for a word, the report says why in its place, set
 apart from a meaning: `no definition found` when the dictionary has no entry for
-the word, and `unknown: the dictionary was unavailable`, with the reason, such
-as `circuit open`, when the dictionary could not be asked, which says nothing
-about the word.
+the word, `no noun meaning in WordNet`, naming the part of speech the word was
+tagged as, when the dictionary was not asked and WordNet has no gloss for the
+word as that part of speech, though it may have one as another, and
+`unknown: the dictionary was unavailable`, with the reason, such as
+`circuit open`, when the dictionary could not be asked, which says nothing about
+the word.
 
 The Free Dictionary API serves Wiktionary's definitions with the license it
 reports for them, CC BY-SA 3.0, so the table names that license under the

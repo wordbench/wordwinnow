@@ -120,6 +120,8 @@ from wordwinnow.services.cli.progress import (
 from wordwinnow.services.cli.report import (
     DEFAULT_ROW_LIMIT,
     render_cards,
+    render_figures,
+    render_footer,
     render_items,
     render_listing,
     render_summary,
@@ -127,6 +129,7 @@ from wordwinnow.services.cli.report import (
     select_items,
     to_csv,
     to_json,
+    visible,
 )
 from wordwinnow.services.intake.schemas import (
     AnalysisRequest,
@@ -262,8 +265,9 @@ class View(
     UnorderedStrEnum,
 ):
     """
-    What standard error shows while `analyze` runs: the learner's line, or,
-    for an operator, that line with what the dictionary is doing under it.
+    What standard error shows: the learner's line while an analysis runs, or,
+    for an operator, that line with what the dictionary is doing under it, and
+    the analysis's figures after its report.
     """
 
     LEARNER = auto()
@@ -309,53 +313,6 @@ def _settings() -> Settings:
     return settings
 
 
-# NOTE:
-# The three control characters that have a name of their own, written as that name.
-_NAMED_CONTROLS: Final = MappingProxyType(
-    mapping={
-        9: "\\t",
-        10: "\\n",
-        13: "\\r",
-    },
-)
-
-# NOTE:
-# Every character whose Unicode general category is `Cc`, U+0000 to U+001F and U+007F to U+009F, and no other, with
-# its escape: a named one as `\n` is written, and each other as `\x` and two lower-case hexadecimal digits.
-#
-# A backslash already in a message stays one, so the form is for reading and is not reversible.
-_CONTROLS: Final = MappingProxyType(
-    mapping={
-        code: _NAMED_CONTROLS.get(
-            code,
-            f"\\x{code:02x}",
-        )
-        for code in (
-            *range(
-                0x20,
-            ),
-            *range(
-                0x7F,
-                0xA0,
-            ),
-        )
-    },
-)
-
-
-def _visible(
-    message: str,
-    /,
-) -> str:
-    """
-    `message` with each control character written as a visible escape.
-    """
-
-    return message.translate(
-        _CONTROLS,
-    )
-
-
 def _fail(
     exception: Exception,
     /,
@@ -372,8 +329,8 @@ def _fail(
             text="error:",
             style="red",
         ),
-        _visible(
-            str(
+        visible(
+            message=str(
                 object=exception,
             ),
         ),
@@ -529,6 +486,7 @@ def _render(
     detail: bool,
     as_json: bool,
     csv_path: Path | None,
+    remote: bool,
     /,
 ) -> None:
     if as_json:
@@ -590,17 +548,9 @@ def _render(
 
     render_summary(
         analysis=analysis,
+        remote=remote,
         console=_console,
     )
-
-    if not analysis.items:
-        if analysis.status is AnalysisStatus.COMPLETED:
-            _console.print(
-                "no words to study: the text holds only function words, names, and numbers",
-                style="dim",
-            )
-
-        return
 
     if detail:
         render_cards(
@@ -610,14 +560,33 @@ def _render(
 
     else:
         render_items(
+            analysis=analysis,
             items=items,
             console=_console,
         )
 
-    if shown < available:
-        _console.print(
-            f"showing {shown} of {available} words; --rows raises the limit",
-            style="dim",
+    render_footer(
+        analysis=analysis,
+        items=items,
+        available=available,
+        remote=remote,
+        console=_console,
+    )
+
+
+def _show_figures(
+    analysis: Analysis,
+    view: View,
+    /,
+) -> None:
+    # NOTE:
+    # The figures that say how an analysis ran are the operator's and go to standard error after everything the
+    # command printed on standard output, so that a program or a file reading standard output sees the same bytes with
+    # the view and without it.
+    if view is View.OPERATOR:
+        render_figures(
+            analysis=analysis,
+            console=_errors,
         )
 
 
@@ -877,8 +846,9 @@ def analyze(
         View,
         Option(
             help=(
-                "What standard error shows while the analysis runs: the learner's line, or, for an operator, that "
-                "line with what the dictionary is doing under it."
+                "What standard error shows: while the analysis runs, the learner's line, or, for an operator, that "
+                "line with what the dictionary is doing under it; and for an operator, the analysis's figures after "
+                "its report."
             ),
             rich_help_panel=_SHOWING,
         ),
@@ -996,6 +966,12 @@ def analyze(
         detail,
         as_json,
         csv_path,
+        not local,
+    )
+
+    _show_figures(
+        analysis,
+        view,
     )
 
     # NOTE:
@@ -1080,8 +1056,9 @@ def show(
         View,
         Option(
             help=(
-                "What standard error shows while --wait waits: the learner's line, or, for an operator, that line "
-                "with what the dictionary is doing under it."
+                "What standard error shows: while --wait waits, the learner's line, or, for an operator, that line "
+                "with what the dictionary is doing under it; and for an operator, the analysis's figures after its "
+                "report, a stored analysis's too."
             ),
             rich_help_panel=_SHOWING,
         ),
@@ -1166,6 +1143,7 @@ def show(
         detail,
         as_json,
         csv_path,
+        not local,
     )
 
     # NOTE:
@@ -1188,6 +1166,11 @@ def show(
             highlight=False,
             soft_wrap=True,
         )
+
+    _show_figures(
+        watched.analysis,
+        view,
+    )
 
 
 @app.command(
