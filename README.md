@@ -3,7 +3,7 @@
 Winnow a text into the vocabulary worth a learner's attention.
 
 [![CI](https://github.com/wordbench/wordwinnow/actions/workflows/ci.yml/badge.svg)](https://github.com/wordbench/wordwinnow/actions/workflows/ci.yml)
-[![License: PolyForm Strict 1.0.0](https://img.shields.io/badge/license-PolyForm%20Strict%201.0.0-informational)](LICENSE)
+[![License: PolyForm Strict 1.0.0](https://img.shields.io/badge/license-PolyForm%20Strict%201.0.0-informational)](https://github.com/wordbench/wordwinnow/blob/v2.0.0/LICENSE)
 [![Engineering conventions v1.2.0](https://img.shields.io/badge/engineering%20conventions-v1.2.0-informational)](https://github.com/olegturzhanskii/engineering-conventions/blob/v1.2.0/STANDARD.md)
 
 You have a text you want to read in English: an article, a chapter, the
@@ -36,9 +36,9 @@ It points; you decide which words to learn, and the learning stays yours.
 
 It reads a text one word at a time, gives each word one level for each part of
 speech it takes, and knows you by three facts: your level, the level you are
-working toward, and the words you already know; [`docs/product.md`](docs/product.md) says who
+working toward, and the words you already know; [`docs/product.md`](https://github.com/wordbench/wordwinnow/blob/v2.0.0/docs/product.md) says who
 that serves, what it costs, and how it relates to Wordbench, and
-[`data/corpus/README.md`](data/corpus/README.md) tells where the idea came from.
+[`data/corpus/README.md`](https://github.com/wordbench/wordwinnow/blob/v2.0.0/data/corpus/README.md) tells where the idea came from.
 
 ## What it does
 
@@ -86,7 +86,7 @@ Those commands install the command, set it up, and analyze "A Scandal in
 Bohemia," the first Sherlock Holmes short story, in one process against a
 SQLite file in your user data directory, for a learner at A2 working toward
 B1, with the level model `wordwinnow setup` trains for the words the reference
-lists do not cover; [`data/corpus/README.md`](data/corpus/README.md) says why it is this story.
+lists do not cover; [`data/corpus/README.md`](https://github.com/wordbench/wordwinnow/blob/v2.0.0/data/corpus/README.md) says why it is this story.
 
 ![The story's opening, its study list at A2, a card, known words, CSV, then C1](docs/images/demo.gif)
 
@@ -97,7 +97,7 @@ the same command with `--remote` sends the text there.
 While it works, `analyze` says on standard error what it is doing, and
 `--view operator` adds under that line what the dictionary is doing: whether the
 provider is answering, rate-limited, or failing, and why, the last minute of
-the client's requests, and the lookups in flight; [the operating guide](docs/operating.md#the-operator-view) names
+the client's requests, and the lookups in flight; [the operating guide](https://github.com/wordbench/wordwinnow/blob/v2.0.0/docs/operating.md#the-operator-view) names
 every row.
 
 ![The operator's view of failures, a request limit, an outage, and a recovery](docs/images/operator.gif)
@@ -110,7 +110,7 @@ outage, and the recovery come on cue.
 
 Every meaning and related word the two recordings show is WordNet's, the
 stand-in's definitions included, under Princeton University's WordNet 3.0
-license, which [`NOTICE`](NOTICE) reproduces with the citation Princeton calls for.
+license, which [`NOTICE`](https://github.com/wordbench/wordwinnow/blob/v2.0.0/NOTICE) reproduces with the citation Princeton calls for.
 
 [`docs/getting-started.md`](docs/getting-started.md) takes it from here.
 
@@ -127,27 +127,27 @@ the lexical network, the stores, the message bus.
 
 The analysis itself only ever sees the text, so another endpoint of The New
 York Times is one adapter and its two entries in the composition root;
-[`docs/architecture.md`](docs/architecture.md) says what another provider takes.
+[`docs/architecture.md`](https://github.com/wordbench/wordwinnow/blob/v2.0.0/docs/architecture.md) says what another provider takes.
 
 ## Documentation
 
-Start at [`docs/README.md`](docs/README.md), which says which document owns which question.
+Start at [`docs/README.md`](https://github.com/wordbench/wordwinnow/blob/v2.0.0/docs/README.md), which says which document owns which question.
 
 | | |
 | --- | --- |
-| [`docs/product.md`](docs/product.md) | What it is for, what it knows about the learner, and what it will not do |
+| [`docs/product.md`](https://github.com/wordbench/wordwinnow/blob/v2.0.0/docs/product.md) | What it is for, what it knows about the learner, and what it will not do |
 | [`docs/getting-started.md`](docs/getting-started.md) | Getting it running, in both modes |
-| [`docs/domain.md`](docs/domain.md) | The vocabulary, the invariants, and how a word gets its level |
-| [`docs/architecture.md`](docs/architecture.md) | Layers, ports, adapters, events, and one analysis end to end |
-| [`docs/operating.md`](docs/operating.md) | The commands, the configuration, watching it, recovering it |
-| [`docs/performance.md`](docs/performance.md) | What was measured, and what to run for it |
+| [`docs/domain.md`](https://github.com/wordbench/wordwinnow/blob/v2.0.0/docs/domain.md) | The vocabulary, the invariants, and how a word gets its level |
+| [`docs/architecture.md`](https://github.com/wordbench/wordwinnow/blob/v2.0.0/docs/architecture.md) | Layers, ports, adapters, events, and one analysis end to end |
+| [`docs/operating.md`](https://github.com/wordbench/wordwinnow/blob/v2.0.0/docs/operating.md) | The commands, the configuration, watching it, recovering it |
+| [`docs/performance.md`](https://github.com/wordbench/wordwinnow/blob/v2.0.0/docs/performance.md) | What was measured, and what to run for it |
 
 ## Status
 
 Wordwinnow has been public since v1.0.0 and is maintained intermittently, on
 no fixed schedule: an error found in it may still be corrected, and a later
 release may still add to what it does; my later work on the same problem is
-Wordbench, a separate project, as [`docs/product.md`](docs/product.md) explains.
+Wordbench, a separate project, as [`docs/product.md`](https://github.com/wordbench/wordwinnow/blob/v2.0.0/docs/product.md) explains.
 
 Its license does not permit changing the code, so it takes no pull requests;
 [an issue](https://github.com/wordbench/wordwinnow/issues) is the way to report an error.
@@ -189,7 +189,7 @@ result and the responsibility for it.
 Wordwinnow is source-available, not open source.
 
 Its own code, tests, and documentation are licensed under the PolyForm Strict
-License 1.0.0, in [`LICENSE`](LICENSE): you may use them for any noncommercial purpose,
+License 1.0.0, in [`LICENSE`](https://github.com/wordbench/wordwinnow/blob/v2.0.0/LICENSE): you may use them for any noncommercial purpose,
 including personal study and research, and so may noncommercial organizations
 such as educational institutions; the license does not permit distributing
 them, changing them or building new works on them, even privately, or using
@@ -209,9 +209,9 @@ follows rather than a dependency, and they keep that project's
 
 The reference word lists, the sample story, the dictionary's definitions, the
 services Wordwinnow calls, and anything fetched from The New York Times keep
-their own terms; [`NOTICE`](NOTICE) says which, and what GitHub's own terms allow on a
-public repository, and [`data/reference/ATTRIBUTION.md`](data/reference/ATTRIBUTION.md) and
-[`data/corpus/README.md`](data/corpus/README.md) hold the details.
+their own terms; [`NOTICE`](https://github.com/wordbench/wordwinnow/blob/v2.0.0/NOTICE) says which, and what GitHub's own terms allow on a
+public repository, and [`data/reference/ATTRIBUTION.md`](https://github.com/wordbench/wordwinnow/blob/v2.0.0/data/reference/ATTRIBUTION.md) and
+[`data/corpus/README.md`](https://github.com/wordbench/wordwinnow/blob/v2.0.0/data/corpus/README.md) hold the details.
 
 ## Toolchain
 

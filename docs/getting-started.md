@@ -49,7 +49,7 @@ cache live in your user directories, not in the directory you run a command
 from: `~/Library/Application Support/wordwinnow` and `~/Library/Caches/wordwinnow`
 on macOS, `~/.local/share/wordwinnow` and `~/.cache/wordwinnow` on Linux, or
 `$XDG_DATA_HOME/wordwinnow` and `$XDG_CACHE_HOME/wordwinnow` on either system when
-those variables are set; [the configuration](operating.md#configuration) can move each of them.
+those variables are set; [the configuration](https://github.com/wordbench/wordwinnow/blob/v2.0.0/docs/operating.md#configuration) can move each of them.
 
 `setup`, `analyze`, `show`, `list`, and `doctor` write nothing in the directory you run
 them from, except a file you name, such as `--csv`'s.
@@ -114,7 +114,7 @@ nobody can read the analysis after a day, because the text is theirs.
 With a developer key in `WORDWINNOW_NYT_API_KEY`, the API sources appear as
 well; `wordwinnow doctor` lists the sources the configuration enables,
 `wordwinnow analyze --help` lists what each source expects as a topic, and
-[`operating.md`](operating.md) says where to keep the key, with or without direnv.
+[`operating.md`](https://github.com/wordbench/wordwinnow/blob/v2.0.0/docs/operating.md) says where to keep the key, with or without direnv.
 
 ## Removing it
 
@@ -211,7 +211,7 @@ lookups in flight.
 
 Its counts are of lookups, not words: a word the dictionary turns away and
 asks again counts each time, so `turned away` can pass the number of words;
-[the operating guide](operating.md#the-terms-and-what-each-row-counts) says what each row counts.
+[the operating guide](https://github.com/wordbench/wordwinnow/blob/v2.0.0/docs/operating.md#the-terms-and-what-each-row-counts) says what each row counts.
 
 `WORDWINNOW_DICTIONARY=wordnet` in `.env` before `make up-full` answers from WordNet
 instead, and the same analysis then took about five seconds, observed once on
@@ -250,11 +250,11 @@ the `commit-msg` hook checks each message, and the `pre-push` hook runs
 
 ## Where to go next
 
-[`product.md`](product.md) says what the tool is for and what it will not do.
+[`product.md`](https://github.com/wordbench/wordwinnow/blob/v2.0.0/docs/product.md) says what the tool is for and what it will not do.
 
-[`operating.md`](operating.md) covers every command, the configuration, and recovery.
+[`operating.md`](https://github.com/wordbench/wordwinnow/blob/v2.0.0/docs/operating.md) covers every command, the configuration, and recovery.
 
-[`domain.md`](domain.md) defines the terms and says how a word gets its level.
+[`domain.md`](https://github.com/wordbench/wordwinnow/blob/v2.0.0/docs/domain.md) defines the terms and says how a word gets its level.
 
 If a command fails, `wordwinnow doctor` says what is present and what is
 missing; [an issue](https://github.com/wordbench/wordwinnow/issues) with its output, the command, and your system is the way
