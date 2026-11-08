@@ -21,6 +21,9 @@ from collections.abc import (
 from contextlib import (
     asynccontextmanager,
 )
+from importlib.metadata import (
+    version,
+)
 from io import (
     StringIO,
 )
@@ -29,6 +32,9 @@ from logging import (
 )
 from pathlib import (
     Path,
+)
+from platform import (
+    python_version,
 )
 from types import (
     MappingProxyType,
@@ -1348,9 +1354,55 @@ class TestDoctor:
             "checking the NLTK data, the lists, WordNet, and the level model",
         ]
 
-        assert report.lines[:2] == (
+        assert report.lines[1:3] == (
             "downloaded NLTK package punkt_tab",
             "downloaded NLTK package averaged_perceptron_tagger_eng",
+        )
+
+    @mark.parametrize(
+        argnames="install_nltk_data",
+        argvalues=(
+            False,
+            True,
+        ),
+    )
+    @mark.parametrize(
+        argnames="healthy",
+        argvalues=(
+            True,
+            False,
+        ),
+    )
+    def test_the_first_line_names_the_version_and_python_whatever_the_report_finds(
+        self,
+        *,
+        settings: Settings,
+        monkeypatch: MonkeyPatch,
+        tmp_path: Path,
+        install_nltk_data: bool,
+        healthy: bool,
+    ) -> None:
+        if not healthy:
+            monkeypatch.setenv(
+                name="WORDWINNOW_REFERENCE_LISTS_DIR",
+                value=str(
+                    object=tmp_path / "nonexistent",
+                ),
+            )
+
+        report = doctor(
+            settings=Settings(),
+            install_nltk_data=install_nltk_data,
+        )
+
+        assert report.healthy is healthy
+
+        assert report.lines[0] == (
+            f"wordwinnow {
+                version(
+                    distribution_name='wordwinnow',
+                )
+            } on Python {python_version()}"
         )
 
     def test_the_report_names_the_command_that_sets_up_in_every_remedy_and_never_make(

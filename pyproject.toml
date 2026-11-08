@@ -77,7 +77,7 @@ dependencies = [
 ]
 
 [project.scripts]
-wordwinnow = "wordwinnow.services.cli.main:main"
+wordwinnow = "wordwinnow.services.cli.entry:main"
 
 # NOTE:
 # Every entry is a gate or an experiment tool, and nothing here ships to a user.

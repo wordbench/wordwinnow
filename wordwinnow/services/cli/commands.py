@@ -31,6 +31,9 @@ from logging import (
 from pathlib import (
     Path,
 )
+from platform import (
+    python_version,
+)
 from time import (
     monotonic,
 )
@@ -92,6 +95,9 @@ from wordwinnow.infrastructure.composition import (
 )
 from wordwinnow.infrastructure.dictionary.activity import (
     DictionaryActivity,
+)
+from wordwinnow.infrastructure.distribution import (
+    VERSION,
 )
 from wordwinnow.infrastructure.lexicon.reference_lists import (
     CsvReferenceLexicon,
@@ -1118,9 +1124,14 @@ def doctor(
     """
     Check the NLTK data, the reference lists, WordNet, the level model, and
     the configured sources, and install the NLTK data when asked.
+
+    The report's first line names the installed version and the Python it runs
+    on.
     """
 
-    lines: list[str] = []
+    lines: list[str] = [
+        f"wordwinnow {VERSION} on Python {python_version()}",
+    ]
 
     healthy = True
 

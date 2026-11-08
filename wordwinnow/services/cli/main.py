@@ -1,9 +1,8 @@
 """
 The `wordwinnow` command.
 
-`setup`, `analyze`, `show`, `list`, and `stats` are the learner's commands;
-`admin`, `db`, `serve`, `work`, `ml`, `bench`, and `doctor` are the
-operator's.
+`setup`, `analyze`, `show`, `list`, and `doctor` are the learner's commands;
+`stats`, `admin`, `db`, `serve`, `work`, `ml`, and `bench` are the operator's.
 
 Every command reads the settings once, configures the process, and calls into
 a module that a test can call without a terminal.
@@ -91,6 +90,9 @@ from wordwinnow.domain.study import (
 from wordwinnow.infrastructure.composition import (
     configure_process,
 )
+from wordwinnow.infrastructure.distribution import (
+    VERSION,
+)
 from wordwinnow.infrastructure.settings import (
     Settings,
     load_settings,
@@ -139,9 +141,24 @@ from wordwinnow.services.workers import (
     run_analysis_worker,
 )
 
+# NOTE:
+# The two panels the top-level help sorts the commands into, in the order they are listed: the five a learner who
+# installed the command uses, and the seven that run the distributed mode, the level model, and the experiments, which
+# need a clone of the repository and the services it starts.
+_LEARNER_COMMANDS: Final = "The learner's commands"
+
+_OPERATOR_COMMANDS: Final = "The operator's commands"
+
 app: Final = Typer(
     no_args_is_help=True,
+    context_settings={
+        "help_option_names": [
+            "-h",
+            "--help",
+        ],
+    },
     help="Winnow a text into the vocabulary worth a learner's attention.",
+    epilog="Start with wordwinnow setup.",
     add_completion=False,
 )
 
@@ -207,6 +224,7 @@ for (
     app.add_typer(
         typer_instance=sub_app,
         name=name,
+        rich_help_panel=_OPERATOR_COMMANDS,
     )
 
 # WARN:
@@ -681,7 +699,43 @@ def _request(
     )
 
 
-@app.command()
+def _print_version(
+    *,
+    requested: bool,
+) -> None:
+    if requested:
+        _console.print(
+            f"wordwinnow {VERSION}",
+            markup=False,
+            highlight=False,
+            soft_wrap=True,
+        )
+
+        raise Exit(
+            code=0,
+        )
+
+
+@app.callback()
+def root(
+    version: Annotated[
+        bool,
+        Option(
+            "--version",
+            callback=_print_version,
+            is_eager=True,
+            help="Show the installed version and exit.",
+        ),
+    ] = False,
+) -> None:
+    """
+    The root command, which holds the option that names the installed version.
+    """
+
+
+@app.command(
+    rich_help_panel=_LEARNER_COMMANDS,
+)
 def setup() -> None:
     """
     Download and prepare what an analysis needs and does not have yet.
@@ -719,6 +773,7 @@ def setup() -> None:
 
 @app.command(
     epilog=_ANALYZE_EPILOG,
+    rich_help_panel=_LEARNER_COMMANDS,
 )
 def analyze(
     level: Annotated[
@@ -982,7 +1037,9 @@ def analyze(
         )
 
 
-@app.command()
+@app.command(
+    rich_help_panel=_LEARNER_COMMANDS,
+)
 def show(
     analysis_id: Annotated[
         str,
@@ -1065,8 +1122,9 @@ def show(
     ] = View.LEARNER,
 ) -> None:
     """
-    Show a stored analysis, or, with --remote --wait, wait for one still in
-    progress.
+    Show a stored analysis, or wait for one still in progress.
+
+    Waiting for one needs --remote --wait.
 
     The analysis goes on whether or not a command waits for it, so --wait
     takes up an analysis that `analyze` stopped waiting for, without
@@ -1175,6 +1233,7 @@ def show(
 
 @app.command(
     name="list",
+    rich_help_panel=_LEARNER_COMMANDS,
 )
 def list_command(
     local: Annotated[
@@ -1219,7 +1278,9 @@ def list_command(
     )
 
 
-@app.command()
+@app.command(
+    rich_help_panel=_OPERATOR_COMMANDS,
+)
 def stats(
     focus_limit: Annotated[
         int,
@@ -1261,8 +1322,10 @@ def stats(
 @admin_app.command()
 def requeue() -> None:
     """
-    Hand back to the workers every analysis that waited too long, or that
-    processed too long without a report from its worker.
+    Hand stale analyses back to the workers.
+
+    An analysis is stale when it waited too long, or processed too long
+    without a report from its worker.
     """
 
     settings = _settings()
@@ -1696,7 +1759,9 @@ def plot() -> None:
         )
 
 
-@app.command()
+@app.command(
+    rich_help_panel=_LEARNER_COMMANDS,
+)
 def doctor(
     install_nltk_data: Annotated[
         bool,
@@ -1736,7 +1801,8 @@ def doctor(
 
 def main() -> None:
     """
-    The console script entry point.
+    Run the `wordwinnow` command, which the console script reaches through
+    `entry.main` once this module has loaded.
     """
 
     app()

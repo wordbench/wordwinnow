@@ -29,6 +29,9 @@ from re import (
     match,
     search,
 )
+from tomllib import (
+    loads as load_toml,
+)
 from typing import (
     Final,
     final,
@@ -56,6 +59,12 @@ from rich.text import (
 )
 from typer import (
     rich_utils,
+)
+from typer.core import (
+    TyperGroup,
+)
+from typer.main import (
+    get_command,
 )
 from typer.testing import (
     CliRunner,
@@ -146,6 +155,7 @@ from wordwinnow.services.progress import (
     AnalysisProgress,
     DictionaryWatch,
     RemoteAnalysisProgress,
+    WorkProgress,
 )
 
 _TEXT: Final = (
@@ -198,6 +208,120 @@ def _usage_error(
             "│",
             " ",
         ),
+    )
+
+
+_LEARNER_PANEL: Final = "The learner's commands"
+
+_OPERATOR_PANEL: Final = "The operator's commands"
+
+_GUIDANCE: Final = "Start with wordwinnow setup."
+
+
+def _plain(
+    output: str,
+    /,
+) -> str:
+    return Text.from_ansi(
+        text=output,
+    ).plain
+
+
+def _line_of(
+    plain: str,
+    text: str,
+    /,
+) -> int:
+    start = plain.index(
+        text,
+    )
+
+    return plain[:start].count(
+        "\n",
+    )
+
+
+# NOTE:
+# The rows of one panel of the top-level help, in the order printed: a row starts with the name right after the
+# panel's side, and the lines that continue a summary start with spaces there.
+def _panel_rows(
+    plain: str,
+    title: str,
+    /,
+) -> tuple[str, ...]:
+    names: list[str] = []
+
+    inside = False
+
+    for line in plain.splitlines():
+        if line.startswith(
+            f"╭─ {title} ",
+        ):
+            inside = True
+
+        elif inside and line.startswith(
+            "╰",
+        ):
+            break
+
+        elif inside and (
+            row := match(
+                pattern=r"│ (\S+)\s",
+                string=line,
+            )
+        ):
+            names.append(
+                row.group(
+                    1,
+                ),
+            )
+
+    return tuple(
+        names,
+    )
+
+
+def _helps(
+    group: TyperGroup,
+    prefix: str,
+    /,
+) -> dict[str, str]:
+    helps: dict[str, str] = {}
+
+    for (
+        command_name,
+        command,
+    ) in group.commands.items():
+        path = f"{prefix}{command_name}"
+
+        helps[path] = command.help or ""
+
+        if isinstance(
+            command,
+            TyperGroup,
+        ):
+            helps.update(
+                _helps(
+                    command,
+                    f"{path} ",
+                ),
+            )
+
+    return helps
+
+
+def _written_version() -> str:
+    return str(
+        object=load_toml(
+            (
+                Path(
+                    __file__,
+                ).parents[3]
+                / "pyproject.toml"
+            ).read_text(
+                encoding="utf-8",
+            ),
+        )["project"]["version"],
     )
 
 
@@ -1233,6 +1357,317 @@ class TestCli:
         assert "--local" not in examples
 
         assert "data/corpus" not in plain
+
+    def test_the_help_sorts_the_commands_into_the_learners_panel_and_the_operators(
+        self,
+    ) -> None:
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "--help",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+
+        plain = _plain(
+            result.stdout,
+        )
+
+        assert _line_of(
+            plain,
+            _LEARNER_PANEL,
+        ) < _line_of(
+            plain,
+            _OPERATOR_PANEL,
+        )
+
+        assert _panel_rows(
+            plain,
+            _LEARNER_PANEL,
+        ) == (
+            "setup",
+            "analyze",
+            "show",
+            "list",
+            "doctor",
+        )
+
+        assert _panel_rows(
+            plain,
+            _OPERATOR_PANEL,
+        ) == (
+            "stats",
+            "admin",
+            "db",
+            "serve",
+            "work",
+            "ml",
+            "bench",
+        )
+
+        assert not any(
+            line.startswith(
+                "╭─ Commands ",
+            )
+            for line in plain.splitlines()
+        )
+
+    def test_the_bare_command_prints_both_panels_and_the_guidance_and_exits_two(
+        self,
+    ) -> None:
+        result = _runner.invoke(
+            app=app,
+            args=[],
+        )
+
+        assert result.exit_code == 2, result.output
+
+        plain = _plain(
+            result.output,
+        )
+
+        assert (
+            len(
+                _panel_rows(
+                    plain,
+                    _LEARNER_PANEL,
+                ),
+            )
+            == 5
+        )
+
+        assert (
+            len(
+                _panel_rows(
+                    plain,
+                    _OPERATOR_PANEL,
+                ),
+            )
+            == 7
+        )
+
+        assert (
+            plain.count(
+                _GUIDANCE,
+            )
+            == 1
+        )
+
+    def test_the_guidance_follows_the_panels_once_and_is_in_no_subcommands_help(
+        self,
+    ) -> None:
+        top = _plain(
+            _runner.invoke(
+                app=app,
+                args=[
+                    "--help",
+                ],
+            ).stdout,
+        )
+
+        assert (
+            top.count(
+                _GUIDANCE,
+            )
+            == 1
+        )
+
+        assert _line_of(
+            top,
+            _GUIDANCE,
+        ) > _line_of(
+            top,
+            _OPERATOR_PANEL,
+        )
+
+        for arguments in (
+            [
+                "analyze",
+                "--help",
+            ],
+            [
+                "admin",
+                "--help",
+            ],
+        ):
+            assert _GUIDANCE not in _plain(
+                _runner.invoke(
+                    app=app,
+                    args=arguments,
+                ).stdout,
+            )
+
+    @mark.parametrize(
+        argnames="command",
+        argvalues=(
+            [],
+            [
+                "analyze",
+            ],
+            [
+                "admin",
+            ],
+            [
+                "admin",
+                "requeue",
+            ],
+        ),
+    )
+    def test_dash_h_prints_what_help_prints(
+        self,
+        *,
+        command: list[str],
+    ) -> None:
+        short = _runner.invoke(
+            app=app,
+            args=[
+                *command,
+                "-h",
+            ],
+        )
+
+        long = _runner.invoke(
+            app=app,
+            args=[
+                *command,
+                "--help",
+            ],
+        )
+
+        assert short.exit_code == 0, short.output
+
+        assert long.exit_code == 0, long.output
+
+        assert short.output == long.output
+
+    def test_every_summary_is_one_line_and_the_two_that_broke_say_what_they_were_asked_to(
+        self,
+    ) -> None:
+        root = get_command(
+            typer_instance=app,
+        )
+
+        assert isinstance(
+            root,
+            TyperGroup,
+        )
+
+        helps = _helps(
+            root,
+            "",
+        )
+
+        assert (
+            len(
+                helps,
+            )
+            == 24
+        )
+
+        for (
+            path,
+            help_text,
+        ) in helps.items():
+            assert (
+                "\n"
+                not in help_text.split(
+                    sep="\n\n",
+                )[0]
+            ), path
+
+        assert (
+            helps["show"].split(
+                sep="\n\n",
+            )[0]
+            == "Show a stored analysis, or wait for one still in progress."
+        )
+
+        assert (
+            helps["admin requeue"].split(
+                sep="\n\n",
+            )[0]
+            == "Hand stale analyses back to the workers."
+        )
+
+    def test_version_prints_the_version_pyproject_writes_and_nothing_else(
+        self,
+    ) -> None:
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "--version",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+
+        assert result.stdout == f"wordwinnow {_written_version()}\n"
+
+        assert result.stderr == ""
+
+        help_result = _runner.invoke(
+            app=app,
+            args=[
+                "--help",
+            ],
+        )
+
+        options = (
+            _plain(
+                help_result.stdout,
+            )
+            .partition(
+                "Options",
+            )[2]
+            .partition(
+                "╰",
+            )[0]
+        )
+
+        assert "--version" in options
+
+        assert "Show the installed version and exit." in options
+
+    def test_version_runs_nothing_else(
+        self,
+        *,
+        monkeypatch: MonkeyPatch,
+    ) -> None:
+        called: list[str] = []
+
+        def set_up(
+            *,
+            settings: Settings,
+            progress: WorkProgress = UNWATCHED,
+        ) -> tuple[str, ...]:
+            called.append(
+                "set_up",
+            )
+
+            raise AssertionError(
+                "`setup` ran after `--version`",
+            )
+
+        monkeypatch.setattr(
+            target=commands,
+            name="set_up",
+            value=set_up,
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "--version",
+                "setup",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+
+        assert result.stdout == f"wordwinnow {_written_version()}\n"
+
+        assert called == []
 
 
 def _requested() -> Analysis:

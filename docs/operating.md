@@ -11,7 +11,8 @@ Every command, the configuration, and what to do when something stops.
 | `wordwinnow analyze --source NAME --topic TOPIC --level LEVEL` | Analyze a document a source fetches |
 | `wordwinnow show ID` | Show a stored analysis again, or, with `--remote`, how far one still in progress has come |
 | `wordwinnow list` | List recent analyses, the id first |
-| `wordwinnow stats` | Summarize every completed analysis from ClickHouse |
+| `wordwinnow doctor [--install-nltk-data]` | Check the NLTK data, the lists, WordNet, the model, and the sources |
+| `wordwinnow --version` | Print the installed version |
 
 `analyze`, `show`, and `list` run in this process against the SQLite store in your
 user data directory; `--remote` sends them to the distributed mode's intake
@@ -150,7 +151,7 @@ sources for your own noncommercial study.
 
 | Command | What it does |
 | --- | --- |
-| `wordwinnow doctor [--install-nltk-data]` | Check the NLTK data, the lists, WordNet, the model, and the sources |
+| `wordwinnow stats` | Summarize every completed analysis from ClickHouse |
 | `wordwinnow db upgrade` | Bring the analysis store's schema up to date |
 | `wordwinnow serve intake`, `wordwinnow serve enrichment` | Run one HTTP service |
 | `wordwinnow work analysis`, `wordwinnow work aggregation` | Run one worker |

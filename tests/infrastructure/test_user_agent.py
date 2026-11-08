@@ -10,6 +10,9 @@ from typing import (
     final,
 )
 
+from wordwinnow.infrastructure.distribution import (
+    VERSION,
+)
 from wordwinnow.infrastructure.user_agent import (
     IDENTIFYING_HEADERS,
     USER_AGENT,
@@ -28,6 +31,20 @@ class TestUserAgent:
                 )
             } (https://github.com/wordbench/wordwinnow)"
             == USER_AGENT
+        )
+
+    def test_it_takes_the_version_from_the_one_source_that_reads_it(
+        self,
+    ) -> None:
+        assert USER_AGENT.startswith(
+            f"Wordwinnow/{VERSION} ",
+        )
+
+        assert (
+            version(
+                distribution_name="wordwinnow",
+            )
+            == VERSION
         )
 
     def test_it_is_the_only_header_a_provider_request_adds(

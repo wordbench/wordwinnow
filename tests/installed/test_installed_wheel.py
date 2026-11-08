@@ -4,6 +4,9 @@ checkout, installed with the command the README gives, a fresh resolution into
 a home of its own, set up, and used to analyze the sample story with the
 network closed to it.
 
+The first command after the install runs in a pseudo-terminal, because what a
+learner meets first, once, is how long that command takes to show anything.
+
 `make test-installed` runs these tests and `make test` leaves them out,
 because they need uv and the network, for the packages, the NLTK data, and the
 reference lists.
@@ -15,6 +18,10 @@ from collections.abc import (
 )
 from dataclasses import (
     dataclass,
+    fields,
+)
+from fcntl import (
+    ioctl,
 )
 from hashlib import (
     sha256,
@@ -23,10 +30,25 @@ from json import (
     loads,
 )
 from os import (
+    WNOHANG,
+    close,
+    cpu_count,
     environ,
+    getloadavg,
+    killpg,
+    openpty,
+    read,
+    wait4,
+    waitstatus_to_exitcode,
 )
 from pathlib import (
     Path,
+)
+from re import (
+    sub,
+)
+from select import (
+    select,
 )
 from shlex import (
     split,
@@ -34,12 +56,25 @@ from shlex import (
 from shutil import (
     which,
 )
+from signal import (
+    SIGKILL,
+)
+from struct import (
+    pack,
+)
 from subprocess import (
     CompletedProcess,
+    Popen,
     run,
 )
 from sys import (
     platform,
+)
+from termios import (
+    TIOCSWINSZ,
+)
+from time import (
+    monotonic,
 )
 from types import (
     MappingProxyType,
@@ -62,6 +97,9 @@ from pytest import (
 
 from wordwinnow.infrastructure.lexicon.reference_sources import (
     REFERENCE_CITATIONS,
+)
+from wordwinnow.services.cli.entry import (
+    THRESHOLD_SECONDS,
 )
 
 _ROOT: Final = Path(
@@ -116,6 +154,29 @@ _TIMEOUT_SECONDS: Final = 900
 # directories `platformdirs` names on macOS and on Linux when no `XDG_` variable is set.
 _USER_DATA: Final = "Library/Application Support/wordwinnow" if platform == "darwin" else ".local/share/wordwinnow"
 
+# NOTE:
+# The startup notice, as a learner reads it, and as a terminal delivers it: the line break a program writes becomes a
+# carriage return and a line feed.
+_NOTICE: Final = "Wordwinnow is starting; the first run after an install takes longer."
+
+_NOTICE_ON_A_TERMINAL: Final = f"{_NOTICE}\r\n".encode()
+
+# NOTE:
+# The first run's promise: its first output within 3.5 s of the process starting, whether that output is the notice or
+# the command's own.
+#
+# A run that misses it fails, on any runner, and the timing printed beside it says where the time went: before the
+# entry could arm its timer, in the import after it, or in a machine too busy to run the process.
+_FIRST_OUTPUT_SECONDS: Final = 3.5
+
+# NOTE:
+# A learner's terminal names itself, which is what makes Typer and Rich style their output for one.
+_TERMINAL: Final = "xterm-256color"
+
+_ROWS: Final = 24
+
+_COLUMNS: Final = 80
+
 _MIGRATIONS: Final = frozenset(
     (
         "wordwinnow/infrastructure/persistence/migration_scripts/env.py",
@@ -131,6 +192,39 @@ _DATA_FILES: Final = (
     "reference/octanove-vocabulary-profile-c1c2-1.0.csv",
     "wordwinnow.db",
 )
+
+
+@dataclass(
+    frozen=True,
+    kw_only=True,
+    slots=True,
+)
+@final
+class TerminalRun:
+    """
+    One command run in a pseudo-terminal, with its timing in parts, in seconds
+    from the process's start: when its first byte came, when the notice came,
+    when its own output began, and when it ended; the CPU time the process
+    used; and the machine's load, with its processors, when it started.
+    """
+
+    output: str
+
+    status: int
+
+    first_output: float | None
+
+    notice: float | None
+
+    command_output: float | None
+
+    ended: float
+
+    cpu: float
+
+    load: float
+
+    processors: int | None
 
 
 @dataclass(
@@ -156,6 +250,14 @@ class Installation:
     readme_command: tuple[str, ...]
 
     install: CompletedProcess[str]
+
+    first_contact: TerminalRun
+
+    warm_contact: TerminalRun
+
+    version_output: CompletedProcess[str]
+
+    wheel_version: str
 
     verbose_help: CompletedProcess[str]
 
@@ -189,6 +291,316 @@ def _execute(
         text=True,
         env=environment,
     )
+
+
+# NOTE:
+# The notice is told from the command's own output by what arrived: the first bytes are the notice's line, or they are
+# not, and the command's output begins at the first byte past that line, or at the first byte that cannot be a part of
+# it.
+def _parts(
+    arrivals: Sequence[tuple[float, bytes]],
+    /,
+) -> tuple[float | None, float | None, float | None]:
+    data = b""
+
+    first: float | None = None
+
+    notice: float | None = None
+
+    command: float | None = None
+
+    for (
+        moment,
+        chunk,
+    ) in arrivals:
+        data += chunk
+
+        if first is None:
+            first = moment
+
+        if notice is None and data.startswith(
+            _NOTICE_ON_A_TERMINAL,
+        ):
+            notice = first
+
+        if command is None:
+            if notice is not None:
+                if len(
+                    data,
+                ) > len(
+                    _NOTICE_ON_A_TERMINAL,
+                ):
+                    command = moment
+
+            elif not _NOTICE_ON_A_TERMINAL.startswith(
+                data,
+            ):
+                command = moment
+
+    return (
+        first,
+        notice,
+        command,
+    )
+
+
+def _in_terminal(
+    *,
+    arguments: Sequence[str | Path],
+    environment: Mapping[str, str],
+    working_directory: Path,
+) -> TerminalRun:
+    """
+    Run one command in a pseudo-terminal of 24 rows and 80 columns, and report
+    its output with its timing in parts.
+    """
+
+    load = getloadavg()[0]
+
+    processors = cpu_count()
+
+    (
+        master,
+        slave,
+    ) = openpty()
+
+    ioctl(
+        slave,
+        TIOCSWINSZ,
+        pack(
+            "HHHH",
+            _ROWS,
+            _COLUMNS,
+            0,
+            0,
+        ),
+    )
+
+    started = monotonic()
+
+    process = Popen(
+        args=arguments,
+        stdin=slave,
+        stdout=slave,
+        stderr=slave,
+        close_fds=True,
+        cwd=working_directory,
+        env={
+            **environment,
+            "TERM": _TERMINAL,
+        },
+        start_new_session=True,
+    )
+
+    close(
+        fd=slave,
+    )
+
+    arrivals: list[tuple[float, bytes]] = []
+
+    while True:
+        chunk = b""
+
+        if select(
+            [
+                master,
+            ],
+            [],
+            [],
+            0.02,
+        )[0]:
+            try:
+                chunk = read(
+                    master,
+                    65536,
+                )
+
+            except OSError:
+                chunk = b""
+
+        if chunk:
+            arrivals.append(
+                (
+                    monotonic() - started,
+                    chunk,
+                ),
+            )
+
+            continue
+
+        (
+            reaped,
+            code,
+            usage,
+        ) = wait4(
+            pid=process.pid,
+            options=WNOHANG,
+        )
+
+        if reaped:
+            break
+
+        if monotonic() - started > _TIMEOUT_SECONDS:
+            killpg(
+                process.pid,
+                SIGKILL,
+            )
+
+    # NOTE:
+    # `wait4` has reaped the process and `wait` then has no status to read, so `wait` serves only to tell `Popen` that
+    # the process is gone; the status is `wait4`'s.
+    process.wait()
+
+    while True:
+        try:
+            chunk = read(
+                master,
+                65536,
+            )
+
+        except OSError:
+            break
+
+        if not chunk:
+            break
+
+        arrivals.append(
+            (
+                monotonic() - started,
+                chunk,
+            ),
+        )
+
+    ended = monotonic() - started
+
+    close(
+        fd=master,
+    )
+
+    (
+        first,
+        notice,
+        command,
+    ) = _parts(
+        arrivals,
+    )
+
+    return TerminalRun(
+        output=sub(
+            pattern=r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07|\x1b[()][0-9A-B]",
+            repl="",
+            string=b"".join(arrival[1] for arrival in arrivals).decode(
+                encoding="utf-8",
+                errors="replace",
+            ),
+        ).replace(
+            "\r\n",
+            "\n",
+        ),
+        status=waitstatus_to_exitcode(
+            status=code,
+        ),
+        first_output=first,
+        notice=notice,
+        command_output=command,
+        ended=ended,
+        cpu=usage.ru_utime + usage.ru_stime,
+        load=load,
+        processors=processors,
+    )
+
+
+def _seconds(
+    value: float | None,
+    /,
+) -> str:
+    return "none" if value is None else f"{value:.2f} s"
+
+
+# NOTE:
+# The timing in parts, one line for the readings and one for what they say when the notice came: the notice's time
+# less the threshold is how long the process took before the entry armed its timer, Python's start and the entry's own
+# import, and the command's output after that is the import of the command and the help's rendering.
+#
+# CPU time well below the time it ended means the process waited, on the disk, on the system's checks of new files, or
+# for a processor, and the load against the processors says whether processors were busy: those two are a runner's
+# contention and not the product's.
+def _timing(
+    label: str,
+    run: TerminalRun,
+    /,
+) -> tuple[str, ...]:
+    readings = (
+        f"{label}: first output {
+            _seconds(
+                run.first_output,
+            )
+        }, notice {
+            _seconds(
+                run.notice,
+            )
+        }, command output {
+            _seconds(
+                run.command_output,
+            )
+        }, ended {run.ended:.2f} s, status {run.status}, CPU {run.cpu:.2f} s, "
+        f"load {run.load:.2f} on {run.processors} processors"
+    )
+
+    if run.notice is None or run.command_output is None:
+        return (
+            readings,
+            f"{label}: no notice, so the start is not split",
+        )
+
+    before = run.notice - THRESHOLD_SECONDS
+
+    return (
+        readings,
+        f"{label}: before the timer was armed {before:.2f} s; import and rendering after it "
+        f"{run.command_output - before:.2f} s",
+    )
+
+
+def _wheel_version(
+    wheel: Path,
+    /,
+) -> str:
+    with ZipFile(
+        file=wheel,
+    ) as archive:
+        (name,) = (
+            name
+            for name in archive.namelist()
+            if name.endswith(
+                ".dist-info/METADATA",
+            )
+        )
+
+        metadata = archive.read(
+            name=name,
+        ).decode(
+            encoding="utf-8",
+        )
+
+    (line,) = (
+        line
+        for line in metadata.splitlines()
+        if line.startswith(
+            "Version: ",
+        )
+    )
+
+    return line.removeprefix(
+        "Version: ",
+    )
+
+
+def _with_the_notice(
+    results: Sequence[CompletedProcess[str]],
+    /,
+) -> tuple[CompletedProcess[str], ...]:
+    return tuple(result for result in results if _NOTICE in result.stdout + result.stderr)
 
 
 def _transcript(
@@ -453,6 +865,53 @@ def installation(
     command = tool_bin_dir / "wordwinnow"
 
     # NOTE:
+    # The first command after the install is the one cold start of the run: the interpreter has never compiled the
+    # package, so it is the start a learner meets once, and the terminal run takes it before any other command does.
+    #
+    # Its timing in parts goes through the terminal reporter, as the digest above does, so that the log of every
+    # runner shows where the time went.
+    first_contact = _in_terminal(
+        arguments=[
+            command,
+            "--help",
+        ],
+        environment=environment,
+        working_directory=working_directory,
+    )
+
+    warm_contact = _in_terminal(
+        arguments=[
+            command,
+            "--help",
+        ],
+        environment=environment,
+        working_directory=working_directory,
+    )
+
+    for line in (
+        *_timing(
+            "the first command after the install, --help in a terminal",
+            first_contact,
+        ),
+        *_timing(
+            "the same command again",
+            warm_contact,
+        ),
+    ):
+        reporter.write_line(
+            line=line,
+        )
+
+    version_output = _execute(
+        arguments=[
+            command,
+            "--version",
+        ],
+        environment=environment,
+        working_directory=working_directory,
+    )
+
+    # NOTE:
     # In verbose mode CPython prints its version on standard error as it starts, so the line names the interpreter
     # that runs the installed command itself, not one beside it.
     verbose_help = _execute(
@@ -543,6 +1002,12 @@ def installation(
         uv_version=uv_version,
         readme_command=readme_command,
         install=install,
+        first_contact=first_contact,
+        warm_contact=warm_contact,
+        version_output=version_output,
+        wheel_version=_wheel_version(
+            wheel,
+        ),
         verbose_help=verbose_help,
         first_setup=first_setup,
         second_setup=second_setup,
@@ -645,6 +1110,137 @@ class TestInstalledWheel:
             _install_command(
                 f"uv tool install --python {_MINOR} git+https://example.invalid/bar\n{indented}",
             )
+
+    def test_the_first_command_after_the_install_shows_output_within_the_bound_and_ends_with_the_help(
+        self,
+        *,
+        installation: Installation,
+    ) -> None:
+        first = installation.first_contact
+
+        timing = "\n".join(
+            _timing(
+                "the first command after the install",
+                first,
+            ),
+        )
+
+        assert first.first_output is not None, timing
+
+        assert first.first_output <= _FIRST_OUTPUT_SECONDS, timing
+
+        assert first.status == 0, timing
+
+        assert "Usage: wordwinnow" in first.output, timing
+
+    def test_the_same_command_again_shows_no_notice(
+        self,
+        *,
+        installation: Installation,
+    ) -> None:
+        assert _NOTICE not in installation.warm_contact.output, "\n".join(
+            _timing(
+                "the same command again",
+                installation.warm_contact,
+            ),
+        )
+
+    def test_version_prints_the_installed_wheels_own_version(
+        self,
+        *,
+        installation: Installation,
+    ) -> None:
+        result = _succeeded(
+            installation.version_output,
+        )
+
+        assert result.stdout == f"wordwinnow {installation.wheel_version}\n", _transcript(
+            result,
+        )
+
+        assert result.stderr == "", _transcript(
+            result,
+        )
+
+    def test_no_command_run_through_a_pipe_wrote_the_notice(
+        self,
+        *,
+        installation: Installation,
+    ) -> None:
+        values = tuple(
+            getattr(
+                installation,
+                field.name,
+            )
+            for field in fields(
+                class_or_instance=installation,
+            )
+        )
+
+        results = tuple(
+            value
+            for value in values
+            if isinstance(
+                value,
+                CompletedProcess,
+            )
+        )
+
+        # TEST:
+        # The positive control of the scan: it reaches the first and the last of the commands this fixture ran through
+        # a pipe, and an empty scan would pass whatever they wrote.
+        assert installation.install in results
+
+        assert installation.unreachable_setup in results
+
+        assert not _with_the_notice(
+            results,
+        ), "\n".join(
+            _transcript(
+                result,
+            )
+            for result in _with_the_notice(
+                results,
+            )
+        )
+
+    def test_the_scan_for_the_notice_finds_it_in_either_stream(
+        self,
+    ) -> None:
+        # TEST:
+        # The positive control of the scan above: a command that wrote the notice to standard output, one that wrote
+        # it to standard error, and one that wrote neither, of which the scan finds the first two.
+        on_output = CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=_NOTICE,
+            stderr="",
+        )
+
+        on_error = CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="",
+            stderr=_NOTICE,
+        )
+
+        silent = CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+
+        assert _with_the_notice(
+            (
+                on_output,
+                on_error,
+                silent,
+            ),
+        ) == (
+            on_output,
+            on_error,
+        )
 
     def test_the_installed_command_runs_on_the_python_the_gate_tests(
         self,
