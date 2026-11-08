@@ -68,6 +68,7 @@ from subprocess import (
     run,
 )
 from sys import (
+    modules,
     platform,
 )
 from termios import (
@@ -89,6 +90,7 @@ from zipfile import (
 
 from pytest import (
     FixtureRequest,
+    MonkeyPatch,
     TempPathFactory,
     fixture,
     mark,
@@ -168,6 +170,14 @@ _NOTICE_ON_A_TERMINAL: Final = f"{_NOTICE}\r\n".encode()
 # A run that misses it fails, on any runner, and the timing printed beside it says where the time went: before the
 # entry could arm its timer, in the import after it, or in a machine too busy to run the process.
 _FIRST_OUTPUT_SECONDS: Final = 3.5
+
+# NOTE:
+# The decided threshold: the entry arms its timer after the process starts and prints the notice when the timer fires,
+# so a notice from a start that took less than this cannot come from the decided behavior.
+#
+# It is held here apart from the product's `THRESHOLD_SECONDS` so that the product's, moved alone, fails the check
+# against it, which a check against the product's own constant would pass.
+_DECIDED_THRESHOLD_SECONDS: Final = 3.0
 
 # NOTE:
 # A learner's terminal names itself, which is what makes Typer and Rich style their output for one.
@@ -522,6 +532,10 @@ def _seconds(
 # less the threshold is how long the process took before the entry armed its timer, Python's start and the entry's own
 # import, and the command's output after that is the import of the command and the help's rendering.
 #
+# That difference includes the timer's own delay after the threshold, so it overstates the time before the timer by
+# that delay, which has been 3 to 51 ms; it is a reading and not a check, and it splits at the product's
+# `THRESHOLD_SECONDS`.
+#
 # CPU time well below the time it ended means the process waited, on the disk, on the system's checks of new files, or
 # for a processor, and the load against the processors says whether processors were busy: those two are a runner's
 # contention and not the product's.
@@ -557,8 +571,65 @@ def _timing(
 
     return (
         readings,
-        f"{label}: before the timer was armed {before:.2f} s; import and rendering after it "
-        f"{run.command_output - before:.2f} s",
+        f"{label}: before the timer was armed, with the timer's own delay {before:.2f} s; "
+        f"import and rendering after it {run.command_output - before:.2f} s",
+    )
+
+
+# NOTE:
+# The notice is checked against the timing the run itself shows, and not against a start assumed to be fast: a runner
+# whose start is slow every time shows the notice at the threshold, which is the decided behavior.
+#
+# A start whose own output came between the threshold and the bound with no notice breaks nothing, because the
+# threshold counts from the timer's arming, after the process started.
+def _breaks(
+    run: TerminalRun,
+    /,
+) -> tuple[str, ...]:
+    breaks: list[str] = []
+
+    if run.notice is not None and run.notice < _DECIDED_THRESHOLD_SECONDS:
+        breaks.append(
+            f"the notice came at {run.notice:.2f} s, before the decided threshold of "
+            f"{_DECIDED_THRESHOLD_SECONDS:.1f} s",
+        )
+
+    if run.notice is None and _NOTICE in run.output:
+        breaks.append(
+            "the notice is in the output but did not begin it, as a startup notice before the command's output does",
+        )
+
+    if run.first_output is None or run.first_output > _FIRST_OUTPUT_SECONDS:
+        breaks.append(
+            f"the first output came at {
+                _seconds(
+                    run.first_output,
+                )
+            }, later than the bound of {_FIRST_OUTPUT_SECONDS:.1f} s",
+        )
+
+    return tuple(
+        breaks,
+    )
+
+
+def _constructed(
+    first_output: float,
+    notice: float | None,
+    command_output: float,
+    output: str,
+    /,
+) -> TerminalRun:
+    return TerminalRun(
+        output=output,
+        status=0,
+        first_output=first_output,
+        notice=notice,
+        command_output=command_output,
+        ended=command_output,
+        cpu=0.0,
+        load=0.0,
+        processors=None,
     )
 
 
@@ -1133,17 +1204,210 @@ class TestInstalledWheel:
 
         assert "Usage: wordwinnow" in first.output, timing
 
-    def test_the_same_command_again_shows_no_notice(
+    def test_the_notice_in_each_terminal_run_matches_the_timing_that_run_shows(
         self,
         *,
         installation: Installation,
     ) -> None:
-        assert _NOTICE not in installation.warm_contact.output, "\n".join(
-            _timing(
+        runs = (
+            (
+                "the first command after the install",
+                installation.first_contact,
+            ),
+            (
                 "the same command again",
                 installation.warm_contact,
             ),
         )
+
+        reports = tuple(
+            "\n".join(
+                (
+                    f"{label} broke the notice's behavior: "
+                    + "; ".join(
+                        _breaks(
+                            terminal_run,
+                        ),
+                    ),
+                    *_timing(
+                        label,
+                        terminal_run,
+                    ),
+                ),
+            )
+            for (
+                label,
+                terminal_run,
+            ) in runs
+            if _breaks(
+                terminal_run,
+            )
+        )
+
+        assert not reports, "\n".join(
+            reports,
+        )
+
+    def test_the_check_of_the_notice_passes_the_runs_the_decided_behavior_allows(
+        self,
+    ) -> None:
+        # TEST:
+        # The positive controls of the check above, constructed runs it must pass: a slow warm start that showed the
+        # notice at the threshold and its own output later, a fast one that showed nothing, and a start whose own
+        # output came after the threshold, inside the bound, with no notice.
+        slow_with_the_notice = _constructed(
+            3.10,
+            3.10,
+            7.14,
+            f"{_NOTICE}\nUsage: wordwinnow\n",
+        )
+
+        fast_without_it = _constructed(
+            1.82,
+            None,
+            1.82,
+            "Usage: wordwinnow\n",
+        )
+
+        late_inside_the_bound = _constructed(
+            3.30,
+            None,
+            3.30,
+            "Usage: wordwinnow\n",
+        )
+
+        assert (
+            _breaks(
+                slow_with_the_notice,
+            )
+            == ()
+        )
+
+        assert (
+            _breaks(
+                fast_without_it,
+            )
+            == ()
+        )
+
+        assert (
+            _breaks(
+                late_inside_the_bound,
+            )
+            == ()
+        )
+
+    def test_the_check_of_the_notice_holds_the_decided_threshold_when_the_products_moves(
+        self,
+        *,
+        monkeypatch: MonkeyPatch,
+    ) -> None:
+        # TEST:
+        # The positive control of the separation between the decided threshold and the product's: with the product's
+        # threshold, as this module sees it, moved to 1.0 s, a notice at 2.00 s is still early, and a check that read
+        # the product's constant would pass it.
+        monkeypatch.setattr(
+            target=modules[__name__],
+            name="THRESHOLD_SECONDS",
+            value=1.0,
+        )
+
+        breaks = _breaks(
+            _constructed(
+                2.00,
+                2.00,
+                5.00,
+                f"{_NOTICE}\nUsage: wordwinnow\n",
+            ),
+        )
+
+        assert (
+            len(
+                breaks,
+            )
+            == 1
+        )
+
+        assert "before the decided threshold" in breaks[0]
+
+    def test_the_check_of_the_notice_reports_each_way_a_run_breaks_it(
+        self,
+    ) -> None:
+        # TEST:
+        # The positive controls of the check, constructed runs it must fail, each by its own rule and no other: a
+        # start past the bound with no notice, a notice before the threshold, the notice's text after the command's
+        # output began, and a notice that was itself later than the bound.
+        past_the_bound = _breaks(
+            _constructed(
+                7.14,
+                None,
+                7.14,
+                "Usage: wordwinnow\n",
+            ),
+        )
+
+        too_early = _breaks(
+            _constructed(
+                0.60,
+                0.60,
+                1.80,
+                f"{_NOTICE}\nUsage: wordwinnow\n",
+            ),
+        )
+
+        out_of_place = _breaks(
+            _constructed(
+                1.00,
+                None,
+                1.00,
+                f"Usage: wordwinnow\n{_NOTICE}\n",
+            ),
+        )
+
+        too_late = _breaks(
+            _constructed(
+                3.60,
+                3.60,
+                7.00,
+                f"{_NOTICE}\nUsage: wordwinnow\n",
+            ),
+        )
+
+        assert (
+            len(
+                past_the_bound,
+            )
+            == 1
+        )
+
+        assert "later than the bound" in past_the_bound[0]
+
+        assert (
+            len(
+                too_early,
+            )
+            == 1
+        )
+
+        assert "before the decided threshold" in too_early[0]
+
+        assert (
+            len(
+                out_of_place,
+            )
+            == 1
+        )
+
+        assert "did not begin it" in out_of_place[0]
+
+        assert (
+            len(
+                too_late,
+            )
+            == 1
+        )
+
+        assert "later than the bound" in too_late[0]
 
     def test_version_prints_the_installed_wheels_own_version(
         self,
