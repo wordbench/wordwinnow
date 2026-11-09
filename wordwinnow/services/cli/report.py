@@ -119,7 +119,7 @@ _GLOSS_SOURCE_NAMES: Final = MappingProxyType(
 # NOTE:
 # The title `analyze -` gives a text it read from standard input; a listing line holds an origin and a title and no
 # reference, so the two together are the one rule that tells such a text from a file.
-_STANDARD_INPUT: Final = "standard input"
+STANDARD_INPUT_TITLE: Final = "standard input"
 
 _FROM_STANDARD_INPUT: Final = "read from standard input"
 
@@ -152,25 +152,46 @@ _NAMED_CONTROLS: Final = MappingProxyType(
 )
 
 # NOTE:
-# Every character whose Unicode general category is `Cc`, U+0000 to U+001F and U+007F to U+009F, and no other, with
-# its escape: a named one as `\n` is written, and each other as `\x` and two lower-case hexadecimal digits.
+# Every character whose Unicode general category is `Cc`, U+0000 to U+001F and U+007F to U+009F, with its escape: a
+# named one as `\n` is written, and each other as `\x` and two lower-case hexadecimal digits.
+#
+# The eleven that break a terminal's line or reorder what it shows without being `Cc`, U+2028 and U+2029, U+202A to
+# U+202E, and U+2066 to U+2069, are each written as `\u` and four lower-case hexadecimal digits.
+#
+# The other characters of category `Cf` stay as typed, because a word can need them: a soft hyphen, a joiner inside an
+# emoji or a Persian word, and a direction mark beside a quoted name.
 #
 # A backslash already in a message stays one, so the form is for reading and is not reversible.
 _CONTROLS: Final = MappingProxyType(
     mapping={
-        code: _NAMED_CONTROLS.get(
-            code,
-            f"\\x{code:02x}",
-        )
-        for code in (
-            *range(
-                0x20,
-            ),
-            *range(
-                0x7F,
-                0xA0,
-            ),
-        )
+        **{
+            code: _NAMED_CONTROLS.get(
+                code,
+                f"\\x{code:02x}",
+            )
+            for code in (
+                *range(
+                    0x20,
+                ),
+                *range(
+                    0x7F,
+                    0xA0,
+                ),
+            )
+        },
+        **{
+            code: f"\\u{code:04x}"
+            for code in (
+                *range(
+                    0x2028,
+                    0x202F,
+                ),
+                *range(
+                    0x2066,
+                    0x206A,
+                ),
+            )
+        },
     },
 )
 
@@ -180,10 +201,11 @@ def visible(
     message: str,
 ) -> str:
     """
-    `message` with each control character written as a visible escape.
+    `message` with each control character, line or paragraph separator, and
+    bidirectional control written as a visible escape.
 
     Text that comes from outside the program reaches a terminal through this,
-    so that it can neither break a line nor drive the terminal.
+    so that it can neither break a line, reorder it, nor drive the terminal.
     """
 
     return message.translate(
@@ -537,7 +559,7 @@ def _label_of(
     or its title.
     """
 
-    if origin is DocumentOrigin.CUSTOM_TEXT and title == _STANDARD_INPUT:
+    if origin is DocumentOrigin.CUSTOM_TEXT and title == STANDARD_INPUT_TITLE:
         return _FROM_STANDARD_INPUT
 
     return title
@@ -547,7 +569,7 @@ def _source_of(
     document: Document,
     /,
 ) -> Text:
-    if document.origin is not DocumentOrigin.CUSTOM_TEXT or document.title != _STANDARD_INPUT:
+    if document.origin is not DocumentOrigin.CUSTOM_TEXT or document.title != STANDARD_INPUT_TITLE:
         return _plain(
             document.title,
         )

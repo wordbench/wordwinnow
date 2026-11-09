@@ -237,7 +237,8 @@ exits with status 1, and the line says which of eight things happened.
 
 Every `error:` line is one line, however long, and a control character in it,
 such as a line feed or an escape in what a server sent, is shown as `\n` or
-`\x1b`.
+`\x1b`, and a character that would reorder or break the line, such as U+202E, as
+`\u202e`.
 
 ## Security
 

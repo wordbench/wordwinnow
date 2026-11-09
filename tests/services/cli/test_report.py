@@ -1558,7 +1558,7 @@ class TestTheHeader:
         short = _header(
             _completed(
                 document=_read_from_standard_input(
-                    "foo\nbar",
+                    "foo\nbar\u2028baz\u2029qux",
                 ),
             ),
         )
@@ -1572,7 +1572,7 @@ class TestTheHeader:
         )
 
         assert short.startswith(
-            "Text read from standard input, “foo bar” Learner",
+            "Text read from standard input, “foo bar baz qux” Learner",
         )
 
         assert "custom_text" not in beginning
@@ -2979,7 +2979,7 @@ class TestTheCards:
                     "foo",
                     StudyTier.FOCUS,
                     CefrLevel.B2,
-                    example_sentence="foo\nbar\tbaz\x0cqux\r\n quux \x1b[31mcorge",
+                    example_sentence="foo\nbar\tbaz\x0cqux\r\n quux\u2028grault\u2029garply \x1b[31mcorge",
                 ),
             ),
             console=console,
@@ -2989,7 +2989,7 @@ class TestTheCards:
 
         lines = tuple(line.rstrip() for line in text.splitlines())
 
-        assert "  in the text: foo bar baz qux quux \\x1b[31mcorge" in lines
+        assert "  in the text: foo bar baz qux quux grault garply \\x1b[31mcorge" in lines
 
         assert "\x1b" not in text
 
@@ -3146,8 +3146,9 @@ class TestTheListing:
 
 
 # NOTE:
-# A value that comes from outside the program: markup, an emoji code, and a control sequence that would move a cursor.
-_HOSTILE: Final = "[bold]foo[/bold] :smile: \x1b[31mbar"
+# A value that comes from outside the program: markup, an emoji code, a control sequence that would move a cursor, and
+# a character that would reverse what follows it.
+_HOSTILE: Final = "[bold]foo[/bold] :smile: \x1b[31mbar\u202ebaz"
 
 # NOTE:
 # A failure's code is the text before the first colon and a space, so the emoji code in this one is followed by an
@@ -3172,6 +3173,40 @@ class TestTheEscape:
                 message="foo\\",
             )
             == "foo\\"
+        )
+
+    def test_a_character_that_breaks_or_reorders_a_line_is_written_out(
+        self,
+    ) -> None:
+        assert (
+            visible(
+                message="\u2028\u2029\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069",
+            )
+            == "\\u2028\\u2029\\u202a\\u202b\\u202c\\u202d\\u202e\\u2066\\u2067\\u2068\\u2069"
+        )
+
+    def test_a_character_a_word_can_need_stays_as_typed(
+        self,
+    ) -> None:
+        kept = "foo\u00adbar\u061cbaz\u200bqux\u200cquux\u200dcorge\u200egrault\u200fgarply\u2060waldo\ufefffred"
+
+        assert (
+            visible(
+                message=kept,
+            )
+            == kept
+        )
+
+    def test_a_code_point_beside_the_ones_written_out_stays_as_typed(
+        self,
+    ) -> None:
+        kept = "foo\u2027bar\u202fbaz\u2065qux\u206aquux"
+
+        assert (
+            visible(
+                message=kept,
+            )
+            == kept
         )
 
     def test_a_title_a_meaning_an_attribution_and_a_failure_reason_are_drawn_as_typed(
@@ -3212,7 +3247,7 @@ class TestTheEscape:
             reason=f"{_HOSTILE_CODE}: bar",
         )
 
-        written = "[bold]foo[/bold] :smile: \\x1b[31mbar"
+        written = "[bold]foo[/bold] :smile: \\x1b[31mbar\\u202ebaz"
 
         written_code = "Foo[bold]:smile:\\x1b[31m"
 
@@ -3228,6 +3263,8 @@ class TestTheEscape:
             ),
         ):
             assert "\x1b" not in text
+
+            assert "\u202e" not in text
 
             assert "😄" not in text
 

@@ -121,6 +121,7 @@ from wordwinnow.services.cli.progress import (
 )
 from wordwinnow.services.cli.report import (
     DEFAULT_ROW_LIMIT,
+    STANDARD_INPUT_TITLE,
     render_cards,
     render_figures,
     render_footer,
@@ -676,7 +677,7 @@ def _request(
 
         return AnalysisRequest(
             text=text,
-            title="standard input",
+            title=STANDARD_INPUT_TITLE,
             reference="stdin",
             level=level,
             target_level=target,

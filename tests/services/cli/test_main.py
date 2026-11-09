@@ -839,6 +839,36 @@ class TestCli:
 
         assert "no words to study" in result.output
 
+    def test_the_report_of_a_text_read_from_standard_input_says_so(
+        self,
+        *,
+        workspace: Path,
+        monkeypatch: MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            target=main,
+            name="stdin",
+            value=_standard_input(
+                _TEXT.encode(),
+            ),
+        )
+
+        piped = _runner.invoke(
+            app=app,
+            args=[
+                "analyze",
+                "-",
+                "--local",
+                "--no-dictionary",
+                "--level",
+                "A2",
+            ],
+        )
+
+        assert piped.exit_code == 0, piped.output
+
+        assert "read from standard input, beginning" in piped.output
+
     def test_standard_input_is_analyzed_and_refused_without_text(
         self,
         *,
@@ -2583,7 +2613,7 @@ class TestAnIntakeThatCannotServe:
             transport: AsyncBaseTransport | None = None,
         ) -> tuple[AnalysisSummary, ...]:
             raise IntakeRejectedError(
-                "foo\x1b[2Jbar\nbaz\rqux\t\x00\x7f\x9b",
+                "foo\x1b[2Jbar\nbaz\rqux\t\x00\x7f\x9b\u202equux\u2028corge",
             )
 
         monkeypatch.setattr(
@@ -2602,7 +2632,7 @@ class TestAnIntakeThatCannotServe:
 
         assert result.exit_code == 1
 
-        assert result.output == "error: foo\\x1b[2Jbar\\nbaz\\rqux\\t\\x00\\x7f\\x9b\n"
+        assert result.output == "error: foo\\x1b[2Jbar\\nbaz\\rqux\\t\\x00\\x7f\\x9b\\u202equux\\u2028corge\n"
 
     def test_a_final_backslash_prints_as_written(
         self,
