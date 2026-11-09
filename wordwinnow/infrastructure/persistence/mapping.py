@@ -22,6 +22,7 @@ from typing import (
 
 from wordwinnow.application.dto import (
     AnalysisSummary,
+    DictionaryWait,
     ProcessingProgress,
 )
 from wordwinnow.domain.analysis import (
@@ -181,6 +182,10 @@ def progress_to_json(
         ).isoformat(),
         "dictionary_retry_in_seconds": progress.dictionary_retry_in_seconds,
         "dictionary_patience_left_seconds": progress.dictionary_patience_left_seconds,
+        "dictionary_waiting_words": progress.dictionary_waiting_words,
+        "dictionary_wait": progress.dictionary_wait,
+        "dictionary_next_in_seconds": progress.dictionary_next_in_seconds,
+        "dictionary_wordnet_within_seconds": progress.dictionary_wordnet_within_seconds,
     }
 
 
@@ -191,6 +196,10 @@ def progress_from_json(
     """
     The progress the `progress` column holds.
     """
+
+    wait = payload.get(
+        "dictionary_wait",
+    )
 
     return ProcessingProgress(
         stage=Stage(
@@ -212,6 +221,25 @@ def progress_from_json(
         ),
         dictionary_patience_left_seconds=payload.get(
             "dictionary_patience_left_seconds",
+        ),
+        # NOTE:
+        # A report written before the line named what words wait for has none of these four keys, and reads as one
+        # that did not say, not as one where nothing waited.
+        dictionary_waiting_words=payload.get(
+            "dictionary_waiting_words",
+        ),
+        dictionary_wait=(
+            None
+            if wait is None
+            else DictionaryWait(
+                value=wait,
+            )
+        ),
+        dictionary_next_in_seconds=payload.get(
+            "dictionary_next_in_seconds",
+        ),
+        dictionary_wordnet_within_seconds=payload.get(
+            "dictionary_wordnet_within_seconds",
         ),
     )
 

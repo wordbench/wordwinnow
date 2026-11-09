@@ -11,6 +11,9 @@ from dataclasses import (
 from datetime import (
     datetime,
 )
+from enum import (
+    auto,
+)
 from typing import (
     final,
 )
@@ -29,6 +32,9 @@ from wordwinnow.domain.dictionary import (
 )
 from wordwinnow.domain.document import (
     DocumentOrigin,
+)
+from wordwinnow.domain.enums import (
+    UnorderedStrEnum,
 )
 from wordwinnow.domain.identifiers import (
     AnalysisId,
@@ -67,6 +73,27 @@ class AnalysisSummary:
     item_count: int
 
 
+class DictionaryWait(
+    UnorderedStrEnum,
+):
+    """
+    What the dictionary stage waits for while some of its words wait to be
+    asked again.
+
+    The members name the scope of the wait: some words for their own reasons,
+    only waiting words left, the dictionary not answering, or the client
+    paused as the dictionary asked.
+    """
+
+    SOME_WORDS = auto()
+
+    WAITING_WORDS = auto()
+
+    NOT_ANSWERING = auto()
+
+    ASKED_TO_PAUSE = auto()
+
+
 @dataclass(
     frozen=True,
     kw_only=True,
@@ -89,6 +116,17 @@ class ProcessingProgress:
     to answer again: the seconds from `reported_at` until the next of them
     asks, and `dictionary_patience_left_seconds` how much longer the stage
     waits at most.
+
+    `dictionary_waiting_words` is how many words the line counts as waiting,
+    `0` when none does, and `None` in a report written before the line named
+    what words wait for.
+
+    `dictionary_wait` is what they wait for, `None` when no wait is named.
+
+    `dictionary_next_in_seconds` is the seconds from `reported_at` until the
+    next check or ask that wait names, and `dictionary_wordnet_within_seconds`
+    the seconds within which WordNet's meaning stands in for every word still
+    waiting, each `None` when the wait names none.
     """
 
     stage: Stage
@@ -106,6 +144,14 @@ class ProcessingProgress:
     dictionary_retry_in_seconds: float | None = None
 
     dictionary_patience_left_seconds: float | None = None
+
+    dictionary_waiting_words: int | None = None
+
+    dictionary_wait: DictionaryWait | None = None
+
+    dictionary_next_in_seconds: float | None = None
+
+    dictionary_wordnet_within_seconds: float | None = None
 
 
 @dataclass(

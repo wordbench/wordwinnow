@@ -28,6 +28,9 @@ from rich.console import (
 from tests.fakes.ports import (
     EPOCH,
 )
+from tests.fakes.progress import (
+    held_words,
+)
 from wordwinnow.application.dto import (
     ProcessingProgress,
 )
@@ -441,14 +444,24 @@ class TestTerminalProgress:
             )
 
             for (
+                held,
                 retry_in_seconds,
                 patience_left_seconds,
             ) in (
                 (
+                    (
+                        held_words(
+                            reason=FailureReason.PROVIDER_ERROR,
+                            turned_away=4,
+                            turned_away_wake_in_seconds=30.0,
+                            longest_wait_seconds=90.0,
+                        ),
+                    ),
                     30.0,
                     180.0,
                 ),
                 (
+                    (),
                     None,
                     150.0,
                 ),
@@ -456,6 +469,8 @@ class TestTerminalProgress:
                 before = stream.getvalue()
 
                 progress.dictionary_waiting(
+                    held=held,
+                    ending=False,
                     retry_in_seconds=retry_in_seconds,
                     patience_left_seconds=patience_left_seconds,
                 )
@@ -471,7 +486,7 @@ class TestTerminalProgress:
             resumed,
         ) = drawn
 
-        assert "waiting for the dictionary: next try in 30 s, WordNet within 3 min" in waiting
+        assert "4 words wait to be asked again; next in 30 s  WordNet's meaning within 3 min" in waiting
 
         assert STAGE_DESCRIPTIONS[Stage.DICTIONARY_ENRICHMENT] in resumed
 
@@ -638,6 +653,14 @@ class TestFinishingEstimate:
             before = stream.getvalue()
 
             progress.dictionary_waiting(
+                held=(
+                    held_words(
+                        reason=FailureReason.PROVIDER_ERROR,
+                        turned_away=1,
+                        turned_away_wake_in_seconds=30.0,
+                    ),
+                ),
+                ending=False,
                 retry_in_seconds=30.0,
                 patience_left_seconds=180.0,
             )
@@ -651,6 +674,8 @@ class TestFinishingEstimate:
             )
 
             progress.dictionary_waiting(
+                held=(),
+                ending=False,
                 retry_in_seconds=None,
                 patience_left_seconds=150.0,
             )
@@ -668,7 +693,7 @@ class TestFinishingEstimate:
             before,
         )
 
-        assert "next try in" in waiting
+        assert "30 of 1,000, 1 waiting" in waiting
 
         assert "left" not in waiting
 
@@ -788,6 +813,14 @@ class TestTimesCountedFromNow:
             )
 
             progress.dictionary_waiting(
+                held=(
+                    held_words(
+                        reason=FailureReason.CIRCUIT_OPEN,
+                        turned_away=3,
+                        turned_away_wake_in_seconds=30.0,
+                    ),
+                ),
+                ending=False,
                 retry_in_seconds=30.0,
                 patience_left_seconds=45.0,
             )
@@ -815,9 +848,12 @@ class TestTimesCountedFromNow:
             passed,
         ) = drawn
 
-        assert "waiting for the dictionary: next try in 18 s, WordNet within 33 s" in counting
+        assert (
+            "the dictionary is not answering; next check in 18 s  3 waiting, WordNet's meaning within 33 s"
+            in counting
+        )
 
-        assert "waiting for the dictionary: next try now, WordNet within 14 s" in passed
+        assert "the dictionary is not answering; next check now  3 waiting, WordNet's meaning within 14 s" in passed
 
     def test_a_stage_without_an_answer_for_a_while_says_so_in_place_of_the_estimate(
         self,

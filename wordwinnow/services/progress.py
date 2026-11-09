@@ -23,9 +23,13 @@ from collections.abc import (
     AsyncGenerator,
     Awaitable,
     Callable,
+    Sequence,
 )
 from contextlib import (
     asynccontextmanager,
+)
+from dataclasses import (
+    dataclass,
 )
 from datetime import (
     datetime,
@@ -45,12 +49,14 @@ from typing import (
 )
 
 from wordwinnow.application.dto import (
+    DictionaryWait,
     ProcessingProgress,
 )
 from wordwinnow.application.ports.clock import (
     Clock,
 )
 from wordwinnow.application.ports.pipeline_progress import (
+    HeldWords,
     PipelineProgress,
 )
 from wordwinnow.application.ports.uow import (
@@ -68,6 +74,9 @@ from wordwinnow.domain.identifiers import (
 )
 from wordwinnow.infrastructure.dictionary.activity import (
     DictionaryActivity,
+)
+from wordwinnow.infrastructure.dictionary.free_dictionary import (
+    MAX_DELAY_SECONDS,
 )
 from wordwinnow.infrastructure.dictionary.wire import (
     FailureReason,
@@ -280,6 +289,150 @@ def paused_after(
     return False
 
 
+@dataclass(
+    frozen=True,
+    kw_only=True,
+    slots=True,
+)
+@final
+class DictionaryWaitState:
+    """
+    What the dictionary stage waits for, as a command line or a stored report
+    says it.
+
+    `wait` is `None` when no wait is named, `words` how many words wait,
+    `next_in_seconds` the seconds until the next check or ask the wait names,
+    and `wordnet_within_seconds` the seconds within which WordNet's meaning
+    stands in for every word still waiting, each `None` when the wait names
+    none.
+
+    The seconds count from the moment of the report the state was drawn from.
+    """
+
+    wait: DictionaryWait | None
+
+    words: int
+
+    next_in_seconds: float | None
+
+    wordnet_within_seconds: float | None
+
+
+def dictionary_wait_of(
+    *,
+    held: Sequence[HeldWords],
+    patience_left_seconds: float,
+    steps: int | None,
+    done: int,
+    paused: bool,
+) -> DictionaryWaitState:
+    """
+    What the dictionary stage waits for, given the words it holds, the waiting
+    time left, and its own count of `steps` and words `done`, with `paused`
+    saying the dictionary is paused.
+
+    A word waits for its own reasons, for the dictionary to answer, or for the
+    pause the dictionary asked for, by the reason its last refusal gave, so
+    the same words draw the same wait in a command line and in a report.
+    """
+
+    # NOTE:
+    # A word counts toward the wait of the dictionary's circuit or its pause until the dictionary answers a held word
+    # after that word's last refusal, and toward its own wait while it sleeps or until then.
+    #
+    # The word whose own failure opened the circuit keeps that failure's reason, so it counts toward its own wait.
+    circuit: HeldWords | None = None
+
+    pause: HeldWords | None = None
+
+    own_words = 0
+
+    own_wake: float | None = None
+
+    own_bound = False
+
+    for words in held:
+        if words.reason == FailureReason.CIRCUIT_OPEN:
+            circuit = words
+
+            continue
+
+        if words.reason == FailureReason.RATE_LIMITED:
+            pause = words
+
+            continue
+
+        own_words += words.turned_away + words.others_sleeping
+
+        if words.wake_in_seconds is not None and (own_wake is None or words.wake_in_seconds < own_wake):
+            own_wake = words.wake_in_seconds
+
+        # NOTE:
+        # WordNet's meaning is named for words that wait long or wait again, because a word's own retry after its
+        # attempts waits a second or two, and a bound of minutes beside it answers a question nobody asked.
+        #
+        # The wait a word was given is the client's own boundary: the client keeps a wait of `MAX_DELAY_SECONDS` or
+        # less inside a lookup and hands a longer one back.
+        if (words.longest_wait_seconds or 0.0) > MAX_DELAY_SECONDS or words.repeated:
+            own_bound = True
+
+    counted = (
+        own_words + (0 if circuit is None else circuit.turned_away) + (0 if pause is None else pause.turned_away)
+    )
+
+    # NOTE:
+    # The dictionary's circuit comes before its pause, the pause before the dictionary's own paused state, and that
+    # before the words' own waits, so that the wait that explains the most is the one named.
+    for (
+        scope,
+        named,
+    ) in (
+        (
+            circuit,
+            DictionaryWait.NOT_ANSWERING,
+        ),
+        (
+            pause,
+            DictionaryWait.ASKED_TO_PAUSE,
+        ),
+    ):
+        if scope is None or not scope.turned_away:
+            continue
+
+        return DictionaryWaitState(
+            wait=named,
+            words=counted,
+            next_in_seconds=scope.turned_away_wake_in_seconds,
+            wordnet_within_seconds=patience_left_seconds,
+        )
+
+    if paused:
+        return DictionaryWaitState(
+            wait=None,
+            words=0,
+            next_in_seconds=None,
+            wordnet_within_seconds=None,
+        )
+
+    # NOTE:
+    # Only waiting words are left when every word not yet ended is one of them, and the wait is named only while one
+    # of them sleeps, because a word that wakes to ask again is no longer waiting for its time.
+    if steps is not None and own_wake is not None and own_words == steps - done:
+        return DictionaryWaitState(
+            wait=DictionaryWait.WAITING_WORDS,
+            words=own_words,
+            next_in_seconds=own_wake,
+            wordnet_within_seconds=patience_left_seconds if own_bound else None,
+        )
+
+    return DictionaryWaitState(
+        wait=DictionaryWait.SOME_WORDS if own_words else None,
+        words=own_words,
+        next_in_seconds=None,
+        wordnet_within_seconds=None,
+    )
+
+
 @final
 class Unwatched:
     """
@@ -326,6 +479,8 @@ class Unwatched:
     def dictionary_waiting(
         self,
         *,
+        held: Sequence[HeldWords],
+        ending: bool,
         retry_in_seconds: float | None,
         patience_left_seconds: float,
     ) -> None:
@@ -386,6 +541,12 @@ class StoredProgress:
 
         self._waiting_until: tuple[datetime, datetime] | None = None
 
+        self._held: Sequence[HeldWords] = ()
+
+        self._held_at: datetime | None = None
+
+        self._patience_left = 0.0
+
         self._changed = False
 
         self._warned = False
@@ -438,6 +599,10 @@ class StoredProgress:
 
         self._waiting_until = None
 
+        self._held = ()
+
+        self._held_at = None
+
         self._changed = True
 
     def looked_up(
@@ -460,10 +625,22 @@ class StoredProgress:
     def dictionary_waiting(
         self,
         *,
+        held: Sequence[HeldWords],
+        ending: bool,
         retry_in_seconds: float | None,
         patience_left_seconds: float,
     ) -> None:
         now = self._clock.now()
+
+        # NOTE:
+        # The held words are kept with the moment they were reported and the state is drawn from them when the report
+        # is written, a turn of the loop of its own, so a word that is leaving is never written between its release
+        # and its `looked_up`, and `ending` has nothing to add here.
+        self._held = held
+
+        self._held_at = now
+
+        self._patience_left = patience_left_seconds
 
         # NOTE:
         # A wait is kept as the moments it ends, read on the clock the report is stamped with, so a report written a
@@ -501,6 +678,14 @@ class StoredProgress:
 
         waiting = self._waiting_until
 
+        state = dictionary_wait_of(
+            held=self._held,
+            patience_left_seconds=self._patience_left,
+            steps=self._steps,
+            done=self._done,
+            paused=self._paused,
+        )
+
         progress = ProcessingProgress(
             stage=self._stage,
             steps=self._steps,
@@ -523,6 +708,18 @@ class StoredProgress:
                     0.0,
                     (waiting[1] - reported_at).total_seconds(),
                 )
+            ),
+            dictionary_waiting_words=state.words,
+            dictionary_wait=state.wait,
+            dictionary_next_in_seconds=_seconds_left(
+                self._held_at,
+                state.next_in_seconds,
+                reported_at,
+            ),
+            dictionary_wordnet_within_seconds=_seconds_left(
+                self._held_at,
+                state.wordnet_within_seconds,
+                reported_at,
             ),
         )
 
@@ -567,3 +764,26 @@ class StoredProgress:
             )
 
             await self.flush()
+
+
+def _seconds_left(
+    reported: datetime | None,
+    seconds: float | None,
+    now: datetime,
+    /,
+) -> float | None:
+    # NOTE:
+    # A time the state names counts from the moment its words were reported, so a report written later says less.
+    if reported is None or seconds is None:
+        return None
+
+    return max(
+        0.0,
+        (
+            reported
+            + timedelta(
+                seconds=seconds,
+            )
+            - now
+        ).total_seconds(),
+    )

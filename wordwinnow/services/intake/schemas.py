@@ -32,6 +32,7 @@ from pydantic import (
 
 from wordwinnow.application.dto import (
     AnalysisSummary,
+    DictionaryWait,
     LemmaCount,
     LevelCount,
     ProcessingProgress,
@@ -452,6 +453,14 @@ class ProgressOut(
 
     dictionary_patience_left_seconds: float | None = None
 
+    dictionary_waiting_words: int | None = None
+
+    dictionary_wait: DictionaryWait | None = None
+
+    dictionary_next_in_seconds: float | None = None
+
+    dictionary_wordnet_within_seconds: float | None = None
+
     @classmethod
     def from_domain(
         cls,
@@ -471,6 +480,10 @@ class ProgressOut(
             reported_at=progress.reported_at,
             dictionary_retry_in_seconds=progress.dictionary_retry_in_seconds,
             dictionary_patience_left_seconds=progress.dictionary_patience_left_seconds,
+            dictionary_waiting_words=progress.dictionary_waiting_words,
+            dictionary_wait=progress.dictionary_wait,
+            dictionary_next_in_seconds=progress.dictionary_next_in_seconds,
+            dictionary_wordnet_within_seconds=progress.dictionary_wordnet_within_seconds,
         )
 
     def to_domain(
@@ -489,6 +502,10 @@ class ProgressOut(
             reported_at=self.reported_at,
             dictionary_retry_in_seconds=self.dictionary_retry_in_seconds,
             dictionary_patience_left_seconds=self.dictionary_patience_left_seconds,
+            dictionary_waiting_words=self.dictionary_waiting_words,
+            dictionary_wait=self.dictionary_wait,
+            dictionary_next_in_seconds=self.dictionary_next_in_seconds,
+            dictionary_wordnet_within_seconds=self.dictionary_wordnet_within_seconds,
         )
 
 

@@ -49,6 +49,7 @@ from tests.services.lifespan import (
     run_lifespan,
 )
 from wordwinnow.application.dto import (
+    DictionaryWait,
     LemmaCount,
     LevelCount,
     ProcessingProgress,
@@ -560,6 +561,93 @@ class TestReadAnalyses:
         assert "progress" not in requested
 
         assert processing.processing_progress() == report
+
+    async def test_the_report_of_a_processing_analysis_carries_what_the_line_says_of_the_words_that_wait(
+        self,
+        *,
+        harness: tuple[Harness, AsyncClient],
+    ) -> None:
+        (
+            built,
+            client,
+        ) = harness
+
+        accepted = (
+            await client.post(
+                url="/analyses",
+                json={
+                    "level": "B1",
+                    "text": "Irene Adler kept the photograph.",
+                },
+            )
+        ).json()
+
+        (analysis_id,) = built.storage.analyses
+
+        report = ProcessingProgress(
+            stage=Stage.DICTIONARY_ENRICHMENT,
+            steps=156,
+            done=63,
+            unavailable=20,
+            dictionary_paused=False,
+            reported_at=EPOCH,
+            dictionary_retry_in_seconds=9.0,
+            dictionary_patience_left_seconds=171.0,
+            dictionary_waiting_words=38,
+            dictionary_wait=DictionaryWait.NOT_ANSWERING,
+            dictionary_next_in_seconds=9.0,
+            dictionary_wordnet_within_seconds=171.0,
+        )
+
+        async with built.storage.new_unit_of_work() as uow:
+            analysis = await uow.analyses.get(
+                analysis_id=analysis_id,
+            )
+
+            assert analysis is not None
+
+            analysis.start(
+                at=EPOCH,
+            )
+
+            await uow.analyses.save(
+                analysis=analysis,
+            )
+
+            await uow.analyses.record_progress(
+                analysis_id=analysis_id,
+                progress=report,
+            )
+
+            await uow.commit()
+
+        body = (
+            await client.get(
+                url=f"/analyses/{accepted['analysis_id']}",
+            )
+        ).json()
+
+        assert {
+            key: body["progress"][key]
+            for key in (
+                "dictionary_waiting_words",
+                "dictionary_wait",
+                "dictionary_next_in_seconds",
+                "dictionary_wordnet_within_seconds",
+            )
+        } == {
+            "dictionary_waiting_words": 38,
+            "dictionary_wait": "not_answering",
+            "dictionary_next_in_seconds": 9.0,
+            "dictionary_wordnet_within_seconds": 171.0,
+        }
+
+        assert (
+            AnalysisOut.model_validate(
+                obj=body,
+            ).processing_progress()
+            == report
+        )
 
     async def test_an_unknown_analysis_is_a_404(
         self,

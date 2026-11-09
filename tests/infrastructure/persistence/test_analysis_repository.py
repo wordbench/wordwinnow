@@ -44,6 +44,7 @@ from tests.infrastructure.persistence.conftest import (
     store_analysis,
 )
 from wordwinnow.application.dto import (
+    DictionaryWait,
     ProcessingProgress,
 )
 from wordwinnow.domain.analysis import (
@@ -764,6 +765,68 @@ class TestProgress:
                 payload=older,
             )
             == _PROGRESS
+        )
+
+    async def test_a_report_keeps_what_the_line_says_of_the_words_that_wait_and_an_older_one_says_nothing(
+        self,
+        *,
+        new_unit_of_work: NewUnitOfWork,
+    ) -> None:
+        analysis = processing_analysis()
+
+        await store_analysis(
+            analysis=analysis,
+            new_unit_of_work=new_unit_of_work,
+        )
+
+        saying = replace(
+            _PROGRESS,
+            dictionary_retry_in_seconds=9.0,
+            dictionary_patience_left_seconds=171.0,
+            dictionary_waiting_words=38,
+            dictionary_wait=DictionaryWait.NOT_ANSWERING,
+            dictionary_next_in_seconds=9.0,
+            dictionary_wordnet_within_seconds=171.0,
+        )
+
+        async with new_unit_of_work() as uow:
+            await uow.analyses.record_progress(
+                analysis_id=analysis.id,
+                progress=saying,
+            )
+
+            await uow.commit()
+
+        async with new_unit_of_work() as uow:
+            kept = await uow.analyses.progress_of(
+                analysis_id=analysis.id,
+            )
+
+        # NOTE:
+        # A report written before the line named what words wait for has none of the four keys, and says nothing of
+        # them, which is not the same as saying that none waits.
+        older = progress_to_json(
+            progress=saying,
+        )
+
+        for key in (
+            "dictionary_waiting_words",
+            "dictionary_wait",
+            "dictionary_next_in_seconds",
+            "dictionary_wordnet_within_seconds",
+        ):
+            del older[key]
+
+        assert kept == saying
+
+        assert progress_from_json(
+            payload=older,
+        ) == replace(
+            saying,
+            dictionary_waiting_words=None,
+            dictionary_wait=None,
+            dictionary_next_in_seconds=None,
+            dictionary_wordnet_within_seconds=None,
         )
 
     async def test_a_report_is_kept_while_processing_and_forgotten_by_the_next_save(

@@ -11,9 +11,39 @@ from typing import (
 from wordwinnow.application.dto import (
     ProcessingProgress,
 )
+from wordwinnow.application.ports.pipeline_progress import (
+    HeldWords,
+)
 from wordwinnow.infrastructure.dictionary.activity import (
     DictionaryActivity,
 )
+
+
+def held_words(
+    *,
+    reason: str,
+    turned_away: int,
+    turned_away_wake_in_seconds: float | None,
+    others_sleeping: int = 0,
+    wake_in_seconds: float | None = None,
+    longest_wait_seconds: float | None = None,
+    repeated: bool = False,
+) -> HeldWords:
+    """
+    The words held for `reason`, as a pipeline reports them, with the soonest
+    of the sleeping turned-away words standing for the soonest of all when no
+    other is named.
+    """
+
+    return HeldWords(
+        reason=reason,
+        turned_away=turned_away,
+        turned_away_wake_in_seconds=turned_away_wake_in_seconds,
+        others_sleeping=others_sleeping,
+        wake_in_seconds=turned_away_wake_in_seconds if wake_in_seconds is None else wake_in_seconds,
+        longest_wait_seconds=longest_wait_seconds,
+        repeated=repeated,
+    )
 
 
 @final

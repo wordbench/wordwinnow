@@ -58,6 +58,7 @@ from wordwinnow.application.ports.linguistic_analyzer import (
     LinguisticAnalyzer,
 )
 from wordwinnow.application.ports.pipeline_progress import (
+    HeldWords,
     PipelineProgress,
 )
 from wordwinnow.application.ports.reference_lexicon import (
@@ -150,6 +151,8 @@ class _Unwatched:
     def dictionary_waiting(
         self,
         *,
+        held: Sequence[HeldWords],
+        ending: bool,
         retry_in_seconds: float | None,
         patience_left_seconds: float,
     ) -> None:
@@ -775,7 +778,7 @@ async def _look_up_all(
         # A word the dictionary turned away with a time to ask again holds the analysis's waiting time from that
         # moment until it is answered or let go, so the time it spends asking again, waiting for a trial's outcome
         # included, counts as well as the time it sleeps.
-        held = False
+        held: _HeldWord | None = None
 
         try:
             async with semaphore:
@@ -788,12 +791,16 @@ async def _look_up_all(
                     retry_after_seconds=lookup.retry_after_seconds,
                 )
             ) is not None:
-                if not held:
-                    patience.hold()
-
-                    held = True
+                # NOTE:
+                # The refusal is noted with the sleep that follows it and reported there, because nothing awaits
+                # between them, and a report made between them would say the word waits before it sleeps.
+                held = patience.hold(
+                    word=held,
+                    failure_reason=lookup.failure_reason,
+                )
 
                 await patience.sleep(
+                    word=held,
                     seconds=wait,
                 )
 
@@ -833,8 +840,10 @@ async def _look_up_all(
                     patience.answered()
 
         finally:
-            if held:
-                patience.release()
+            if held is not None:
+                patience.release(
+                    word=held,
+                )
 
         pipeline.progress.looked_up(
             lookup=lookup,
@@ -893,6 +902,69 @@ async def _look_up_all(
     )
 
 
+def _in_seconds(
+    moment: float | None,
+    now: float,
+    /,
+) -> float | None:
+    return (
+        None
+        if moment is None
+        else max(
+            0.0,
+            moment - now,
+        )
+    )
+
+
+@dataclass(
+    eq=False,
+    kw_only=True,
+    slots=True,
+)
+@final
+class _HeldWord:
+    """
+    One word the dictionary turned away with a time to ask again, as
+    `_Patience` keeps it from its first refusal until it is answered or let
+    go.
+    """
+
+    reason: str | None
+
+    turn: int
+
+    wake: float | None = None
+
+    wait: float = 0.0
+
+    sleeps: int = 0
+
+
+@dataclass(
+    kw_only=True,
+    slots=True,
+)
+@final
+class _Tally:
+    """
+    What a report adds up about the held words whose last refusal had one
+    failure reason.
+    """
+
+    turned_away: int = 0
+
+    turned_away_wake: float | None = None
+
+    others_sleeping: int = 0
+
+    wake: float | None = None
+
+    longest_wait: float | None = None
+
+    repeated: bool = False
+
+
 @final
 class _Patience:
     """
@@ -921,10 +993,16 @@ class _Patience:
         self._progress: Final = progress
 
         # NOTE:
-        # When each sleeping word asks again, so the progress can name the earliest of them rather than the latest.
-        self._wakes: Final[list[float]] = []
+        # The words that hold the time, each with its last refusal's reason and, while it sleeps, when it asks again,
+        # so the progress can name the earliest of them rather than the latest.
+        self._words: Final[set[_HeldWord]] = set()
 
-        self._held = 0
+        # NOTE:
+        # The order of the refusals and of the answers to a held word, one count for both: a word was turned away
+        # after the dictionary last answered a held word when its refusal's turn is the later.
+        self._turn = 0
+
+        self._answered_turn = 0
 
         self._since = 0.0
 
@@ -1008,6 +1086,10 @@ class _Patience:
 
         self._answering = True
 
+        self._turn += 1
+
+        self._answered_turn = self._turn
+
         for deadline in self._deadlines:
             deadline.reschedule(
                 when=None,
@@ -1015,74 +1097,168 @@ class _Patience:
 
     def hold(
         self,
-    ) -> None:
+        *,
+        word: _HeldWord | None,
+        failure_reason: str | None,
+    ) -> _HeldWord:
         """
-        A word turned away begins to count toward the time.
+        A word turned away for `failure_reason` begins to count toward the
+        time, or, when `word` is held already, was turned away again.
         """
 
-        if not self._held:
+        self._turn += 1
+
+        if word is not None:
+            word.reason = failure_reason
+
+            word.turn = self._turn
+
+            return word
+
+        if not self._words:
             self._since = self._clock()
 
-        self._held += 1
+        word = _HeldWord(
+            reason=failure_reason,
+            turn=self._turn,
+        )
+
+        self._words.add(
+            word,
+        )
+
+        return word
 
     def release(
         self,
+        *,
+        word: _HeldWord,
     ) -> None:
         """
-        A word that held the time is answered or let go.
+        A word that held the time is answered or let go, and the progress
+        hears that it left, to draw at the `looked_up` that follows.
         """
 
-        self._held -= 1
+        self._words.remove(
+            word,
+        )
 
-        if not self._held:
+        if not self._words:
             self._spent += self._clock() - self._since
+
+        self._report(
+            ending=True,
+        )
 
     async def sleep(
         self,
         *,
+        word: _HeldWord,
         seconds: float,
     ) -> None:
         """
-        Sleep before a word asks again, and tell the progress when the
-        earliest sleeping word asks again and how long the stage still waits
-        at most, each time a word begins or ends a sleep.
+        Sleep before `word` asks again, and tell the progress which words are
+        held, when the earliest sleeping word asks again, and how long the
+        stage still waits at most, each time a word begins or ends a sleep.
         """
 
-        wake = self._clock() + seconds
+        word.wake = self._clock() + seconds
 
-        self._wakes.append(
-            wake,
-        )
+        word.wait = seconds
+
+        word.sleeps += 1
 
         try:
-            self._report()
+            self._report(
+                ending=False,
+            )
 
             await self._sleep(
                 seconds,
             )
 
         finally:
-            self._wakes.remove(
-                wake,
-            )
+            word.wake = None
 
-            self._report()
+            self._report(
+                ending=False,
+            )
 
     def _report(
         self,
+        *,
+        ending: bool,
     ) -> None:
         now = self._clock()
 
-        self._progress.dictionary_waiting(
-            retry_in_seconds=max(
-                0.0,
-                min(
-                    self._wakes,
-                )
-                - now,
+        tallies: dict[str | None, _Tally] = {}
+
+        earliest: float | None = None
+
+        for word in self._words:
+            # NOTE:
+            # A tally is made once for each reason and never for each word, so a report costs the held words one pass.
+            tally = tallies.get(
+                word.reason,
             )
-            if self._wakes
-            else None,
+
+            if tally is None:
+                tally = _Tally()
+
+                tallies[word.reason] = tally
+
+            turned_away = word.turn > self._answered_turn
+
+            if turned_away:
+                tally.turned_away += 1
+
+            if word.wake is None:
+                continue
+
+            if not turned_away:
+                tally.others_sleeping += 1
+
+            elif tally.turned_away_wake is None or word.wake < tally.turned_away_wake:
+                tally.turned_away_wake = word.wake
+
+            if tally.wake is None or word.wake < tally.wake:
+                tally.wake = word.wake
+
+            if tally.longest_wait is None or word.wait > tally.longest_wait:
+                tally.longest_wait = word.wait
+
+            tally.repeated = tally.repeated or word.sleeps >= 2
+
+            if earliest is None or word.wake < earliest:
+                earliest = word.wake
+
+        self._progress.dictionary_waiting(
+            held=tuple(
+                HeldWords(
+                    reason=reason,
+                    turned_away=tally.turned_away,
+                    turned_away_wake_in_seconds=_in_seconds(
+                        tally.turned_away_wake,
+                        now,
+                    ),
+                    others_sleeping=tally.others_sleeping,
+                    wake_in_seconds=_in_seconds(
+                        tally.wake,
+                        now,
+                    ),
+                    longest_wait_seconds=tally.longest_wait,
+                    repeated=tally.repeated,
+                )
+                for (
+                    reason,
+                    tally,
+                ) in tallies.items()
+            ),
+            ending=ending,
+            retry_in_seconds=_in_seconds(
+                earliest,
+                now,
+            ),
             patience_left_seconds=self.left(),
         )
 
@@ -1093,7 +1269,7 @@ class _Patience:
         How much of the time is left now.
         """
 
-        spent = self._spent + (self._clock() - self._since if self._held else 0.0)
+        spent = self._spent + (self._clock() - self._since if self._words else 0.0)
 
         return max(
             0.0,

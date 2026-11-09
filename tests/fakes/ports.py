@@ -34,6 +34,9 @@ from wordwinnow.application.errors import (
     MessagingUnavailableError,
     SourceUnavailableError,
 )
+from wordwinnow.application.ports.pipeline_progress import (
+    HeldWords,
+)
 from wordwinnow.domain.analysis import (
     Analysis,
     AnalysisEvent,
@@ -725,9 +728,17 @@ class RecordingProgress:
     def dictionary_waiting(
         self,
         *,
+        held: Sequence[HeldWords],
+        ending: bool,
         retry_in_seconds: float | None,
         patience_left_seconds: float,
     ) -> None:
+        # NOTE:
+        # A report that a held word left is for the `looked_up` that follows it, which this double records, and it
+        # names no sleep, so the double hears the sleeps of the words only, as the tests that read it expect.
+        if ending:
+            return
+
         self.events.append(
             "resumed"
             if retry_in_seconds is None

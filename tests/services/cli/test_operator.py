@@ -24,6 +24,9 @@ from rich.console import (
     Console,
 )
 
+from tests.fakes.progress import (
+    held_words,
+)
 from tests.infrastructure.dictionary.doubles import (
     FakeMonotonicClock,
 )
@@ -203,6 +206,45 @@ class TestOperatorProgress:
         assert not progress.shown
 
         assert stream.getvalue() == ""
+
+    def test_the_line_says_what_the_words_the_stage_holds_wait_for(
+        self,
+    ) -> None:
+        stream = StringIO()
+
+        with OperatorProgress(
+            console=Console(
+                force_terminal=True,
+                force_interactive=True,
+                file=stream,
+                width=160,
+            ),
+        ) as progress:
+            progress.stage_started(
+                stage=Stage.DICTIONARY_ENRICHMENT,
+                steps=40,
+            )
+
+            progress.dictionary_waiting(
+                held=(
+                    held_words(
+                        reason=FailureReason.CIRCUIT_OPEN,
+                        turned_away=3,
+                        turned_away_wake_in_seconds=9.0,
+                    ),
+                ),
+                ending=False,
+                retry_in_seconds=9.0,
+                patience_left_seconds=171.0,
+            )
+
+        drawn = _drawn(
+            stream,
+        )
+
+        assert "the dictionary is not answering; next check in 9 s" in drawn
+
+        assert "3 waiting, WordNet's meaning within 2 min 51 s" in drawn
 
     def test_a_terminal_sees_the_line_and_under_it_what_each_lookup_waits_for(
         self,

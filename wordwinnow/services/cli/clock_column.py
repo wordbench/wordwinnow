@@ -15,12 +15,12 @@ from typing import (
     override,
 )
 
+from rich.console import (
+    RenderableType,
+)
 from rich.progress import (
     ProgressColumn,
     Task,
-)
-from rich.text import (
-    Text,
 )
 
 
@@ -29,15 +29,15 @@ class ClockColumn(
     ProgressColumn,
 ):
     """
-    A column whose text `draw` makes from a task and the moment `clock` reads
-    each time the line is drawn.
+    A column whose content `draw` makes from a task and the moment `clock`
+    reads each time the line is drawn.
     """
 
     def __init__(
         self,
         *,
         clock: Callable[[], datetime],
-        draw: Callable[[Task, datetime], Text],
+        draw: Callable[[Task, datetime], RenderableType],
     ) -> None:
         super().__init__()
 
@@ -49,7 +49,7 @@ class ClockColumn(
     def render(
         self,
         task: Task,
-    ) -> Text:
+    ) -> RenderableType:
         return self._draw(
             task,
             self._clock(),

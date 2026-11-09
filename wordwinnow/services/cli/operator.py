@@ -66,6 +66,9 @@ from rich.text import (
 from wordwinnow.application.dto import (
     ProcessingProgress,
 )
+from wordwinnow.application.ports.pipeline_progress import (
+    HeldWords,
+)
 from wordwinnow.domain.analysis import (
     Stage,
 )
@@ -291,10 +294,14 @@ class OperatorProgress:
     def dictionary_waiting(
         self,
         *,
+        held: Sequence[HeldWords],
+        ending: bool,
         retry_in_seconds: float | None,
         patience_left_seconds: float,
     ) -> None:
         self._line.dictionary_waiting(
+            held=held,
+            ending=ending,
             retry_in_seconds=retry_in_seconds,
             patience_left_seconds=patience_left_seconds,
         )

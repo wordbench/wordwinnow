@@ -53,11 +53,27 @@ the dictionary is asked about, and the time the step has taken.
 It does so only on an interactive terminal and clears the line when it ends,
 so a pipe, a file, and the output of `--json` and `--csv` never contain it.
 
-In the dictionary stage the count also says how many words went unanswered;
-while words wait for the dictionary to answer again, the line counts down to
-the next of them asking and to the moment WordNet stands in for every word
-still waiting, and while the dictionary is not answering at all and nothing
-waits, the line says so, because WordNet's glosses then stand in.
+In the dictionary stage the count also says how many words went unanswered.
+
+While some words wait to be asked again for their own reasons and the rest are
+still asked, the count also says how many wait.
+
+When only waiting words are left, the line says that they wait to be asked
+again and counts down to the next of them asking, and, when a wait is long or
+one word waits again, it says within how long WordNet's meaning stands in for
+them.
+
+While the dictionary is not answering, the line says so, counts down to the
+next check, and says how many words wait and within how long WordNet's meaning
+stands in for them.
+
+While the dictionary asked for a pause, the line says it is paused, as the
+dictionary asked, counts down to its end, and says the same of the words that
+wait.
+
+When the time an analysis waits could not cover the next check, the line says
+that the dictionary is not answering and that WordNet's meaning stands in,
+because the words that wait are then left unanswered.
 
 Once the stage has answered at least ten words over ten seconds or more of its
 last minute, the count also says about how long the stage may still take at
@@ -66,10 +82,10 @@ none while the dictionary is not answering or words wait, so it never counts
 down through a pause whose end it cannot know.
 
 When the stage goes without an answer for longer than three of its recent gaps
-between answers, and five seconds at the least, the count says for how long in
-place of the estimate, because something the line cannot see is holding the
-lookups: a pause the provider asked for, a slow answer, or a trial, which the
-operator view names.
+between answers, and five seconds at the least, while the line says what the
+stage does, the count says for how long in place of the estimate, because
+something the line cannot see is holding the lookups, such as a slow answer,
+which the operator view names.
 
 In the distributed mode the line shows the same stages and counts, from what
 the worker processing the analysis last wrote beside it, about once a second;
@@ -441,7 +457,7 @@ those variables are set.
 | `WORDWINNOW_DICTIONARY_CONCURRENCY` | 8 | Lookups in flight per analysis |
 | `WORDWINNOW_DICTIONARY_REQUESTS_PER_SECOND`, `WORDWINNOW_DICTIONARY_BURST` | unset | The provider budget in place of the provider's own, which for the Free Dictionary API is 2 a second after a burst of 4 |
 | `WORDWINNOW_DICTIONARY_TIMEOUT_SECONDS` | 30 | How long one request to the provider may take |
-| `WORDWINNOW_DICTIONARY_PATIENCE_SECONDS` | 180 | How long an analysis waits, in all, for a provider that stopped answering, before WordNet stands in for the words still waiting; 0 fails fast |
+| `WORDWINNOW_DICTIONARY_PATIENCE_SECONDS` | 180 | How long an analysis waits, in all, for a provider that stopped answering, before WordNet's meaning stands in for the words still waiting; 0 fails fast |
 | `WORDWINNOW_ENRICHMENT_TIMEOUT_SECONDS` | 180 | How long a worker waits for one lookup from the enrichment service |
 | `WORDWINNOW_DICTIONARY_FOUND_TTL_SECONDS`, `WORDWINNOW_DICTIONARY_NOT_FOUND_TTL_SECONDS` | 30 days, 7 days | How long the cache keeps a found and a not-found answer |
 | `WORDWINNOW_DICTIONARY_CACHE_PATH` | `dictionary-cache.db` in the user cache directory | The local mode's dictionary cache, kept from one command to the next; a file that cannot be opened leaves the command a cache in its own process and is left as it was, and deleting it only makes the next analysis ask the provider again |
@@ -546,6 +562,16 @@ last report as `progress`: the stage, the count, the words left unanswered,
 whether the dictionary is paused, and, while words wait for it to answer
 again, the seconds from the report until the next try and until the stage
 stops waiting.
+
+It also carries what the line draws of the words that wait: how many words
+wait as `dictionary_waiting_words`, what they wait for as `dictionary_wait`,
+which is `some_words`, `waiting_words`, `not_answering`, or `asked_to_pause`, the
+seconds until the next check or ask as `dictionary_next_in_seconds`, and the
+seconds within which WordNet's meaning stands in as
+`dictionary_wordnet_within_seconds`.
+
+A report written before these four fields existed has none of them, and a
+command line draws it as it always did.
 
 ## The operator view
 
