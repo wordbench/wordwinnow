@@ -1382,6 +1382,34 @@ class TestDoctor:
         install_nltk_data: bool,
         healthy: bool,
     ) -> None:
+        def missing_resources(
+            *,
+            resources: Sequence[NltkResource] = REQUIRED_RESOURCES,
+        ) -> tuple[NltkResource, ...]:
+            return ()
+
+        def download_resources(
+            *,
+            resources: Sequence[NltkResource] = REQUIRED_RESOURCES,
+            target: Path | None = None,
+            client: object = None,
+        ) -> tuple[NltkResource, ...]:
+            raise AssertionError(
+                "nothing is missing, so nothing is downloaded",
+            )
+
+        monkeypatch.setattr(
+            target=commands,
+            name="missing_resources",
+            value=missing_resources,
+        )
+
+        monkeypatch.setattr(
+            target=commands,
+            name="download_resources",
+            value=download_resources,
+        )
+
         if not healthy:
             monkeypatch.setenv(
                 name="WORDWINNOW_REFERENCE_LISTS_DIR",

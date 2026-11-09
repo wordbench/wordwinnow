@@ -12,7 +12,16 @@ from functools import (
 from json import (
     loads,
 )
+from os import (
+    close,
+    openpty,
+    read,
+)
+from select import (
+    select,
+)
 from subprocess import (
+    PIPE,
     run,
 )
 from sys import (
@@ -67,6 +76,25 @@ _IMPORT_THE_ENTRY: Final = (
     "print(json.dumps(sorted(name for name in new if name.split('.')[0] not in sys.stdlib_module_names)))\n"
 )
 
+# NOTE:
+# The child program of the two tests that run the real `main()`, so that what `main()` tests and where it writes are
+# under test, and not what a recorder saw of its arguments.
+#
+# It sets the threshold to zero so that the timer is immediate, and replaces the load with one that returns only once
+# the timer thread has ended, so that no assertion depends on how fast anything is.
+_RUN_THE_ENTRY: Final = (
+    "from threading import Timer, enumerate as running\n"
+    "from time import sleep\n"
+    "from wordwinnow.services.cli import entry\n"
+    "def load():\n"
+    "    while any(isinstance(thread, Timer) for thread in running()):\n"
+    "        sleep(0.001)\n"
+    "    return lambda: None\n"
+    "entry.THRESHOLD_SECONDS = 0.0\n"
+    "entry._load = load\n"
+    "entry.main()\n"
+)
+
 
 @final
 class _Writer:
@@ -75,7 +103,9 @@ class _Writer:
     came.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+    ) -> None:
         self.writes: Final[list[bytes]] = []
 
         self.written: Final = Event()
@@ -156,6 +186,36 @@ def _loaded_once_noticed(
         return _command
 
     return load
+
+
+# WARN:
+# The terminal is read while the test still holds its other end open, because on macOS a read after the last close
+# returns nothing, where on Linux it returns what was written.
+#
+# The wait is bounded by `select`, because the kernel may hand over a terminal's output a moment after the child
+# exits.
+def _first_line(
+    master: int,
+    patience: float,
+    /,
+) -> bytes:
+    received = b""
+
+    while (
+        b"\n" not in received
+        and select(
+            (master,),
+            (),
+            (),
+            patience,
+        )[0]
+    ):
+        received += read(
+            master,
+            4096,
+        )
+
+    return received
 
 
 @final
@@ -320,3 +380,89 @@ class TestEntry:
             )
             == _IMPORTED_BY_THE_ENTRY
         )
+
+    def test_the_console_entry_writes_the_notice_to_standard_error_when_it_alone_is_a_terminal(
+        self,
+    ) -> None:
+        (
+            master,
+            slave,
+        ) = openpty()
+
+        result = run(
+            args=[
+                executable,
+                "-I",
+                "-c",
+                _RUN_THE_ENTRY,
+            ],
+            check=False,
+            stdin=slave,
+            stdout=PIPE,
+            stderr=slave,
+        )
+
+        terminal = _first_line(
+            master,
+            _PATIENCE,
+        )
+
+        close(
+            fd=slave,
+        )
+
+        close(
+            fd=master,
+        )
+
+        assert result.returncode == 0, terminal
+
+        assert result.stdout == b""
+
+        assert (
+            terminal.replace(
+                b"\r\n",
+                b"\n",
+            )
+            == NOTICE
+        )
+
+    def test_the_console_entry_writes_nothing_when_standard_error_alone_is_not_a_terminal(
+        self,
+    ) -> None:
+        (
+            master,
+            slave,
+        ) = openpty()
+
+        result = run(
+            args=[
+                executable,
+                "-I",
+                "-c",
+                _RUN_THE_ENTRY,
+            ],
+            check=False,
+            stdin=slave,
+            stdout=slave,
+            stderr=PIPE,
+        )
+
+        terminal = _first_line(
+            master,
+            0.0,
+        )
+
+        close(
+            fd=slave,
+        )
+
+        close(
+            fd=master,
+        )
+
+        assert result.returncode == 0, result.stderr
+
+        assert result.stderr == b""
+
+        assert terminal == b""
