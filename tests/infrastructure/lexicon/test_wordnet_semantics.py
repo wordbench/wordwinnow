@@ -13,6 +13,7 @@ from nltk.corpus import (
 )
 from pytest import (
     fixture,
+    mark,
 )
 
 from wordwinnow.domain.language import (
@@ -131,6 +132,152 @@ class TestWordNetLexicalSemantics:
             wordnet.senses_of(
                 lemma="egria",
                 part_of_speech=PartOfSpeech.NOUN,
+            )
+            == ()
+        )
+
+    def test_a_hyphenated_word_has_no_senses_as_spelled_so_the_level_model_sees_none(
+        self,
+        *,
+        wordnet: WordNetLexicalSemantics,
+    ) -> None:
+        # NOTE:
+        # WordNet writes the compound `sitting_room`, and the level model learns from `senses_of` in training and at
+        # analysis, so this pins what the model sees: nothing, however many senses the compound route finds.
+        assert (
+            wordnet.senses_of(
+                lemma="sitting-room",
+                part_of_speech=PartOfSpeech.NOUN,
+            )
+            == ()
+        )
+
+    def test_a_hyphenated_word_finds_the_compound_under_the_networks_own_spelling(
+        self,
+        *,
+        wordnet: WordNetLexicalSemantics,
+    ) -> None:
+        (sitting_room,) = wordnet.compound_senses_of(
+            lemma="sitting-room",
+            part_of_speech=PartOfSpeech.NOUN,
+        )
+
+        assert sitting_room.key == "living_room.n.01"
+
+        assert sitting_room.gloss == (
+            "a room in a private house or establishment where people can sit and talk and relax"
+        )
+
+        assert "sitting room" not in sitting_room.synonyms
+
+    def test_the_compound_senses_come_most_used_first(
+        self,
+        *,
+        wordnet: WordNetLexicalSemantics,
+    ) -> None:
+        senses = wordnet.compound_senses_of(
+            lemma="drawing-room",
+            part_of_speech=PartOfSpeech.NOUN,
+        )
+
+        assert tuple(sense.key for sense in senses) == (
+            "drawing_room.n.01",
+            "drawing_room.n.02",
+        )
+
+        assert senses[0].usage_count > senses[1].usage_count
+
+    def test_a_plural_compound_finds_its_base_form_and_is_not_its_own_synonym(
+        self,
+        *,
+        wordnet: WordNetLexicalSemantics,
+    ) -> None:
+        (paper_mill,) = wordnet.compound_senses_of(
+            lemma="paper-mills",
+            part_of_speech=PartOfSpeech.NOUN,
+        )
+
+        assert paper_mill.key == "paper_mill.n.01"
+
+        assert paper_mill.synonyms == ()
+
+    def test_a_compound_is_found_under_the_part_of_speech_it_was_tagged(
+        self,
+        *,
+        wordnet: WordNetLexicalSemantics,
+    ) -> None:
+        senses = wordnet.compound_senses_of(
+            lemma="cross-examined",
+            part_of_speech=PartOfSpeech.VERB,
+        )
+
+        assert tuple(sense.key for sense in senses) == ("cross_examine.v.01",)
+
+    def test_a_compound_in_capitals_finds_the_same_entry(
+        self,
+        *,
+        wordnet: WordNetLexicalSemantics,
+    ) -> None:
+        senses = wordnet.compound_senses_of(
+            lemma="Sitting-Room",
+            part_of_speech=PartOfSpeech.NOUN,
+        )
+
+        assert tuple(sense.key for sense in senses) == ("living_room.n.01",)
+
+    def test_every_hyphen_of_a_compound_is_read(
+        self,
+        *,
+        wordnet: WordNetLexicalSemantics,
+    ) -> None:
+        senses = wordnet.compound_senses_of(
+            lemma="man-of-the-world",
+            part_of_speech=PartOfSpeech.NOUN,
+        )
+
+        assert tuple(sense.key for sense in senses) == ("sophisticate.n.01",)
+
+    @mark.parametrize(
+        argnames=(
+            "lemma",
+            "part_of_speech",
+        ),
+        argvalues=(
+            (
+                "room",
+                PartOfSpeech.NOUN,
+            ),
+            (
+                "smoke-rocket",
+                PartOfSpeech.NOUN,
+            ),
+            (
+                "sitting-room",
+                PartOfSpeech.VERB,
+            ),
+            (
+                "re-sign",
+                PartOfSpeech.VERB,
+            ),
+        ),
+        ids=(
+            "a word without a hyphen",
+            "a compound the network lacks",
+            "a compound in the wrong part of speech",
+            "a joined spelling is not tried",
+        ),
+    )
+    def test_the_compound_route_has_no_senses_without_a_compound_in_that_part_of_speech(
+        self,
+        *,
+        wordnet: WordNetLexicalSemantics,
+        lemma: str,
+        part_of_speech: PartOfSpeech,
+    ) -> None:
+        assert (
+            wordnet.compound_senses_of(
+                lemma=lemma,
+                part_of_speech=part_of_speech,
             )
             == ()
         )

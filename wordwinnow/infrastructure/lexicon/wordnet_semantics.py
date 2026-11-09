@@ -82,30 +82,40 @@ class WordNetLexicalSemantics:
         lemma: str,
         part_of_speech: PartOfSpeech,
     ) -> tuple[LexicalSense, ...]:
-        query = lemma.lower().replace(
-            " ",
-            "_",
+        return _senses(
+            lemma.lower().replace(
+                " ",
+                "_",
+            ),
+            part_of_speech,
         )
 
-        synsets = wordnet.synsets(
-            lemma=query,
+    def compound_senses_of(
+        self,
+        *,
+        lemma: str,
+        part_of_speech: PartOfSpeech,
+    ) -> tuple[LexicalSense, ...]:
+        if "-" not in lemma:
+            return ()
+
+        # NOTE:
+        # WordNet writes a compound with underscores, and its morphology then reduces a plural, so `paper-mills` finds
+        # `paper_mill`; the reduced form is the query, or the word would be its own synonym on the card.
+        reduced = wordnet.morphy(
+            form=lemma.lower().replace(
+                "-",
+                "_",
+            ),
             pos=_WORDNET_POS[part_of_speech],
         )
 
-        senses = tuple(
-            _sense(
-                synset,
-                query,
-                part_of_speech,
-            )
-            for synset in synsets
-        )
+        if reduced is None:
+            return ()
 
-        return tuple(
-            sorted(
-                senses,
-                key=lambda sense: -sense.usage_count,
-            ),
+        return _senses(
+            reduced,
+            part_of_speech,
         )
 
 
@@ -200,6 +210,33 @@ def gloss_of(
         (
             definition,
             *later,
+        ),
+    )
+
+
+def _senses(
+    query: str,
+    part_of_speech: PartOfSpeech,
+    /,
+) -> tuple[LexicalSense, ...]:
+    synsets = wordnet.synsets(
+        lemma=query,
+        pos=_WORDNET_POS[part_of_speech],
+    )
+
+    senses = tuple(
+        _sense(
+            synset,
+            query,
+            part_of_speech,
+        )
+        for synset in synsets
+    )
+
+    return tuple(
+        sorted(
+            senses,
+            key=lambda sense: -sense.usage_count,
         ),
     )
 

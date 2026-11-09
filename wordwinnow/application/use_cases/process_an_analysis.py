@@ -312,6 +312,25 @@ async def run_pipeline(
         for item in items
     )
 
+    # WARN:
+    # The level model learned from `senses_of` alone, so giving it the senses of a compound moves levels far from the
+    # words concerned; `_assess_all` takes `senses`, and only what a learner is shown takes `shown_senses`.
+    shown_senses = tuple(
+        item_senses
+        or pipeline.lexical_semantics.compound_senses_of(
+            lemma=item.lemma,
+            part_of_speech=item.part_of_speech,
+        )
+        for (
+            item,
+            item_senses,
+        ) in zip(
+            items,
+            senses,
+            strict=True,
+        )
+    )
+
     started = _record(
         timings,
         Stage.LEXICAL_SEMANTICS,
@@ -439,7 +458,7 @@ async def run_pipeline(
             frequencies,
             levels,
             dictionary_information,
-            senses,
+            shown_senses,
             strict=True,
         )
     )

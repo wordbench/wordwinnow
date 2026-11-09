@@ -37,3 +37,18 @@ class LexicalSemantics(
         """
 
         ...
+
+    def compound_senses_of(
+        self,
+        *,
+        lemma: str,
+        part_of_speech: PartOfSpeech,
+    ) -> tuple[LexicalSense, ...]:
+        """
+        The senses the network lists for a hyphenated word under the network's
+        own spelling of the compound, most used first; empty for a word
+        without a hyphen and for a compound the network lacks in this part of
+        speech.
+        """
+
+        ...

@@ -749,19 +749,29 @@ class RecordingProgress:
 @final
 class FakeLexicalSemantics:
     """
-    Senses from a table keyed by lemma and part of speech.
+    Senses and compound senses from two tables keyed by lemma and part of
+    speech, and a record of the words the compound route was asked about.
     """
 
     def __init__(
         self,
         *,
         senses: Mapping[tuple[str, PartOfSpeech], Sequence[LexicalSense]] | None = None,
+        compound_senses: Mapping[tuple[str, PartOfSpeech], Sequence[LexicalSense]] | None = None,
     ) -> None:
         self._senses: Final = MappingProxyType(
             mapping=dict(
                 senses or {},
             ),
         )
+
+        self._compound_senses: Final = MappingProxyType(
+            mapping=dict(
+                compound_senses or {},
+            ),
+        )
+
+        self.compound_requests: Final[list[tuple[str, PartOfSpeech]]] = []
 
     def senses_of(
         self,
@@ -771,6 +781,29 @@ class FakeLexicalSemantics:
     ) -> tuple[LexicalSense, ...]:
         return tuple(
             self._senses.get(
+                (
+                    lemma,
+                    part_of_speech,
+                ),
+                (),
+            ),
+        )
+
+    def compound_senses_of(
+        self,
+        *,
+        lemma: str,
+        part_of_speech: PartOfSpeech,
+    ) -> tuple[LexicalSense, ...]:
+        self.compound_requests.append(
+            (
+                lemma,
+                part_of_speech,
+            ),
+        )
+
+        return tuple(
+            self._compound_senses.get(
                 (
                     lemma,
                     part_of_speech,

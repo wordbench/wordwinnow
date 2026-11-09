@@ -2297,6 +2297,55 @@ class TestTheMeanings:
             analysis,
         )
 
+    def test_a_hyphenated_word_shown_the_meaning_of_its_compound_reads_like_any_wordnet_meaning(
+        self,
+    ) -> None:
+        # NOTE:
+        # The compound route gives a word its own senses in its own part of speech, so the report has nothing to mark:
+        # the row prints the gloss, and `no noun meaning in WordNet` is left to a word that still has none.
+        found = _completed(
+            include_dictionary=False,
+            items=(
+                _item(
+                    "foo-bar",
+                    StudyTier.FOCUS,
+                    CefrLevel.B2,
+                    example_sentence="foo",
+                    senses=(
+                        _sense(
+                            "baz",
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        lacking = _completed(
+            include_dictionary=False,
+            items=(
+                _item(
+                    "foo-bar",
+                    StudyTier.FOCUS,
+                    CefrLevel.B2,
+                    example_sentence="foo",
+                ),
+            ),
+        )
+
+        text = _render(
+            found,
+        )
+
+        assert "baz" in text
+
+        assert "(other part of speech)" not in text
+
+        assert "no noun meaning in WordNet" not in text
+
+        assert "no noun meaning in WordNet" in _render(
+            lacking,
+        )
+
     def test_a_word_with_no_meaning_and_no_dictionary_asked_names_its_part_of_speech_on_a_row_and_on_a_card(
         self,
     ) -> None:

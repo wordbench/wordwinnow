@@ -81,8 +81,89 @@ _NOTE_SENSES: Final = (
 )
 
 
+# NOTE:
+# A placeholder sense for a word the compound route answers for: its counts and its category are not zero, so a
+# dataset that asked the route would show it in the features.
+_COMPOUND_SENSE: Final = LexicalSense(
+    key="foo.n.01",
+    part_of_speech=PartOfSpeech.NOUN,
+    gloss="foo",
+    example=None,
+    synonyms=(),
+    hypernyms=(),
+    antonyms=(),
+    usage_count=7,
+    hyponym_count=5,
+    category="noun.foo",
+)
+
+
+def _dataset(
+    *,
+    lexical_semantics: FakeLexicalSemantics,
+) -> tuple[LabeledExample, ...]:
+    return build_dataset(
+        reference_lexicon=FakeReferenceLexicon(
+            levels={
+                (
+                    "note",
+                    PartOfSpeech.NOUN,
+                ): CefrLevel.A1,
+                (
+                    "recess",
+                    PartOfSpeech.NOUN,
+                ): CefrLevel.C1,
+            },
+        ),
+        frequency=FakeWordFrequency(
+            frequencies={
+                "note": 5.04,
+            },
+        ),
+        lexical_semantics=lexical_semantics,
+    )
+
+
 @final
 class TestBuildDataset:
+    def test_the_dataset_never_asks_the_compound_route(
+        self,
+    ) -> None:
+        # NOTE:
+        # The model learns from `senses_of` alone, so a route that gave `recess` senses here would move the training
+        # set, and with it every level the model estimates.
+        asked = FakeLexicalSemantics(
+            senses={
+                (
+                    "note",
+                    PartOfSpeech.NOUN,
+                ): _NOTE_SENSES,
+            },
+            compound_senses={
+                (
+                    "recess",
+                    PartOfSpeech.NOUN,
+                ): (_COMPOUND_SENSE,),
+            },
+        )
+
+        not_asked = FakeLexicalSemantics(
+            senses={
+                (
+                    "note",
+                    PartOfSpeech.NOUN,
+                ): _NOTE_SENSES,
+            },
+        )
+
+        assert _dataset(
+            lexical_semantics=asked,
+        ) == _dataset(
+            lexical_semantics=not_asked,
+        )
+
+        assert asked.compound_requests == []
+
     def test_one_example_per_entry_with_the_ports_answers(
         self,
     ) -> None:

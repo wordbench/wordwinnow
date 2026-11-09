@@ -263,6 +263,10 @@ learns from, `FeatureFamily.WORDNET`, whose features follow WordNet's own
 structure; replacing WordNet in that part, rather than adding a dictionary
 beside it, changes the domain and means training the model again.
 
+The level model learns from `senses_of` alone, in training and at analysis;
+`compound_senses_of` reaches only what a learner is shown, because a change in
+what the model sees moves levels far from the words concerned.
+
 The port makes another dictionary possible without touching the use cases; it
 does not make Wordwinnow use several at once, and the table says which is
 which.

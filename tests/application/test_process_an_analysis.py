@@ -14,6 +14,7 @@ from asyncio import (
 )
 from collections.abc import (
     Mapping,
+    Sequence,
 )
 from collections.abc import (
     Set as AbstractSet,
@@ -69,6 +70,7 @@ from wordwinnow.application.ports.dictionary import (
     Dictionary,
 )
 from wordwinnow.application.use_cases.process_an_analysis import (
+    SENSES_PER_ITEM,
     Pipeline,
     PipelineResult,
     process_an_analysis,
@@ -156,15 +158,75 @@ _PROFILE: Final = LearnerProfile(
 )
 
 
+def _compound_sense(
+    gloss: str,
+    /,
+) -> LexicalSense:
+    return LexicalSense(
+        key=f"{gloss}.v.01",
+        part_of_speech=PartOfSpeech.VERB,
+        gloss=gloss,
+        example=None,
+        synonyms=(),
+        hypernyms=(),
+        antonyms=(),
+        usage_count=7,
+        hyponym_count=5,
+        category="verb.foo",
+    )
+
+
+# NOTE:
+# Four placeholder senses for a compound the route answers: the cut to `SENSES_PER_ITEM` shows only when there are
+# more than it keeps, and the counts and the category are not zero, so a level model that saw them would show it.
+_COMPOUND_SENSES: Final = tuple(
+    _compound_sense(
+        gloss,
+    )
+    for gloss in (
+        "foo",
+        "bar",
+        "baz",
+        "qux",
+    )
+)
+
+_SAUNTER_ROUTE: Final = MappingProxyType(
+    mapping={
+        (
+            "saunter",
+            PartOfSpeech.VERB,
+        ): _COMPOUND_SENSES,
+    },
+)
+
+
+def _lexical_semantics(
+    *,
+    compound_senses: Mapping[tuple[str, PartOfSpeech], Sequence[LexicalSense]] | None = None,
+) -> FakeLexicalSemantics:
+    return FakeLexicalSemantics(
+        senses={
+            (
+                "groom",
+                PartOfSpeech.NOUN,
+            ): (_GROOM_SENSE,),
+        },
+        compound_senses=compound_senses,
+    )
+
+
 # NOTE:
 # The tables hold the words' real Zipf frequencies and, for the three the reference lists know, their real levels, so
 # the frequency heuristic places `drunken` at B2 and `saunter` at C2 exactly as it would for the real text.
 #
-# Both parameters are optional overrides of the worked example's pipeline, so they are named rather than positional.
+# All three parameters are optional overrides of the worked example's pipeline, so they are named rather than
+# positional.
 def _pipeline(
     *,
     dictionary: FakeDictionary | None = None,
     level_estimator: FakeLevelEstimator | None = None,
+    lexical_semantics: FakeLexicalSemantics | None = None,
 ) -> Pipeline:
     return Pipeline(
         linguistics=FakeLinguisticAnalyzer(
@@ -244,14 +306,7 @@ def _pipeline(
                 },
             )
         ),
-        lexical_semantics=FakeLexicalSemantics(
-            senses={
-                (
-                    "groom",
-                    PartOfSpeech.NOUN,
-                ): (_GROOM_SENSE,),
-            },
-        ),
+        lexical_semantics=lexical_semantics or _lexical_semantics(),
         dictionary_concurrency=2,
     )
 
@@ -661,6 +716,163 @@ class TestRunPipeline:
             (None,),
         )
 
+    async def test_a_word_with_no_senses_is_shown_the_senses_the_compound_route_answers(
+        self,
+    ) -> None:
+        result = await run_pipeline(
+            text=_TEXT,
+            profile=_PROFILE,
+            include_dictionary=False,
+            pipeline=_pipeline(
+                lexical_semantics=_lexical_semantics(
+                    compound_senses=_SAUNTER_ROUTE,
+                ),
+            ),
+        )
+
+        by_lemma = MappingProxyType(
+            mapping={study_item.item.lemma: study_item for study_item in result.items},
+        )
+
+        saunter = by_lemma["saunter"]
+
+        assert saunter.senses == _COMPOUND_SENSES[:SENSES_PER_ITEM]
+
+        assert len(
+            saunter.senses,
+        ) < len(
+            _COMPOUND_SENSES,
+        )
+
+        gloss = saunter.gloss
+
+        assert gloss is not None
+
+        assert gloss.text == "foo"
+
+        assert gloss.source is GlossSource.LEXICAL_NETWORK
+
+        assert gloss.part_of_speech_matched
+
+    async def test_the_level_model_sees_no_senses_of_a_word_the_compound_route_answers(
+        self,
+    ) -> None:
+        estimator = FakeLevelEstimator(
+            level=CefrLevel.C1,
+        )
+
+        await run_pipeline(
+            text=_TEXT,
+            profile=_PROFILE,
+            include_dictionary=False,
+            pipeline=_pipeline(
+                level_estimator=estimator,
+                lexical_semantics=_lexical_semantics(
+                    compound_senses=_SAUNTER_ROUTE,
+                ),
+            ),
+        )
+
+        seen = MappingProxyType(
+            mapping={features.lemma: features for features in estimator.seen},
+        )
+
+        saunter = seen["saunter"]
+
+        assert saunter.sense_count == 0
+
+        assert saunter.usage_count == 0
+
+        assert saunter.hyponym_count == 0
+
+        assert saunter.category is None
+
+    async def test_the_compound_route_is_asked_only_about_the_words_with_no_senses(
+        self,
+    ) -> None:
+        lexical_semantics = _lexical_semantics(
+            compound_senses=_SAUNTER_ROUTE,
+        )
+
+        await run_pipeline(
+            text=_TEXT,
+            profile=_PROFILE,
+            include_dictionary=False,
+            pipeline=_pipeline(
+                lexical_semantics=lexical_semantics,
+            ),
+        )
+
+        # NOTE:
+        # `groom` is the only word of the text with senses as spelled, so it is the only one the route is not asked
+        # about.
+        assert lexical_semantics.compound_requests == [
+            (
+                "become",
+                PartOfSpeech.VERB,
+            ),
+            (
+                "drunken",
+                PartOfSpeech.ADJECTIVE,
+            ),
+            (
+                "saunter",
+                PartOfSpeech.VERB,
+            ),
+            (
+                "slowly",
+                PartOfSpeech.ADVERB,
+            ),
+        ]
+
+    async def test_a_compound_answer_moves_no_level_tier_or_place(
+        self,
+    ) -> None:
+        without_route = await run_pipeline(
+            text=_TEXT,
+            profile=_PROFILE,
+            include_dictionary=False,
+            pipeline=_pipeline(
+                level_estimator=FakeLevelEstimator(
+                    level=CefrLevel.C1,
+                ),
+            ),
+        )
+
+        with_route = await run_pipeline(
+            text=_TEXT,
+            profile=_PROFILE,
+            include_dictionary=False,
+            pipeline=_pipeline(
+                level_estimator=FakeLevelEstimator(
+                    level=CefrLevel.C1,
+                ),
+                lexical_semantics=_lexical_semantics(
+                    compound_senses=_SAUNTER_ROUTE,
+                ),
+            ),
+        )
+
+        assert tuple(
+            (
+                study_item.item.lemma,
+                study_item.level,
+                study_item.tier,
+            )
+            for study_item in with_route.items
+        ) == tuple(
+            (
+                study_item.item.lemma,
+                study_item.level,
+                study_item.tier,
+            )
+            for study_item in without_route.items
+        )
+
+        assert any(study_item.senses for study_item in with_route.items if study_item.item.lemma == "saunter")
+
+        assert not any(study_item.senses for study_item in without_route.items if study_item.item.lemma == "saunter")
+
     async def test_without_the_dictionary_no_lookup_happens(
         self,
     ) -> None:
@@ -988,21 +1200,21 @@ class TestWaitingForTheDictionary:
             patience_seconds=180.0,
         )
 
-        waiting = [
+        waiting = tuple(
             event
             for event in progress.events
             if event == "resumed"
             or event.startswith(
                 "waiting",
             )
-        ]
+        )
 
         assert "waiting 10 s, 180 s left" in waiting
 
-        assert waiting[-2:] == [
+        assert waiting[-2:] == (
             "waiting 20 s, 170 s left",
             "resumed",
-        ]
+        )
 
     def test_without_patience_the_refused_word_takes_wordnets_gloss_at_once(
         self,

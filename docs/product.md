@@ -164,6 +164,11 @@ WordNet's examples belong to a sense rather than to one word, so an example of
 the sense `observe` shares with `detect` can say only `detected`; the report shows a
 WordNet example only when it uses the word, in any form WordNet reduces to it.
 
+A hyphenated word WordNet writes as a compound, such as `sitting-room`, is shown
+that entry's meaning.
+
+The level model is not told, so finding the meaning moves no word's level.
+
 When neither has a meaning for a word, the report says why in its place, set
 apart from a meaning: `no definition found` when the dictionary has no entry for
 the word, `no noun meaning in WordNet`, naming the part of speech the word was
