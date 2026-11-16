@@ -58,10 +58,10 @@ names the installed version and the Python it runs on, while
 After you install another version, `analyze` stops and names `wordwinnow setup`
 when the level model needs training again.
 
-The recording installs a 2.0.0 wheel from a file, which `uv tool install` takes
+The recording installs a 2.1.0 wheel from a file, which `uv tool install` takes
 in place of a URL, then sets it up.
 
-![Installing Wordwinnow 2.0.0 from a wheel, then running wordwinnow setup](images/installing.gif)
+![Installing Wordwinnow 2.1.0 from a wheel, then running wordwinnow setup](images/installing.gif)
 
 ## The first analysis
 
