@@ -94,11 +94,18 @@ From a clone, `make up-full` starts the distributed mode, where the same
 pipeline runs as services over PostgreSQL, Kafka, Redis, and ClickHouse, and
 the same command with `--remote` sends the text there.
 
+The distributed mode runs from that clone, on one host, for that host's own
+user: its services listen on that host alone, and reaching them from another
+machine is not supported.
+
 While it works, `analyze` says on standard error what it is doing, and
 `--view operator` adds under that line what the dictionary is doing: whether the
 provider is answering, rate-limited, or failing, and why, the last minute of
 the client's requests, and the lookups in flight; [the operating guide](https://github.com/wordbench/wordwinnow/blob/v2.0.0/docs/operating.md#the-operator-view) names
 every row.
+
+After the report, `--view operator` prints the analysis's figures too, on
+standard error.
 
 ![The operator's view of failures, a request limit, an outage, and a recovery](docs/images/operator.gif)
 

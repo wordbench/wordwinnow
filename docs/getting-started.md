@@ -6,9 +6,6 @@ From nothing to a first report, on your own machine.
 
 You need [`uv`](https://docs.astral.sh/uv/), which installs the command.
 
-Its `--python 3.14` option names the Python version Wordwinnow is tested on,
-which uv fetches if your system lacks it.
-
 You need network access to install it and to set it up, for the packages, the
 NLTK data, and the reference lists.
 
@@ -38,8 +35,8 @@ WordNet are missing, as [one fixed commit of the NLTK project's data repository]
 holds them, into `~/nltk_data`, which other programs that use NLTK share.
 
 It downloads the two reference lists from their distributor at one fixed
-commit, checks each against its published SHA-256, and trains the level model
-from them in under a minute.
+commit, checks each against the SHA-256 of the file published at that commit,
+and trains the level model from them in under a minute.
 
 It does only what is missing, and every analysis needs what it sets up, so it
 comes before the first.
@@ -54,7 +51,9 @@ those variables are set; [the configuration](https://github.com/wordbench/wordwi
 `setup`, `analyze`, `show`, `list`, and `doctor` write nothing in the directory you run
 them from, except a file you name, such as `--csv`'s.
 
-`wordwinnow doctor` says what is present and what is missing.
+`wordwinnow doctor` says what is present and what is missing, and its first line
+names the installed version and the Python it runs on, while
+`wordwinnow --version` prints the version alone.
 
 After you install another version, `analyze` stops and names `wordwinnow setup`
 when the level model needs training again.
@@ -73,13 +72,25 @@ curl -sSfL https://raw.githubusercontent.com/wordbench/wordwinnow/v2.0.0/data/co
 The `-` makes `analyze` read the text from standard input, which here is the story
 `curl` fetches.
 
+Standard input is read as plain text, or as subtitles when it holds SRT or
+WebVTT cues; a web page piped in is read with its markup, menus, and links,
+which fill the list with words the article does not use, so pipe the article's
+text alone.
+
+The report names the text and the learner, counts the words to study, and
+lists them in study order, FOCUS first, up to 40 rows by default, each with
+its level, how often the text uses it, and one meaning; `--rows` raises that
+limit, `--tier` chooses which tiers to show, and the last line of the report is
+the `wordwinnow show` command that shows it again.
+
 The analysis runs inside the command, against a SQLite file in your user data
 directory that the command creates and migrates itself.
 
 `--no-dictionary` skips the dictionary, so the report comes back in a few
 seconds with WordNet's glosses as meanings; drop the flag to get the Free
 Dictionary API's definitions, examples, and pronunciation, which take longer,
-because every distinct word is a request to a service outside Wordwinnow.
+because every distinct word to study, FOCUS and STRETCH, is a request to a
+service outside Wordwinnow.
 
 `--detail` prints one card per word, `--json` the whole analysis, and `--csv FILE`
 the shown words for a flashcard tool.
@@ -165,6 +176,10 @@ The environment I develop Wordwinnow in, these tools included, is set up by my
 
 ## The distributed mode
 
+The distributed mode runs from the clone, on one host, for that host's own
+user, and its services listen on that host alone; the Security section of
+[the operating guide](https://github.com/wordbench/wordwinnow/blob/v2.0.0/docs/operating.md#security) says what that boundary covers.
+
 ```sh
 make up-full
 ```
@@ -172,6 +187,11 @@ make up-full
 That builds the image, which trains its own level model, and starts
 PostgreSQL, Redis, Kafka, ClickHouse, the migration job, intake, enrichment,
 one analysis worker, the aggregation worker, Prometheus, Tempo, and Grafana.
+
+`make up-full` first writes the stack's two generated passwords, ClickHouse's
+and Grafana's, into `.env` where they are absent, and it ends by saying where
+Grafana is, `http://localhost:3000`, as user `admin`, with its password on the
+`GRAFANA_ADMIN_PASSWORD` line of `.env`.
 
 ```sh
 uv run wordwinnow analyze data/corpus/a-scandal-in-bohemia.txt --remote --level B1
@@ -207,7 +227,8 @@ once the worker is back, `show` finds the analysis looking its words up, and
 `--view operator` shows, under the progress line, what the enrichment service's
 dictionary is doing meanwhile: whether the provider is answering,
 rate-limited, or failing, the last minute of the client's requests, and the
-lookups in flight.
+lookups in flight, and after the report it prints the analysis's figures, on
+standard error as well.
 
 Its counts are of lookups, not words: a word the dictionary turns away and
 asks again counts each time, so `turned away` can pass the number of words;
@@ -257,5 +278,6 @@ the `commit-msg` hook checks each message, and the `pre-push` hook runs
 [`domain.md`](https://github.com/wordbench/wordwinnow/blob/v2.0.0/docs/domain.md) defines the terms and says how a word gets its level.
 
 If a command fails, `wordwinnow doctor` says what is present and what is
-missing; [an issue](https://github.com/wordbench/wordwinnow/issues) with its output, the command, and your system is the way
-to report it.
+missing; [an issue](https://github.com/wordbench/wordwinnow/issues) with its output, the command, and your system is the way to
+report it; for an analysis that failed, add what
+`wordwinnow show ID --view operator` prints for it.
