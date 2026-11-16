@@ -1,6 +1,8 @@
 # Reference word lists
 
-Two CEFR-annotated English word lists ship with the project unchanged.
+Two CEFR-annotated English word lists ship in this repository unchanged, and
+`wordwinnow setup` downloads the same files from their distributor; the wheel
+carries neither of them.
 
 They are the external labels every level assessment and every model evaluation
 is measured against.

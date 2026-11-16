@@ -44,7 +44,7 @@ finds no text, `analyze` refuses the empty document.
 | `--no-wait` | With `--remote`, return the id at once |
 | `--wait` | With `show` and `--remote`, wait for an analysis still in progress, as `analyze` does |
 | `--timeout SECONDS` | With `--remote`, how long `analyze` or `show --wait` waits for the result, 900 by default; the analysis goes on after it, as after Ctrl-C |
-| `--view operator` | Under the progress line, what the dictionary is doing; `learner`, the default, shows the line alone |
+| `--view operator` | Under the progress line, what the dictionary is doing, and after the report, on standard error, the analysis's figures; `learner`, the default, shows the line alone |
 
 A command that takes more than a moment says on standard error what it is
 doing: the step, a count where the number of steps is known, as for the words

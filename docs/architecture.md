@@ -501,10 +501,10 @@ worker's progress.
 
 WordNet's lookups, the level model's prediction, and the winnowing run on the
 loop itself, because their time grows only with the distinct words, which grow
-more slowly, as [`performance.md`](performance.md) measures: 0.14 seconds for the sample story's
-1,509 items once WordNet is loaded, more for the first analysis in a process,
-and far inside the ten seconds the broker allows a worker without a heartbeat
-before it hands the worker's partitions to another.
+more slowly, as [`performance.md`](performance.md) measures: 0.14 seconds, measured for the 1,509
+items the sample story had then, once WordNet is loaded, more for the first
+analysis in a process, and far inside the ten seconds the broker allows a
+worker without a heartbeat before it hands the worker's partitions to another.
 
 Nothing pushes back between processes: intake accepts every valid request, and
 the requested topic holds what the workers have not taken yet, so a backlog

@@ -38,10 +38,11 @@ taken from dedicates its editors' work to the public domain under CC0 1.0, as
 `data/corpus/README.md` records with its source.
 
 **WordNet.** Princeton University's WordNet 3.0 is read at run time from the
-copy `make nltk-data` downloads from a fixed commit of the NLTK project's data
-repository, and it does not ship in this repository; the senses, glosses, and
-relations a report shows are WordNet's, under the WordNet 3.0 license, which a
-report names when WordNet serves as its dictionary.
+copy that `wordwinnow setup`, or `make nltk-data` in a clone, downloads from a
+fixed commit of the NLTK project's data repository, and neither this
+repository nor the wheel carries it; the senses, glosses, and relations a
+report shows are WordNet's, under the WordNet 3.0 license, which a report
+names when WordNet serves as its dictionary.
 
 The tests quote a few WordNet glosses word for word, to check the adapters
 that read them, and the recordings in the documentation show WordNet's glosses
