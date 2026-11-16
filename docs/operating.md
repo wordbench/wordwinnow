@@ -67,9 +67,10 @@ While the dictionary is not answering, the line says so, counts down to the
 next check, and says how many words wait and within how long WordNet's meaning
 stands in for them.
 
-While the dictionary asked for a pause, the line says it is paused, as the
-dictionary asked, counts down to its end, and says the same of the words that
-wait.
+While words wait out a pause the dictionary asked for, the line says it is
+paused, as the dictionary asked, counts down to its end, and says the same of
+the words that wait; a pause each lookup waits out inside itself, as a short
+one is, shows in the operator view's panel alone.
 
 When the time an analysis waits could not cover the next check, the line says
 that the dictionary is not answering and that WordNet's meaning stands in,
@@ -682,11 +683,11 @@ and each refusal counts once more, so `turned away` can pass both the words the
 progress line counts and `answered`.
 
 The README's recording shows it: an analysis that looks up 40 words, each of
-them answered in the end, 39 found and 1 not found as its report counts them,
-shows `turned away 80: 74 held back, 6 server error` in the panel, because each
-of the 40 was turned away twice, when the circuit opened and again behind the
-trial that failed, before it was answered; in the panel, `turned away` counts to
-40 and then to 80 while `answered` stays at 0.
+them answered in the end, 39 found and 1 not found as the figures after its
+report count them, shows `turned away 80: 74 held back, 6 server error` in the
+panel, because each of the 40 was turned away twice, when the circuit opened
+and again behind the trial that failed, before it was answered; in the panel,
+`turned away` counts to 40 and then to 80 while `answered` stays at 0.
 
 The report counts each word once: its count of unavailable words, the words
 that show WordNet's gloss, is what the learner gets.
