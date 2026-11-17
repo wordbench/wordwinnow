@@ -9,6 +9,7 @@ from asyncio import (
 )
 from collections.abc import (
     Callable,
+    Sequence,
 )
 from datetime import (
     UTC,
@@ -96,6 +97,7 @@ from wordwinnow.domain.document import (
 )
 from wordwinnow.domain.identifiers import (
     AnalysisId,
+    InvalidIdentifierError,
 )
 from wordwinnow.domain.language import (
     PartOfSpeech,
@@ -123,6 +125,10 @@ from wordwinnow.infrastructure.lexicon.reference_lists import (
 )
 from wordwinnow.infrastructure.lexicon.reference_sources import (
     REFERENCE_CITATIONS,
+)
+from wordwinnow.infrastructure.linguistics.nltk_resources import (
+    REQUIRED_RESOURCES,
+    NltkResource,
 )
 from wordwinnow.infrastructure.ml.model import (
     SklearnLevelEstimator,
@@ -662,7 +668,11 @@ class TestCli:
 
         assert bad.exit_code == 1
 
-        assert "UUID" in bad.output
+        assert (
+            bad.output
+            == "error: 'not-an-id' is not an analysis identifier; `wordwinnow list` shows the identifiers of the "
+            "stored analyses\n"
+        )
 
     def test_a_file_and_a_source_at_once_are_refused(
         self,
@@ -3397,3 +3407,299 @@ class TestTheHelpOfTheViewOption:
         assert said in _usage_error(
             result.output,
         )
+
+
+@final
+class TestShowingByIdentifier:
+    @mark.parametrize(
+        argnames="mode",
+        argvalues=(
+            "--local",
+            "--remote",
+        ),
+    )
+    @mark.parametrize(
+        argnames=(
+            "text",
+            "expected",
+        ),
+        argvalues=(
+            (
+                "foo",
+                "error: 'foo' is not an analysis identifier; `wordwinnow list` shows the identifiers of the stored "
+                "analyses",
+            ),
+            (
+                "it's",
+                'error: "it\'s" is not an analysis identifier; `wordwinnow list` shows the identifiers of the stored '
+                "analyses",
+            ),
+            (
+                "foo\x1b[2Jbar\u202ebaz\nqux",
+                r"error: 'foo\x1b[2Jbar\u202ebaz\nqux' is not an analysis identifier; `wordwinnow list` shows the "
+                "identifiers of the stored analyses",
+            ),
+        ),
+        ids=(
+            "plain",
+            "quote",
+            "controls",
+        ),
+    )
+    def test_a_text_that_is_not_an_identifier_is_one_line_that_points_to_list(
+        self,
+        *,
+        workspace: Path,
+        services_called: list[str],
+        text: str,
+        expected: str,
+        mode: str,
+    ) -> None:
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "show",
+                text,
+                mode,
+            ],
+        )
+
+        assert result.exit_code == 1
+
+        assert result.stdout == ""
+
+        assert result.output == f"{expected}\n"
+
+        assert services_called == []
+
+    def test_an_identifier_written_without_hyphens_is_still_read_as_one(
+        self,
+        *,
+        workspace: Path,
+    ) -> None:
+        analysis_id = AnalysisId.new()
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "show",
+                analysis_id.value.hex,
+            ],
+        )
+
+        assert result.exit_code == 1
+
+        assert (
+            result.output
+            == f"error: no analysis {analysis_id} in the local store; --remote looks for it in the distributed mode\n"
+        )
+
+    def test_an_identifier_error_beyond_the_argument_keeps_its_own_words(
+        self,
+        *,
+        workspace: Path,
+        monkeypatch: MonkeyPatch,
+    ) -> None:
+        async def show(
+            *,
+            analysis_id: AnalysisId,
+            settings: Settings,
+            local: bool,
+            transport: AsyncBaseTransport | None = None,
+        ) -> WatchedAnalysis:
+            raise InvalidIdentifierError(
+                "AnalysisId requires a UUID string, got 'foo'",
+            )
+
+        monkeypatch.setattr(
+            target=commands,
+            name="show",
+            value=show,
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "show",
+                str(
+                    object=AnalysisId.new(),
+                ),
+            ],
+        )
+
+        assert result.exit_code == 1
+
+        assert result.output == "error: AnalysisId requires a UUID string, got 'foo'\n"
+
+
+@final
+class TestDoctorInstallingTheNltkData:
+    @mark.parametrize(
+        argnames="args",
+        argvalues=(
+            [
+                "setup",
+            ],
+            [
+                "doctor",
+                "--install-nltk-data",
+            ],
+        ),
+        ids=(
+            "setup",
+            "doctor",
+        ),
+    )
+    def test_a_package_that_cannot_be_fetched_stops_doctor_with_the_line_setup_prints(
+        self,
+        *,
+        workspace: Path,
+        monkeypatch: MonkeyPatch,
+        args: list[str],
+    ) -> None:
+        def missing_resources(
+            *,
+            resources: Sequence[NltkResource] = REQUIRED_RESOURCES,
+        ) -> tuple[NltkResource, ...]:
+            return REQUIRED_RESOURCES[:1]
+
+        def download_resources(
+            *,
+            resources: Sequence[NltkResource] = REQUIRED_RESOURCES,
+            target: Path | None = None,
+            client: object = None,
+        ) -> tuple[NltkResource, ...]:
+            raise LinguisticResourcesMissingError(
+                "NLTK package foo could not be fetched from https://example.com/foo.zip (ConnectError)",
+            )
+
+        monkeypatch.setattr(
+            target=commands,
+            name="missing_resources",
+            value=missing_resources,
+        )
+
+        monkeypatch.setattr(
+            target=commands,
+            name="download_resources",
+            value=download_resources,
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=args,
+        )
+
+        assert result.exit_code == 1
+
+        assert result.stdout == ""
+
+        assert result.output.splitlines() == [
+            "error: NLTK package foo could not be fetched from https://example.com/foo.zip (ConnectError)",
+        ]
+
+    def test_a_package_fetched_is_named_before_the_report(
+        self,
+        *,
+        workspace: Path,
+        monkeypatch: MonkeyPatch,
+    ) -> None:
+        absent = list(
+            REQUIRED_RESOURCES[:1],
+        )
+
+        def missing_resources(
+            *,
+            resources: Sequence[NltkResource] = REQUIRED_RESOURCES,
+        ) -> tuple[NltkResource, ...]:
+            return tuple(resource for resource in resources if resource in absent)
+
+        def download_resources(
+            *,
+            resources: Sequence[NltkResource] = REQUIRED_RESOURCES,
+            target: Path | None = None,
+            client: object = None,
+        ) -> tuple[NltkResource, ...]:
+            fetched = missing_resources(
+                resources=resources,
+            )
+
+            for resource in fetched:
+                absent.remove(
+                    resource,
+                )
+
+            return fetched
+
+        monkeypatch.setattr(
+            target=commands,
+            name="missing_resources",
+            value=missing_resources,
+        )
+
+        monkeypatch.setattr(
+            target=commands,
+            name="download_resources",
+            value=download_resources,
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "doctor",
+                "--install-nltk-data",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+
+        assert result.stdout.splitlines()[1] == "downloaded NLTK package punkt_tab"
+
+    def test_without_the_flag_a_missing_package_is_reported_and_nothing_is_fetched(
+        self,
+        *,
+        workspace: Path,
+        monkeypatch: MonkeyPatch,
+    ) -> None:
+        def missing_resources(
+            *,
+            resources: Sequence[NltkResource] = REQUIRED_RESOURCES,
+        ) -> tuple[NltkResource, ...]:
+            return REQUIRED_RESOURCES[:1]
+
+        def download_resources(
+            *,
+            resources: Sequence[NltkResource] = REQUIRED_RESOURCES,
+            target: Path | None = None,
+            client: object = None,
+        ) -> tuple[NltkResource, ...]:
+            raise AssertionError(
+                "without the flag, nothing is downloaded",
+            )
+
+        monkeypatch.setattr(
+            target=commands,
+            name="missing_resources",
+            value=missing_resources,
+        )
+
+        monkeypatch.setattr(
+            target=commands,
+            name="download_resources",
+            value=download_resources,
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "doctor",
+            ],
+        )
+
+        assert result.exit_code == 1
+
+        assert "MISSING NLTK package punkt_tab" in result.stdout
+
+        assert "run `wordwinnow setup` to install the missing packages" in result.stdout
+
+        assert "error:" not in result.output

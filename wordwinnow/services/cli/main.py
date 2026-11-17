@@ -1134,11 +1134,23 @@ def show(
 
     settings = _settings()
 
+    # NOTE:
+    # Only the reading of the argument says that the learner's text is not an identifier: an identifier error from a
+    # stored row, further down, keeps its own message, since the text is not at fault there.
     try:
         parsed = AnalysisId.parse(
             text=analysis_id,
         )
 
+    except InvalidIdentifierError as exception:
+        raise _fail(
+            InvalidIdentifierError(
+                f"{analysis_id!r} is not an analysis identifier; `wordwinnow list` shows the identifiers of the "
+                "stored analyses",
+            ),
+        ) from exception
+
+    try:
         if not wait:
             watched = run(
                 main=commands.show(
@@ -1778,14 +1790,20 @@ def doctor(
 
     settings = _settings()
 
-    with TerminalProgress(
-        console=_errors,
-    ) as progress:
-        report = commands.doctor(
-            settings=settings,
-            install_nltk_data=install_nltk_data,
-            progress=progress,
-        )
+    try:
+        with TerminalProgress(
+            console=_errors,
+        ) as progress:
+            report = commands.doctor(
+                settings=settings,
+                install_nltk_data=install_nltk_data,
+                progress=progress,
+            )
+
+    except LinguisticResourcesMissingError as exception:
+        raise _fail(
+            exception,
+        ) from exception
 
     for line in report.lines:
         _console.print(
