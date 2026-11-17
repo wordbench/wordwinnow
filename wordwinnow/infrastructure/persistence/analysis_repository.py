@@ -37,6 +37,9 @@ from wordwinnow.domain.analysis import (
 from wordwinnow.domain.identifiers import (
     AnalysisId,
 )
+from wordwinnow.domain.study import (
+    STUDY_TIERS,
+)
 from wordwinnow.infrastructure.persistence.mapping import (
     analysis_from_rows,
     analysis_to_row,
@@ -338,11 +341,30 @@ class SqlAlchemyAnalysisRepository:
             .scalar_subquery()
         )
 
+        study_count = (
+            select(
+                func.count(
+                    VocabularyItemRow.id,
+                ),
+            )
+            .where(
+                VocabularyItemRow.analysis_id == AnalysisRow.id,
+                VocabularyItemRow.tier.in_(
+                    STUDY_TIERS,
+                ),
+            )
+            .correlate(
+                AnalysisRow,
+            )
+            .scalar_subquery()
+        )
+
         result = await self._session.execute(
             statement=(
                 select(
                     AnalysisRow,
                     item_count,
+                    study_count,
                 )
                 .order_by(
                     AnalysisRow.requested_at.desc(),
@@ -357,10 +379,12 @@ class SqlAlchemyAnalysisRepository:
             summary_from_row(
                 row=row,
                 item_count=count,
+                study_count=studied,
             )
             for (
                 row,
                 count,
+                studied,
             ) in result
         )
 

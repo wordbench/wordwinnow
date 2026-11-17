@@ -8,6 +8,9 @@ from collections.abc import (
     AsyncIterator,
     Callable,
 )
+from dataclasses import (
+    replace,
+)
 from datetime import (
     UTC,
     datetime,
@@ -255,7 +258,7 @@ def new_unit_of_work(
 
 
 # NOTE:
-# The four builders take the one instant a case may move as a named optional, which is why they are keyword-only.
+# The five builders take the one instant a case may move as a named optional, which is why they are keyword-only.
 def requested_analysis(
     *,
     at: datetime = EPOCH,
@@ -307,6 +310,52 @@ def completed_analysis(
         ),
         items=(
             GROOM,
+            RESOLUTE,
+        ),
+        stage_timings=TIMINGS,
+    )
+
+    analysis.pull_events()
+
+    return analysis
+
+
+def tiered_analysis(
+    *,
+    at: datetime = EPOCH,
+) -> Analysis:
+    """
+    A completed analysis with one item in each study tier, so that its words
+    to study number two and its items four.
+    """
+
+    analysis = processing_analysis(
+        at=at,
+    )
+
+    analysis.complete(
+        at=at
+        + timedelta(
+            seconds=2,
+        ),
+        items=(
+            GROOM,
+            replace(
+                GROOM,
+                item=replace(
+                    GROOM.item,
+                    lemma="foo",
+                ),
+                tier=StudyTier.STRETCH,
+            ),
+            replace(
+                GROOM,
+                item=replace(
+                    GROOM.item,
+                    lemma="bar",
+                ),
+                tier=StudyTier.REVIEW,
+            ),
             RESOLUTE,
         ),
         stage_timings=TIMINGS,

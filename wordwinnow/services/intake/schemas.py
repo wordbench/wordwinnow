@@ -900,6 +900,10 @@ class AnalysisSummaryOut(
 
     item_count: int
 
+    # NOTE:
+    # An intake service older than this field sends no count to study, so a newer command reads its listing as `None`.
+    study_count: int | None = None
+
     @classmethod
     def from_domain(
         cls,
@@ -918,6 +922,7 @@ class AnalysisSummaryOut(
             status=summary.status,
             requested_at=summary.requested_at,
             item_count=summary.item_count,
+            study_count=summary.study_count,
         )
 
     def to_domain(
@@ -937,6 +942,7 @@ class AnalysisSummaryOut(
             status=self.status,
             requested_at=self.requested_at,
             item_count=self.item_count,
+            study_count=self.study_count,
         )
 
 

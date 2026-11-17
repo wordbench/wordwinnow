@@ -366,9 +366,11 @@ def summary_from_row(
     *,
     row: AnalysisRow,
     item_count: int,
+    study_count: int,
 ) -> AnalysisSummary:
     """
-    The listing line for an analysis row, given how many items it has.
+    The listing line for an analysis row, given how many items it has and how
+    many of them are words to study.
     """
 
     return AnalysisSummary(
@@ -389,6 +391,7 @@ def summary_from_row(
             row.requested_at,
         ),
         item_count=item_count,
+        study_count=study_count,
     )
 
 

@@ -56,11 +56,16 @@ from wordwinnow.application.dto import (
     VocabularySummary,
 )
 from wordwinnow.domain.analysis import (
+    Analysis,
+    AnalysisOptions,
     AnalysisStatus,
     Stage,
+    request_an_analysis,
 )
 from wordwinnow.domain.cefr import (
     CefrLevel,
+    LevelAssessment,
+    LevelSource,
 )
 from wordwinnow.domain.document import (
     Document,
@@ -69,6 +74,16 @@ from wordwinnow.domain.document import (
 )
 from wordwinnow.domain.language import (
     PartOfSpeech,
+)
+from wordwinnow.domain.learner import (
+    LearnerProfile,
+)
+from wordwinnow.domain.study import (
+    StudyItem,
+    StudyTier,
+)
+from wordwinnow.domain.vocabulary import (
+    VocabularyItem,
 )
 from wordwinnow.infrastructure.observability.metrics import (
     build_metrics,
@@ -453,6 +468,80 @@ class TestCreateAnalysis:
         assert stored.status is AnalysisStatus.REQUESTED
 
 
+def _tiered() -> Analysis:
+    """
+    A completed analysis with one item in each study tier, so that its words
+    to study number two and its items four.
+    """
+
+    analysis = request_an_analysis(
+        document=Document(
+            title="foo",
+            text="foo bar baz qux",
+            origin=DocumentOrigin.CUSTOM_TEXT,
+            reference="foo.txt",
+        ),
+        profile=LearnerProfile(
+            level=CefrLevel.B1,
+            target_level=CefrLevel.B2,
+        ),
+        options=AnalysisOptions(
+            include_dictionary=False,
+        ),
+        at=EPOCH,
+    )
+
+    analysis.start(
+        at=EPOCH,
+    )
+
+    analysis.complete(
+        at=EPOCH,
+        items=tuple(
+            StudyItem(
+                item=VocabularyItem(
+                    lemma=lemma,
+                    part_of_speech=PartOfSpeech.NOUN,
+                    occurrence_count=1,
+                    example_sentence="foo bar baz qux",
+                ),
+                zipf_frequency=4.0,
+                level=LevelAssessment(
+                    level=CefrLevel.B2,
+                    source=LevelSource.REFERENCE_LIST,
+                ),
+                tier=tier,
+                dictionary=None,
+                senses=(),
+            )
+            for (
+                lemma,
+                tier,
+            ) in (
+                (
+                    "foo",
+                    StudyTier.FOCUS,
+                ),
+                (
+                    "bar",
+                    StudyTier.STRETCH,
+                ),
+                (
+                    "baz",
+                    StudyTier.REVIEW,
+                ),
+                (
+                    "qux",
+                    StudyTier.KNOWN,
+                ),
+            )
+        ),
+        stage_timings=(),
+    )
+
+    return analysis
+
+
 @final
 class TestReadAnalyses:
     async def test_an_analysis_round_trips_through_the_wire_schema(
@@ -717,6 +806,32 @@ class TestReadAnalyses:
             )
             == 2
         )
+
+    async def test_the_listing_carries_the_count_to_study_beside_every_item(
+        self,
+        *,
+        harness: tuple[Harness, AsyncClient],
+    ) -> None:
+        (
+            built,
+            client,
+        ) = harness
+
+        analysis = _tiered()
+
+        built.storage.analyses[analysis.id] = analysis
+
+        response = await client.get(
+            url="/analyses",
+        )
+
+        assert response.status_code == 200
+
+        (entry,) = response.json()
+
+        assert entry["item_count"] == 4
+
+        assert entry["study_count"] == 2
 
     async def test_an_unreachable_broker_during_the_requeue_is_a_503_that_says_so(
         self,

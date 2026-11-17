@@ -1254,3 +1254,70 @@ class TestWhatTheClientSends:
                 )
                 == ()
             )
+
+
+@final
+class TestTheListing:
+    @mark.parametrize(
+        argnames=(
+            "extra",
+            "expected",
+        ),
+        argvalues=(
+            (
+                {
+                    "study_count": 2,
+                },
+                2,
+            ),
+            (
+                {},
+                None,
+            ),
+        ),
+        ids=(
+            "with_the_count",
+            "from_an_older_service",
+        ),
+    )
+    async def test_an_entry_gives_its_count_to_study_or_none_when_the_service_is_older(
+        self,
+        *,
+        extra: dict[str, int],
+        expected: int | None,
+    ) -> None:
+        entry = {
+            "analysis_id": str(
+                object=_ID,
+            ),
+            "title": "foo",
+            "origin": "custom_text",
+            "learner_level": "A2",
+            "status": "completed",
+            "requested_at": "1970-01-01T00:00:00Z",
+            "item_count": 4,
+        } | extra
+
+        client = IntakeClient(
+            base_url=_ADDRESS,
+            transport=_answering(
+                Response(
+                    status_code=200,
+                    json=[
+                        entry,
+                    ],
+                ),
+            ),
+        )
+
+        try:
+            (summary,) = await client.list_recent(
+                limit=1,
+            )
+
+        finally:
+            await client.close()
+
+        assert summary.item_count == 4
+
+        assert summary.study_count == expected

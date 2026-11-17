@@ -72,6 +72,10 @@ class AnalysisSummary:
 
     item_count: int
 
+    # NOTE:
+    # `None` means the listing came from an intake service older than this field, which sends no count to study.
+    study_count: int | None
+
 
 class DictionaryWait(
     UnorderedStrEnum,

@@ -1549,7 +1549,7 @@ def render_listing(
         return
 
     console.print(
-        f"{'Id':<36}  {'Requested (UTC)':<16}  {'Level':<5}  {'Status':<9}  {'Items':>5}",
+        f"{'Id':<36}  {'Requested (UTC)':<16}  {'Level':<5} {'Status':<10}{'To study':>8}",
         style="dim",
         soft_wrap=True,
     )
@@ -1568,10 +1568,10 @@ def render_listing(
 
         status = summary.status
 
-        items = summary.item_count
+        count = "-" if summary.study_count is None else f"{summary.study_count:,}"
 
         console.print(
-            f"{summary.analysis_id}  {requested:<16}  {level:<5}  {status:<9}  {items:>5}",
+            f"{summary.analysis_id}  {requested:<16}  {level:<5} {status:<10}{count:>8}",
             highlight=False,
             soft_wrap=True,
         )

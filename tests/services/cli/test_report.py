@@ -1293,6 +1293,7 @@ def _summaries(
             status=AnalysisStatus.COMPLETED,
             requested_at=_EPOCH,
             item_count=1508,
+            study_count=1144,
         )
         for (
             title,
@@ -3028,7 +3029,7 @@ class TestTheListing:
 
         lines = tuple(line.rstrip() for line in console.export_text().splitlines())
 
-        assert lines[0] == "Id                                    Requested (UTC)   Level  Status     Items"
+        assert lines[0] == "Id                                    Requested (UTC)   Level Status    To study"
 
         assert lines[1] == "    Text"
 
@@ -3055,7 +3056,7 @@ class TestTheListing:
                 strict=True,
             ),
         ):
-            assert lines[2 + 2 * index] == f"{summary.analysis_id}  1970-01-01 00:00  A2     completed   1508"
+            assert lines[2 + 2 * index] == f"{summary.analysis_id}  1970-01-01 00:00  A2    completed    1,144"
 
             assert lines[3 + 2 * index] == f"    {label}"
 
@@ -3127,6 +3128,99 @@ class TestTheListing:
             "\n".join(
                 label,
             ),
+        )
+
+    @mark.parametrize(
+        argnames=(
+            "status",
+            "study_count",
+            "row",
+        ),
+        argvalues=(
+            (
+                AnalysisStatus.COMPLETED,
+                99999,
+                "  1970-01-01 00:00  A2    completed   99,999",
+            ),
+            (
+                AnalysisStatus.PROCESSING,
+                0,
+                "  1970-01-01 00:00  A2    processing       0",
+            ),
+            (
+                AnalysisStatus.REQUESTED,
+                0,
+                "  1970-01-01 00:00  A2    requested        0",
+            ),
+            (
+                AnalysisStatus.FAILED,
+                0,
+                "  1970-01-01 00:00  A2    failed           0",
+            ),
+            (
+                AnalysisStatus.COMPLETED,
+                None,
+                "  1970-01-01 00:00  A2    completed        -",
+            ),
+        ),
+        ids=(
+            "completed_99999",
+            "processing_0",
+            "requested_0",
+            "failed_0",
+            "completed_unknown",
+        ),
+    )
+    def test_every_line_fits_80_columns_whatever_the_status_and_the_count(
+        self,
+        *,
+        status: AnalysisStatus,
+        study_count: int | None,
+        row: str,
+    ) -> None:
+        summary = replace(
+            _summaries(
+                titles=(
+                    (
+                        "foo",
+                        DocumentOrigin.CUSTOM_TEXT,
+                    ),
+                ),
+            )[0],
+            status=status,
+            study_count=study_count,
+        )
+
+        console = Console(
+            width=80,
+            record=True,
+        )
+
+        render_listing(
+            summaries=(summary,),
+            console=console,
+        )
+
+        lines = tuple(line.rstrip() for line in console.export_text().splitlines())
+
+        assert lines[0] == "Id                                    Requested (UTC)   Level Status    To study"
+
+        assert lines[2] == f"{summary.analysis_id}{row}"
+
+        assert (
+            len(
+                lines,
+            )
+            == 4
+        )
+
+        assert (
+            _widest(
+                "\n".join(
+                    lines,
+                ),
+            )
+            <= 80
         )
 
     def test_an_empty_listing_says_so(

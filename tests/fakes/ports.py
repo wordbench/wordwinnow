@@ -67,6 +67,9 @@ from wordwinnow.domain.language import (
 from wordwinnow.domain.senses import (
     LexicalSense,
 )
+from wordwinnow.domain.study import (
+    STUDY_TIERS,
+)
 from wordwinnow.infrastructure.lexicon.reference_lists import (
     ReferenceEntry,
 )
@@ -250,6 +253,7 @@ class InMemoryAnalysisRepository:
                 item_count=len(
                     analysis.items,
                 ),
+                study_count=sum(1 for item in analysis.items if item.tier in STUDY_TIERS),
             )
             for analysis in ordered[:limit]
         )

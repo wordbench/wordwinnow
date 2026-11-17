@@ -42,6 +42,7 @@ from tests.infrastructure.persistence.conftest import (
     processing_analysis,
     requested_analysis,
     store_analysis,
+    tiered_analysis,
 )
 from wordwinnow.application.dto import (
     DictionaryWait,
@@ -582,6 +583,42 @@ class TestListing:
         assert frozenset(analysis.id for analysis in stale) == {
             quiet.id,
         }
+
+    async def test_the_listing_counts_the_words_to_study_apart_from_every_item(
+        self,
+        *,
+        new_unit_of_work: NewUnitOfWork,
+    ) -> None:
+        for analysis in (
+            tiered_analysis(
+                at=EPOCH,
+            ),
+            requested_analysis(
+                at=EPOCH
+                + timedelta(
+                    seconds=10,
+                ),
+            ),
+        ):
+            await store_analysis(
+                analysis=analysis,
+                new_unit_of_work=new_unit_of_work,
+            )
+
+        async with new_unit_of_work() as uow:
+            summaries = await uow.analyses.list_recent(
+                limit=10,
+            )
+
+        assert tuple(summary.item_count for summary in summaries) == (
+            0,
+            4,
+        )
+
+        assert tuple(summary.study_count for summary in summaries) == (
+            0,
+            2,
+        )
 
 
 @final

@@ -53,7 +53,9 @@ from tests.infrastructure.persistence.conftest import (
     create_schema,
     load_analysis,
     processing_analysis,
+    requested_analysis,
     store_analysis,
+    tiered_analysis,
 )
 from wordwinnow.application.dto import (
     ProcessingProgress,
@@ -850,6 +852,64 @@ class TestPostgreSql:
                 ) == (
                     "completed",
                     True,
+                )
+
+            finally:
+                async with engine.begin() as connection:
+                    await connection.run_sync(
+                        fn=Base.metadata.drop_all,
+                    )
+
+        finally:
+            await engine.dispose()
+
+    @mark.integration
+    async def test_the_listing_counts_the_words_to_study_apart_from_every_item(
+        self,
+    ) -> None:
+        engine = build_engine(
+            database_url=await _throwaway_database(),
+        )
+
+        try:
+            await create_schema(
+                engine=engine,
+            )
+
+            try:
+                new_unit_of_work = new_unit_of_work_factory(
+                    engine=engine,
+                )
+
+                for analysis in (
+                    tiered_analysis(
+                        at=EPOCH,
+                    ),
+                    requested_analysis(
+                        at=EPOCH
+                        + timedelta(
+                            seconds=10,
+                        ),
+                    ),
+                ):
+                    await store_analysis(
+                        analysis=analysis,
+                        new_unit_of_work=new_unit_of_work,
+                    )
+
+                async with new_unit_of_work() as uow:
+                    summaries = await uow.analyses.list_recent(
+                        limit=10,
+                    )
+
+                assert tuple(summary.item_count for summary in summaries) == (
+                    0,
+                    4,
+                )
+
+                assert tuple(summary.study_count for summary in summaries) == (
+                    0,
+                    2,
                 )
 
             finally:

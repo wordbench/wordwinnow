@@ -3703,3 +3703,139 @@ class TestDoctorInstallingTheNltkData:
         assert "run `wordwinnow setup` to install the missing packages" in result.stdout
 
         assert "error:" not in result.output
+
+
+def _tiered() -> Analysis:
+    """
+    A completed analysis with one item in each study tier, so that its words
+    to study number two and its items four.
+    """
+
+    analysis = request_an_analysis(
+        document=Document(
+            title="foo",
+            text="foo bar baz qux",
+            origin=DocumentOrigin.CUSTOM_TEXT,
+            reference="foo.txt",
+        ),
+        profile=LearnerProfile(
+            level=CefrLevel.B1,
+            target_level=CefrLevel.B2,
+        ),
+        options=AnalysisOptions(
+            include_dictionary=False,
+        ),
+        at=_EPOCH,
+    )
+
+    analysis.start(
+        at=_EPOCH,
+    )
+
+    analysis.complete(
+        at=_EPOCH,
+        items=tuple(
+            StudyItem(
+                item=VocabularyItem(
+                    lemma=lemma,
+                    part_of_speech=PartOfSpeech.NOUN,
+                    occurrence_count=1,
+                    example_sentence="foo bar baz qux",
+                ),
+                zipf_frequency=4.0,
+                level=LevelAssessment(
+                    level=CefrLevel.B2,
+                    source=LevelSource.REFERENCE_LIST,
+                ),
+                tier=tier,
+                dictionary=None,
+                senses=(),
+            )
+            for (
+                lemma,
+                tier,
+            ) in (
+                (
+                    "foo",
+                    StudyTier.FOCUS,
+                ),
+                (
+                    "bar",
+                    StudyTier.STRETCH,
+                ),
+                (
+                    "baz",
+                    StudyTier.REVIEW,
+                ),
+                (
+                    "qux",
+                    StudyTier.KNOWN,
+                ),
+            )
+        ),
+        stage_timings=(
+            StageTiming(
+                stage=Stage.WINNOWING,
+                seconds=0.5,
+            ),
+        ),
+    )
+
+    return analysis
+
+
+@final
+class TestTheListingAgreesWithTheReport:
+    def test_list_counts_the_words_the_report_counts_to_study(
+        self,
+        *,
+        workspace: Path,
+    ) -> None:
+        analysis = _tiered()
+
+        _stored(
+            analysis,
+        )
+
+        listed = _runner.invoke(
+            app=app,
+            args=[
+                "list",
+            ],
+        )
+
+        assert listed.exit_code == 0, listed.output
+
+        lines = _plain(
+            listed.output,
+        ).splitlines()
+
+        assert "To study" in lines[0]
+
+        (row,) = (
+            line
+            for line in lines
+            if line.startswith(
+                str(
+                    object=analysis.id,
+                ),
+            )
+        )
+
+        assert row.split()[-1] == "2"
+
+        shown = _runner.invoke(
+            app=app,
+            args=[
+                "show",
+                str(
+                    object=analysis.id,
+                ),
+            ],
+        )
+
+        assert shown.exit_code == 0, shown.output
+
+        assert "2 words to study: 1 FOCUS, 1 STRETCH; 1 REVIEW, below B1" in _words(
+            shown.output,
+        )
