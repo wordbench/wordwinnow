@@ -41,13 +41,17 @@ requires-python = ">=3.14,<3.15"
 # exactly, transitive ones included, with their hashes, and the gate refuses a lock that no longer describes this
 # list.
 #
+# Typer alone has a ceiling, below 0.29, because 0.29 prints a type beside every flag of the help and words its usage
+# errors anew, neither of which the gate tests, and the ceiling goes when a release keeps the help as this project
+# shows it, which the installed test checks.
+#
 # The HTTP client is `httpx2`, Pydantic's continuation of HTTPX 0.28.1 under a name of its own and with the same API,
 # because the `httpx` name now leads to a redesigned 1.0.
 #
 # `httpx` itself stays in the lock only because JupyterLab, in the development group, requires it, and a fitness test
 # proves that no module of the package, its migrations, or its tests imports it.
 dependencies = [
-  "typer>=0.27.2",
+  "typer>=0.28.0,<0.29",
   "rich>=15.0.0",
   "fastapi>=0.142.2",
   "uvicorn>=0.54.0",

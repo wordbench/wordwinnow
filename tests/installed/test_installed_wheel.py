@@ -271,6 +271,8 @@ class Installation:
 
     verbose_help: CompletedProcess[str]
 
+    analyze_help: CompletedProcess[str]
+
     first_setup: CompletedProcess[str]
 
     second_setup: CompletedProcess[str]
@@ -997,6 +999,16 @@ def installation(
         working_directory=working_directory,
     )
 
+    analyze_help = _execute(
+        arguments=[
+            command,
+            "analyze",
+            "--help",
+        ],
+        environment=environment,
+        working_directory=working_directory,
+    )
+
     first_setup = _execute(
         arguments=[
             command,
@@ -1080,6 +1092,7 @@ def installation(
             wheel,
         ),
         verbose_help=verbose_help,
+        analyze_help=analyze_help,
         first_setup=first_setup,
         second_setup=second_setup,
         analysis=analysis,
@@ -1537,6 +1550,45 @@ class TestInstalledWheel:
             f"{result.args} printed the lines {banners} that begin `Python `, not `Python {_MINOR}.`; "
             f"{installation.uv_version}"
         )
+
+    def test_a_fresh_install_shows_no_type_beside_a_flag_in_its_help(
+        self,
+        *,
+        installation: Installation,
+    ) -> None:
+        # NOTE:
+        # `<bool>` is what Typer 0.29 prints in a column of its own beside every flag, `--version` and `--help` among
+        # them, and what 0.28 does not print.
+        #
+        # The first screen is the verbose run, whose trace goes to standard error, so its standard output is the help
+        # alone.
+        #
+        # Each screen must also hold its anchor, an option it always lists, so that an empty or failed output cannot
+        # pass for a help without a type.
+        for (
+            screen,
+            anchor,
+        ) in (
+            (
+                installation.verbose_help,
+                "--version",
+            ),
+            (
+                installation.analyze_help,
+                "--json",
+            ),
+        ):
+            assert screen.returncode == 0, _transcript(
+                screen,
+            )
+
+            assert anchor in screen.stdout, _transcript(
+                screen,
+            )
+
+            with_a_type = tuple(line for line in screen.stdout.splitlines() if "<bool>" in line)
+
+            assert not with_a_type, f"{screen.args} shows a type beside a flag, as in: {with_a_type[0]}"
 
     def test_setup_prepares_everything_and_says_so(
         self,
