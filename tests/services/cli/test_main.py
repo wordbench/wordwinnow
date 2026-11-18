@@ -168,6 +168,15 @@ _TEXT: Final = (
     "The King wanted the photograph back. The groom looked very drunken, but Irene Adler kept the photograph."
 )
 
+_PAGE: Final = f'<!DOCTYPE html>\n<html lang="en">\n<body><p>{_TEXT}</p></body>\n</html>\n'
+
+# TEST:
+# What follows the name of an input in the refusal of a whole web page, written out here and not taken from the
+# product, so that a change to its words fails the tests that read them.
+_PAGE_REFUSAL: Final = (
+    "is a web page; extract its article's text first, as the operating guide at github.com/wordbench/wordwinnow shows"
+)
+
 _runner: Final = CliRunner()
 
 
@@ -2725,6 +2734,100 @@ class TestAnIntakeThatCannotServe:
         assert result.exit_code == 1
 
         assert result.output == "error: standard input is not UTF-8 text\n"
+
+        assert not (workspace / "wordwinnow.db").exists()
+
+        assert not services_called
+
+    @mark.parametrize(
+        argnames="remote",
+        argvalues=(
+            False,
+            True,
+        ),
+        ids=(
+            "local",
+            "remote",
+        ),
+    )
+    def test_a_web_page_on_standard_input_is_refused_in_one_line(
+        self,
+        *,
+        workspace: Path,
+        services_called: list[str],
+        monkeypatch: MonkeyPatch,
+        remote: bool,
+    ) -> None:
+        monkeypatch.setattr(
+            target=main,
+            name="stdin",
+            value=_standard_input(
+                _PAGE.encode(),
+            ),
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "analyze",
+                "-",
+                *(("--remote",) if remote else ()),
+                "--level",
+                "B1",
+                "--no-dictionary",
+            ],
+        )
+
+        assert result.exit_code == 1, result.output
+
+        assert result.output == f"error: standard input {_PAGE_REFUSAL}\n"
+
+        assert not (workspace / "wordwinnow.db").exists()
+
+        assert not services_called
+
+    @mark.parametrize(
+        argnames="remote",
+        argvalues=(
+            False,
+            True,
+        ),
+        ids=(
+            "local",
+            "remote",
+        ),
+    )
+    def test_a_web_page_in_a_file_is_refused_in_one_line(
+        self,
+        *,
+        workspace: Path,
+        services_called: list[str],
+        remote: bool,
+    ) -> None:
+        page = workspace / "page.html"
+
+        page.write_text(
+            data=_PAGE,
+            encoding="utf-8",
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "analyze",
+                str(
+                    object=page,
+                ),
+                *(("--remote",) if remote else ()),
+                "--level",
+                "B1",
+                "--no-dictionary",
+            ],
+        )
+
+        assert result.exit_code == 1, result.output
+
+        assert result.output == f"error: {page} {_PAGE_REFUSAL}\n"
 
         assert not (workspace / "wordwinnow.db").exists()
 

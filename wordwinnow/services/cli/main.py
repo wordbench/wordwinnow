@@ -98,6 +98,8 @@ from wordwinnow.infrastructure.settings import (
     load_settings,
 )
 from wordwinnow.infrastructure.sources.custom_text import (
+    WEB_PAGE_REFUSAL,
+    looks_like_a_web_page,
     read_custom_text,
 )
 from wordwinnow.services.bench import (
@@ -674,6 +676,13 @@ def _request(
             raise SourceRejectedError(
                 "standard input is not UTF-8 text",
             ) from exception
+
+        if looks_like_a_web_page(
+            text=text,
+        ):
+            raise SourceRejectedError(
+                f"standard input {WEB_PAGE_REFUSAL}",
+            )
 
         return AnalysisRequest(
             text=text,

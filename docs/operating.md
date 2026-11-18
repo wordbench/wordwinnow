@@ -19,8 +19,8 @@ user data directory; `--remote` sends them to the distributed mode's intake
 service, which `stats` always reads from.
 
 `analyze FILE` reads plain text, Markdown, SRT, or WebVTT; for anything else,
-such as a PDF, extract the text with a tool of your choice and pipe it in, `-`
-reading standard input:
+such as a PDF or a web page, extract the text with a tool of your choice and
+pipe it in, `-` reading standard input:
 
 ```sh
 pdftotext paper.pdf - | wordwinnow analyze - --level B1
@@ -30,6 +30,36 @@ Poppler's `pdftotext` is one such tool, packaged as `poppler` by Homebrew and as
 `poppler-utils` by Debian and Ubuntu; a scanned PDF holds pictures of its pages
 rather than text and needs text recognition first, and when the extractor
 finds no text, `analyze` refuses the empty document.
+
+A whole web page, given as a file or on standard input, is refused in one
+line, because its markup, menus, and links would fill the list with words the
+article does not use.
+
+Trafilatura is one tool that extracts an article's text from its page; install
+it with uv, as you installed Wordwinnow, in an environment of its own, its
+command in the same folder as `wordwinnow`:
+
+```sh
+uv tool install --python 3.14 --with pysocks trafilatura
+```
+
+`trafilatura --version` then prints its version; PySocks only stops a warning,
+on every run, that support for SOCKS proxies is missing, which reading a page
+from standard input never uses.
+
+A page then reaches `analyze` as its article's text alone:
+
+```sh
+curl -sSfL https://example.com/article | trafilatura | wordwinnow analyze - --level B1
+```
+
+A page is recognized by its start, after any blank lines, comments, and XML
+declaration, so a fragment of a page, or a page after other text such as the
+headers `curl -i` prints, is read as text.
+
+When the shell cannot find `trafilatura`, or Trafilatura finds no article in the
+page, it says so on standard error and `analyze` refuses the empty document, so
+install it as above or extract the text another way.
 
 | Option | Meaning |
 | --- | --- |

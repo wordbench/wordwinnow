@@ -1,5 +1,6 @@
 """
-A learner's own text, from a file or pasted, made ready for analysis.
+A learner's own text, from a file or pasted, made ready for analysis, or
+refused when it is a whole web page.
 
 Three kinds of text need help before the linguistic adapter sees them:
 subtitle files (SRT and WebVTT), whose cue numbers and timestamps are not
@@ -33,6 +34,12 @@ from wordwinnow.domain.document import (
     Document,
     DocumentOrigin,
     InvalidDocumentError,
+)
+
+# NOTE:
+# The words after the name of a refused input, in one place so that the two refusals of a whole web page agree.
+WEB_PAGE_REFUSAL: Final = (
+    "is a web page; extract its article's text first, as the operating guide at github.com/wordbench/wordwinnow shows"
 )
 
 # NOTE:
@@ -121,6 +128,17 @@ _BLANK_LINES: Final = compile_pattern(
     pattern=r"\n{3,}",
 )
 
+# NOTE:
+# What the check for a web page skips before a tag: a byte-order mark and the white space HTML itself recognizes.
+_BLANKS: Final = "\ufeff \t\n\f\r"
+
+# NOTE:
+# The lookahead keeps `<html-viewer>` and `<htmlx>` from counting as the start tag of `html`.
+_PAGE_START: Final = compile_pattern(
+    pattern=r"<(?:!doctype\s+html|html)(?=[\s>])",
+    flags=IGNORECASE,
+)
+
 
 def normalize_text(
     *,
@@ -181,6 +199,78 @@ def looks_like_captions(
         )
         or _CUE_TIMING.search(
             string=text,
+        )
+        is not None
+    )
+
+
+def _skip_blanks(
+    text: str,
+    start: int,
+    /,
+) -> int:
+    size = len(
+        text,
+    )
+
+    end = start
+
+    while end < size and text[end] in _BLANKS:
+        end += 1
+
+    return end
+
+
+def looks_like_a_web_page(
+    *,
+    text: str,
+) -> bool:
+    """
+    Whether the text begins as a whole web page does: with a doctype naming
+    html or an html start tag, after any blank space, XML declaration, and
+    comments.
+    """
+
+    index = _skip_blanks(
+        text,
+        0,
+    )
+
+    if text[index : index + 5].lower() == "<?xml":
+        closing = text.find(
+            "?>",
+            index,
+        )
+
+        if closing < 0:
+            return False
+
+        index = _skip_blanks(
+            text,
+            closing + 2,
+        )
+
+    while text.startswith(
+        "<!--",
+        index,
+    ):
+        closing = text.find(
+            "-->",
+            index + 4,
+        )
+
+        if closing < 0:
+            return False
+
+        index = _skip_blanks(
+            text,
+            closing + 3,
+        )
+
+    return (
+        _PAGE_START.match(
+            string=text,
+            pos=index,
         )
         is not None
     )
@@ -326,6 +416,8 @@ def read_custom_text(
 
     A missing, unreadable, or empty file is refused with a message that names
     the file.
+
+    A file that is a whole web page is refused the same way.
     """
 
     try:
@@ -347,6 +439,16 @@ def read_custom_text(
         raise SourceRejectedError(
             f"{path} could not be read ({exception.strerror})",
         ) from exception
+
+    # NOTE:
+    # The check comes before the Markdown is removed, because `markdown_prose` takes a page's tags away and keeps the
+    # words of its style sheet and script, so a page in a `.md` file would no longer begin as one.
+    if looks_like_a_web_page(
+        text=text,
+    ):
+        raise SourceRejectedError(
+            f"{path} {WEB_PAGE_REFUSAL}",
+        )
 
     if path.suffix.lower() in _MARKDOWN_SUFFIXES:
         text = markdown_prose(

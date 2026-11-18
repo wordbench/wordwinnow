@@ -6,10 +6,12 @@ from pathlib import (
     Path,
 )
 from typing import (
+    Final,
     final,
 )
 
 from pytest import (
+    mark,
     raises,
 )
 
@@ -22,9 +24,17 @@ from wordwinnow.domain.document import (
 from wordwinnow.infrastructure.sources.custom_text import (
     document_from_text,
     extract_caption_prose,
+    looks_like_a_web_page,
     looks_like_captions,
     normalize_text,
     read_custom_text,
+)
+
+_PAGE: Final = (
+    '<html lang="en">\n'
+    "<head><title>foo</title></head>\n"
+    "<body><p>Irene Adler kept the photograph.</p></body>\n"
+    "</html>\n"
 )
 
 
@@ -241,3 +251,169 @@ class TestReadCustomText:
             read_custom_text(
                 path=binary,
             )
+
+
+@final
+class TestAWholeWebPage:
+    @mark.parametrize(
+        argnames="text",
+        argvalues=(
+            "<!DOCTYPE html>\n" + _PAGE,
+            "<!doctype html>\n" + _PAGE,
+            _PAGE,
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "foo.dtd">\n' + _PAGE,
+            "<!-- foo -->\n<!DOCTYPE html>\n" + _PAGE,
+            "\ufeff\r\n\r\n   <!DOCTYPE html>\r\n"
+            + _PAGE.replace(
+                "\n",
+                "\r\n",
+            ),
+            ("<!DOCTYPE html>\n" + _PAGE).replace(
+                "\n",
+                "",
+            ),
+            '<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN" "foo.dtd">\n'
+            + _PAGE.replace(
+                "html",
+                "HTML",
+            ),
+        ),
+        ids=(
+            "doctype",
+            "doctype in lower case",
+            "html start tag and no doctype",
+            "xml declaration and an xhtml doctype",
+            "comment and a doctype",
+            "byte-order mark, blank lines, spaces, and crlf",
+            "one line",
+            "html 4.01 in upper case",
+        ),
+    )
+    def test_a_text_that_begins_as_a_page_does_is_recognized(
+        self,
+        *,
+        text: str,
+    ) -> None:
+        assert looks_like_a_web_page(
+            text=text,
+        )
+
+    @mark.parametrize(
+        argnames="text",
+        argvalues=(
+            "Irene Adler kept the photograph.\n",
+            "A page starts with <!DOCTYPE html>, and the <html> element holds the rest.\n",
+            '1\n00:00:01,000 --> 00:00:02,000\n<i>[Fire alarm]</i> <font color="#ffffff">Irene Adler.</font>\n',
+            "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n<v Holmes><c.yellow>Irene Adler.</c></v>\n",
+            '<p align="center"><img src="foo.png" alt="foo"></p>\n\n# foo\n',
+            "<!-- foo -->\n# foo\n\nIrene Adler kept the photograph.\n",
+            "<article><p>Irene Adler kept the photograph.</p></article>\n",
+            "HTTP/2 200\r\ncontent-type: text/html\r\n\r\n<!DOCTYPE html>\n" + _PAGE,
+            "<br />\n<b>Warning</b>: headers already sent<br />\n<!DOCTYPE html>\n" + _PAGE,
+            "<head><title>foo</title></head>\n<body><p>Irene Adler kept the photograph.</p></body>\n",
+            "<!-- foo\n<!DOCTYPE html>\n" + _PAGE,
+            '<?xml version="1.0"\n<!DOCTYPE html>\n' + _PAGE,
+            "<html-viewer>Irene Adler kept the photograph.</html-viewer>\n",
+            "",
+        ),
+        ids=(
+            "prose",
+            "prose that names a doctype and an html tag",
+            "srt with tags in its cues",
+            "webvtt with tags in its cues",
+            "markdown that opens with a block",
+            "markdown that opens with a comment",
+            "fragment",
+            "response head and then a page",
+            "warning line and then a page",
+            "page that opens with head",
+            "comment that does not end",
+            "xml declaration that does not end",
+            "html-viewer",
+            "empty",
+        ),
+    )
+    def test_any_other_text_is_not_recognized(
+        self,
+        *,
+        text: str,
+    ) -> None:
+        assert not looks_like_a_web_page(
+            text=text,
+        )
+
+    # TEST:
+    # The Markdown page opens with an html start tag and no doctype, so that a check made after `markdown_prose` has
+    # taken the tags away would miss it.
+    @mark.parametrize(
+        argnames=(
+            "name",
+            "page",
+        ),
+        argvalues=(
+            (
+                "page.html",
+                "<!DOCTYPE html>\n" + _PAGE,
+            ),
+            (
+                "page.txt",
+                "<!DOCTYPE html>\n" + _PAGE,
+            ),
+            (
+                "page.md",
+                _PAGE,
+            ),
+        ),
+        ids=(
+            "html",
+            "text",
+            "markdown",
+        ),
+    )
+    def test_a_page_in_a_file_is_refused_by_name(
+        self,
+        *,
+        tmp_path: Path,
+        name: str,
+        page: str,
+    ) -> None:
+        path = tmp_path / name
+
+        path.write_text(
+            data=page,
+            encoding="utf-8",
+        )
+
+        with raises(
+            expected_exception=SourceRejectedError,
+        ) as caught:
+            read_custom_text(
+                path=path,
+            )
+
+        assert (
+            str(
+                object=caught.value,
+            )
+            == f"{path} is a web page; extract its article's text first, as the operating guide at "
+            "github.com/wordbench/wordwinnow shows"
+        )
+
+    def test_markdown_that_opens_with_html_is_read(
+        self,
+        *,
+        tmp_path: Path,
+    ) -> None:
+        path = tmp_path / "note.md"
+
+        path.write_text(
+            data='<p align="center">\n  <img src="foo.png" alt="foo">\n</p>\n\nIrene Adler kept the photograph.\n',
+            encoding="utf-8",
+        )
+
+        document = read_custom_text(
+            path=path,
+        )
+
+        assert document.text == "Irene Adler kept the photograph."
