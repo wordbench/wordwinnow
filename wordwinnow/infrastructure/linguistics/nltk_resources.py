@@ -9,6 +9,10 @@ and a wrong report is worse than none.
 The packages are fetched by this module rather than by NLTK's own downloader,
 which prompts on a failure and refuses hosts whose addresses it does not
 trust.
+
+A package is written whole or not at all, and one that NLTK finds but cannot
+open as an archive counts as missing, so that the command which installs the
+packages also repairs a damaged one.
 """
 
 from collections.abc import (
@@ -23,6 +27,9 @@ from pathlib import (
 from typing import (
     Final,
     final,
+)
+from zipfile import (
+    BadZipFile,
 )
 
 # NOTE:
@@ -55,6 +62,10 @@ NLTK_DATA_COMMIT: Final = "550b6625bcef1f2abff2ff770a5a0d272c9c6b2a"
 PACKAGES_URL: Final = f"https://raw.githubusercontent.com/nltk/nltk_data/{NLTK_DATA_COMMIT}/packages"
 
 DOWNLOAD_TIMEOUT_SECONDS: Final = 120.0
+
+DIRECTORY_MODE: Final = 0o755
+
+FILE_MODE: Final = 0o644
 
 
 @dataclass(
@@ -162,7 +173,10 @@ def _is_present(
             resource_name=path,
         )
 
-    except LookupError:
+    except (
+        LookupError,
+        BadZipFile,
+    ):
         return False
 
     return True
@@ -204,7 +218,7 @@ def download_resources(
     Returns the packages that were downloaded.
 
     Raises `LinguisticResourcesMissingError` when a package could not be
-    fetched.
+    fetched or could not be written.
     """
 
     missing = missing_resources(
@@ -270,11 +284,58 @@ def _fetch(
 
     destination = directory / resource.kind / f"{resource.package}.zip"
 
-    destination.parent.mkdir(
-        parents=True,
-        exist_ok=True,
+    # NOTE:
+    # The package is written beside its final name and moved over it only once every byte is written, so a full disk
+    # or an interrupt leaves no truncated archive under the name NLTK reads.
+    #
+    # A partial file left by an interrupted run is removed first, so that its mode never reaches the package.
+    partial = destination.with_name(
+        name=f"{resource.package}.zip.part",
     )
 
-    destination.write_bytes(
-        data=response.content,
-    )
+    try:
+        # NOTE:
+        # NLTK refuses a data folder, a folder under it, or a package file that another account can write to, and then
+        # reports the package as not found, which is what a umask of `002` would make of a folder or file made
+        # without a mode.
+        #
+        # So the target and the kind's folder, each by a call of its own because `Path.mkdir` gives its mode to the
+        # last folder alone, and the file are given modes that the umask can narrow and never widen.
+        directory.mkdir(
+            mode=DIRECTORY_MODE,
+            parents=True,
+            exist_ok=True,
+        )
+
+        destination.parent.mkdir(
+            mode=DIRECTORY_MODE,
+            exist_ok=True,
+        )
+
+        partial.unlink(
+            missing_ok=True,
+        )
+
+        try:
+            partial.touch(
+                mode=FILE_MODE,
+                exist_ok=False,
+            )
+
+            partial.write_bytes(
+                data=response.content,
+            )
+
+            partial.replace(
+                target=destination,
+            )
+
+        finally:
+            partial.unlink(
+                missing_ok=True,
+            )
+
+    except OSError as exception:
+        raise LinguisticResourcesMissingError(
+            f"NLTK package {resource.package} could not be written to {destination} ({exception.strerror})",
+        ) from exception
