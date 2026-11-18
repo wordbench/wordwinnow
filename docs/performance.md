@@ -4,8 +4,9 @@ What an analysis costs, what grows with the text, what the dictionary costs,
 and what more workers buy.
 
 Every measured number comes from a row in [`benchmarks/results/`](../benchmarks/results/), which
-[`benchmarks/figures/`](../benchmarks/figures/) also draws; a number worked out rather than measured
-says so, and so does the one observation below that no benchmark recorded.
+[`benchmarks/figures/`](../benchmarks/figures/) also draws, except the two runs against the Free
+Dictionary API below, each measured or observed once, which no benchmark
+recorded; a number worked out rather than measured says so.
 
 The measurements were taken on one Apple Silicon laptop, with the stack under
 Docker Desktop, so they describe that machine, not a deployment.
@@ -25,8 +26,8 @@ measurements count.
 | --- | --- | --- |
 | How long does the whole 8,530-word sample story take without the dictionary, analyzed again in the same process? | 0.29 s, or 0.31 s with the level model | Measured |
 | What grows with the text? | Tagging grows with the words; WordNet grows with the distinct words, which grow more slowly | Measured |
-| What does the dictionary cost? | One network round trip per distinct word: 1,401 for the story, 19 s with eight in flight against a provider that answers in 0.1 s | Measured |
-| And against the Free Dictionary API? | About 1,350 s for the story's first analysis, because the provider answered about 20 requests in each 20-second window | Measured once |
+| What does the dictionary cost? | One network round trip per distinct word to study; when every word was looked up, 1,401 for the story, 19 s with eight in flight against a provider that answers in 0.1 s | Measured |
+| And against the Free Dictionary API? | About 1,350 s for the story's first analysis when every word was looked up, because the provider answered about 20 requests in each 20-second window | Measured once |
 | And a second time? | About 0.015 s: a warm cache answers every lookup | Measured |
 | What do more workers buy? | 116, 180, and 274 analyses per minute with one, two, and four workers | Measured |
 

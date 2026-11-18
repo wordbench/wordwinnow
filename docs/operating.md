@@ -861,11 +861,11 @@ with the refusals they had; once it answers a waiting word, the others are no
 longer waiting for it to come back but for the pace of its answers, and are
 not cut off.
 
-The words are asked in the order a learner studies them: the focus words
-first, then the stretch, the review, and the known words, and within each the
-more frequent in the text first, so a provider that stops answering part way,
-or waiting time that runs out, costs the words that matter least; the report
-keeps its own order.
+Only the words to study are asked, in the order a learner studies them: the
+focus words first, then the stretch words, and within each the more frequent
+in the text first, so a provider that stops answering part way, or waiting
+time that runs out, costs the words that matter least; the report keeps its
+own order.
 
 In the distributed mode the worker waits, not the enrichment service: the
 service answers a lookup the open circuit refuses at once, with the time to

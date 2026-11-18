@@ -282,10 +282,11 @@ which.
 
 ### Another source
 
-Another New York Times endpoint is one adapter and two entries in the
-composition root, its name among the source names and its constructor in
-`build_sources`; the domain, the use cases, the intake schema, and the command
-line do not change.
+Another New York Times endpoint is one adapter, two entries in the composition
+root, its name among the source names and its constructor in `build_sources`,
+and one entry in the command line, the topic it takes in `SOURCE_TOPICS`, which
+`analyze --help` lists and a test holds to the source names; the domain, the use
+cases, and the intake schema do not change.
 
 Another provider takes one step more, because the domain names a source once,
 as a member of the closed list `DocumentOrigin`: the provider adds its member
@@ -354,6 +355,7 @@ flowchart TB
     nyt(["New York Times\nfeeds and APIs"])
     learner --> cli
     cli -->|"POST /analyses\nGET /analyses\nGET /analyses/{id}\nPOST /analyses/requeue\nGET /vocabulary/summary"| intake
+    cli -.->|"GET /activity,\nwith --view operator"| enrichment
     intake --> postgres
     intake --> kafka
     intake -.->|"a document"| nyt
@@ -395,7 +397,7 @@ sequenceDiagram
     K->>W: analysis.requested.v1
     W->>P: mark processing, commit
     W->>W: NLTK, WordNet, level assessment
-    W->>E: GET /lookups/{lemma}, per word, 8 in flight
+    W->>E: GET /lookups/{lemma}, per word to study, 8 in flight
     E-->>W: found, not found, or unavailable
     W->>W: winnow
     W->>P: store the result, commit
@@ -599,7 +601,7 @@ answers a concrete problem of running the system.
 | SQLite | The local mode needs a store with no setup and the same models and migrations as the distributed one |
 | PostgreSQL | Several workers write analyses at once and need real transactions |
 | Kafka | Intake must answer at once while a worker does the slow part, workers must join without reconfiguring anything, and finished analyses must reach a reader the worker does not know |
-| Redis | Every enrichment replica must share one dictionary cache, so a word looked up once is not asked of the provider again |
+| Redis | The distributed mode's dictionary cache must outlive the enrichment service's container, so a word looked up once is not asked of the provider again after a restart or `make down` |
 | ClickHouse | Vocabulary facts accumulate across analyses and are only ever read as aggregates |
 | Prometheus, Tempo, Grafana | One analysis crosses up to five processes, and without metrics and a trace nobody can say where its time went or why it stopped |
 
