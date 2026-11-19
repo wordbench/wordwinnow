@@ -133,7 +133,8 @@ Everything outside the text is an adapter: a document source, the dictionary,
 the lexical network, the stores, the message bus.
 
 The analysis itself only ever sees the text, so another endpoint of The New
-York Times is one adapter and its two entries in the composition root;
+York Times is one adapter, its two entries in the composition root, and the
+topic the command line's help names for it;
 [`docs/architecture.md`](https://github.com/wordbench/wordwinnow/blob/v2.1.0/docs/architecture.md) says what another provider takes.
 
 ## Documentation

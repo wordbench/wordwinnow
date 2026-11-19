@@ -73,9 +73,10 @@ The `-` makes `analyze` read the text from standard input, which here is the sto
 `curl` fetches.
 
 Standard input is read as plain text, or as subtitles when it holds SRT or
-WebVTT cues; a web page piped in is read with its markup, menus, and links,
-which fill the list with words the article does not use, so pipe the article's
-text alone.
+WebVTT cues; a whole web page, piped in or given as a file, is refused in one
+line, because its markup, menus, and links would fill the list with words the
+article does not use; extract the article's text first, as
+[the operating guide](https://github.com/wordbench/wordwinnow/blob/v2.1.0/docs/operating.md#the-learners-commands) shows.
 
 The report names the text and the learner, counts the words to study, and
 lists them in study order, FOCUS first, up to 40 rows by default, each with
