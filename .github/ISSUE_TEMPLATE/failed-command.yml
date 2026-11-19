@@ -53,7 +53,7 @@ body:
     attributes:
       label: Wordwinnow's version, as wordwinnow --version prints it
       description: If the command does not run, the line for wordwinnow in the output of uv tool list.
-      placeholder: wordwinnow 2.1.0
+      placeholder: wordwinnow 2.2.0
 
   - type: textarea
     id: doctor
