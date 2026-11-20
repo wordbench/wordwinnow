@@ -11,6 +11,9 @@ from collections.abc import (
     Callable,
     Sequence,
 )
+from csv import (
+    reader,
+)
 from datetime import (
     UTC,
     datetime,
@@ -18,6 +21,7 @@ from datetime import (
 )
 from io import (
     BytesIO,
+    StringIO,
     TextIOWrapper,
 )
 from json import (
@@ -91,6 +95,10 @@ from wordwinnow.domain.cefr import (
     LevelAssessment,
     LevelSource,
 )
+from wordwinnow.domain.dictionary import (
+    LookupOutcome,
+    SelectedDefinition,
+)
 from wordwinnow.domain.document import (
     Document,
     DocumentOrigin,
@@ -109,6 +117,7 @@ from wordwinnow.domain.senses import (
     LexicalSense,
 )
 from wordwinnow.domain.study import (
+    DictionaryInformation,
     StudyItem,
     StudyTier,
 )
@@ -2110,10 +2119,15 @@ def _stored(
 def _completed(
     *,
     meaning: str | None = None,
+    other_meaning: str | None = None,
+    retention: timedelta | None = None,
+    at: datetime = _EPOCH,
 ) -> Analysis:
     """
     A completed analysis of one word, with no dictionary asked, and `meaning`
-    as WordNet's gloss of the word when there is one.
+    as WordNet's gloss of the word when there is one, and `other_meaning` as a
+    second sense of it when that is given, of a text kept for `retention` when
+    it is given, requested at `at`.
     """
 
     analysis = request_an_analysis(
@@ -2122,6 +2136,7 @@ def _completed(
             text="foo",
             origin=DocumentOrigin.CUSTOM_TEXT,
             reference="foo.txt",
+            retention=retention,
         ),
         profile=LearnerProfile(
             level=CefrLevel.B1,
@@ -2130,15 +2145,15 @@ def _completed(
         options=AnalysisOptions(
             include_dictionary=False,
         ),
-        at=_EPOCH,
+        at=at,
     )
 
     analysis.start(
-        at=_EPOCH,
+        at=at,
     )
 
     analysis.complete(
-        at=_EPOCH,
+        at=at,
         items=(
             StudyItem(
                 item=VocabularyItem(
@@ -2169,6 +2184,24 @@ def _completed(
                             usage_count=1,
                             hyponym_count=0,
                             category="noun.attribute",
+                        ),
+                        *(
+                            ()
+                            if other_meaning is None
+                            else (
+                                LexicalSense(
+                                    key="foo.n.02",
+                                    part_of_speech=PartOfSpeech.NOUN,
+                                    gloss=other_meaning,
+                                    example=None,
+                                    synonyms=(),
+                                    hypernyms=(),
+                                    antonyms=(),
+                                    usage_count=0,
+                                    hyponym_count=0,
+                                    category="noun.attribute",
+                                ),
+                            )
                         ),
                     )
                 ),
@@ -3808,11 +3841,130 @@ class TestDoctorInstallingTheNltkData:
         assert "error:" not in result.output
 
 
-def _tiered() -> Analysis:
+type _Meaning = tuple[DictionaryInformation | None, tuple[LexicalSense, ...]]
+
+
+def _wordnet_sense() -> LexicalSense:
+    return LexicalSense(
+        key="foo.n.01",
+        part_of_speech=PartOfSpeech.NOUN,
+        gloss="a sense of the word",
+        example=None,
+        synonyms=(),
+        hypernyms=(),
+        antonyms=(),
+        usage_count=1,
+        hyponym_count=0,
+        category="noun.attribute",
+    )
+
+
+def _unavailable() -> DictionaryInformation:
+    return DictionaryInformation(
+        outcome=LookupOutcome.UNAVAILABLE,
+        failure_reason="circuit_open",
+        phonetic=None,
+        definitions=(),
+    )
+
+
+# NOTE:
+# The ways a word stands in the analyses these tests use, each a dictionary's information and the WordNet senses: with
+# a WordNet sense and no dictionary asked, the usual case; with neither, the dictionary not asked; with neither, the
+# dictionary unavailable; with neither, the dictionary having no entry; with a dictionary definition and no sense; and
+# with a WordNet sense standing in for an unavailable dictionary, which is a meaning.
+def _with_sense() -> _Meaning:
+    return (
+        None,
+        (_wordnet_sense(),),
+    )
+
+
+def _with_no_meaning_asked_of_no_dictionary() -> _Meaning:
+    return (
+        None,
+        (),
+    )
+
+
+def _with_no_meaning_the_dictionary_unavailable() -> _Meaning:
+    return (
+        _unavailable(),
+        (),
+    )
+
+
+def _with_a_stand_in_sense() -> _Meaning:
+    return (
+        _unavailable(),
+        (_wordnet_sense(),),
+    )
+
+
+def _with_no_meaning_the_dictionary_has_no_entry() -> _Meaning:
+    return (
+        DictionaryInformation(
+            outcome=LookupOutcome.NOT_FOUND,
+            failure_reason=None,
+            phonetic=None,
+            definitions=(),
+        ),
+        (),
+    )
+
+
+def _with_a_definition_and_no_sense() -> _Meaning:
+    return (
+        DictionaryInformation(
+            outcome=LookupOutcome.FOUND,
+            failure_reason=None,
+            phonetic=None,
+            definitions=(
+                SelectedDefinition(
+                    text="a definition of the word",
+                    example=None,
+                    part_of_speech_matched=True,
+                ),
+            ),
+        ),
+        (),
+    )
+
+
+def _tiered(
+    *,
+    tiers: Sequence[StudyTier] = (
+        StudyTier.FOCUS,
+        StudyTier.STRETCH,
+        StudyTier.REVIEW,
+        StudyTier.KNOWN,
+    ),
+    meanings: Sequence[_Meaning] = (),
+) -> Analysis:
     """
-    A completed analysis with one item in each study tier, so that its words
-    to study number two and its items four.
+    A completed analysis with one item for each entry of `tiers`, in that
+    order, so that a tier given twice has two items.
+
+    By default `tiers` holds each tier once, so the analysis has four items,
+    of which two are words to study.
+
+    Each item has a WordNet sense, unless `meanings` gives the dictionary
+    information and the senses of the item at its place, as many as it has
+    entries.
+
+    More than ten entries raise an error, since ten lemmas are all it has.
     """
+
+    unstated = tiers[
+        len(
+            meanings,
+        ) :
+    ]
+
+    padded = (
+        *meanings,
+        *(_with_sense() for _ in unstated),
+    )
 
     analysis = request_an_analysis(
         document=Document(
@@ -3851,29 +4003,36 @@ def _tiered() -> Analysis:
                     source=LevelSource.REFERENCE_LIST,
                 ),
                 tier=tier,
-                dictionary=None,
-                senses=(),
+                dictionary=dictionary,
+                senses=senses,
             )
             for (
                 lemma,
                 tier,
-            ) in (
+                (
+                    dictionary,
+                    senses,
+                ),
+            ) in zip(
                 (
                     "foo",
-                    StudyTier.FOCUS,
-                ),
-                (
                     "bar",
-                    StudyTier.STRETCH,
-                ),
-                (
                     "baz",
-                    StudyTier.REVIEW,
-                ),
-                (
                     "qux",
-                    StudyTier.KNOWN,
-                ),
+                    "quux",
+                    "corge",
+                    "grault",
+                    "garply",
+                    "waldo",
+                    "fred",
+                )[
+                    : len(
+                        tiers,
+                    )
+                ],
+                tiers,
+                padded,
+                strict=True,
             )
         ),
         stage_timings=(
@@ -3942,3 +4101,1408 @@ class TestTheListingAgreesWithTheReport:
         assert "2 words to study: 1 FOCUS, 1 STRETCH; 1 REVIEW, below B1" in _words(
             shown.output,
         )
+
+
+def _flashcard_fronts(
+    text: str,
+    /,
+    *,
+    skipped: int,
+) -> tuple[str, ...]:
+    return tuple(
+        line.split(
+            sep="\t",
+        )[0]
+        for line in text.splitlines()[skipped:]
+    )
+
+
+def _csv_fronts(
+    text: str,
+    /,
+    *,
+    only: frozenset[str] | None = None,
+) -> tuple[str, ...]:
+    return tuple(
+        f"{row[1]} ({row[2]})"
+        for row in tuple(
+            reader(
+                StringIO(
+                    initial_value=text,
+                ),
+            ),
+        )[1:]
+        if only is None or row[0] in only
+    )
+
+
+# NOTE:
+# Two items to study in FOCUS and one in STRETCH, then three to look up in REVIEW and one KNOWN, in the order a report
+# keeps.
+_MIXED: Final = (
+    StudyTier.FOCUS,
+    StudyTier.FOCUS,
+    StudyTier.STRETCH,
+    StudyTier.REVIEW,
+    StudyTier.REVIEW,
+    StudyTier.REVIEW,
+    StudyTier.KNOWN,
+)
+
+
+# NOTE:
+# Eight words to study and two to look up, as `_gapped_meanings` gives each its meaning, in the order of these tiers.
+_GAPPED_TIERS: Final = (
+    StudyTier.FOCUS,
+    StudyTier.FOCUS,
+    StudyTier.FOCUS,
+    StudyTier.STRETCH,
+    StudyTier.STRETCH,
+    StudyTier.STRETCH,
+    StudyTier.STRETCH,
+    StudyTier.STRETCH,
+    StudyTier.REVIEW,
+    StudyTier.REVIEW,
+)
+
+
+# NOTE:
+# Of the eight words to study, five have a meaning: three a WordNet sense, one a dictionary definition and no sense,
+# and one a sense standing in for an unavailable dictionary; and three have none: the dictionary not asked, the
+# dictionary unavailable, and the dictionary having no entry.
+#
+# So three are left out, of which one had the dictionary unavailable.
+#
+# The two to look up come after, the first with no meaning.
+def _gapped_meanings() -> tuple[_Meaning, ...]:
+    return (
+        _with_sense(),
+        _with_no_meaning_asked_of_no_dictionary(),
+        _with_sense(),
+        _with_no_meaning_the_dictionary_unavailable(),
+        _with_a_stand_in_sense(),
+        _with_sense(),
+        _with_a_definition_and_no_sense(),
+        _with_no_meaning_the_dictionary_has_no_entry(),
+        _with_no_meaning_asked_of_no_dictionary(),
+        _with_sense(),
+    )
+
+
+def _written_with_gaps(
+    workspace: Path,
+    options: tuple[str, ...],
+    /,
+    *,
+    fronts: tuple[str, ...],
+) -> str:
+    """
+    What `show` says after writing both flashcard files of the analysis with
+    gaps with `options`, having checked that each holds the cards of `fronts`.
+    """
+
+    analysis = _tiered(
+        tiers=_GAPPED_TIERS,
+        meanings=_gapped_meanings(),
+    )
+
+    _stored(
+        analysis,
+    )
+
+    result = _runner.invoke(
+        app=app,
+        args=[
+            "show",
+            str(
+                object=analysis.id,
+            ),
+            *options,
+            "--anki",
+            "a.txt",
+            "--quizlet",
+            "q.txt",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+
+    assert (
+        _flashcard_fronts(
+            (workspace / "a.txt").read_text(
+                encoding="utf-8",
+            ),
+            skipped=5,
+        )
+        == fronts
+    )
+
+    assert (
+        _flashcard_fronts(
+            (workspace / "q.txt").read_text(
+                encoding="utf-8",
+            ),
+            skipped=0,
+        )
+        == fronts
+    )
+
+    return _words(
+        result.output,
+    )
+
+
+@final
+class TestTheFlashcardFiles:
+    @mark.parametrize(
+        argnames="command",
+        argvalues=(
+            "analyze",
+            "show",
+        ),
+    )
+    def test_the_help_lists_both_options_in_the_showing_panel(
+        self,
+        *,
+        command: str,
+    ) -> None:
+        result = _runner.invoke(
+            app=app,
+            args=[
+                command,
+                "--help",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+
+        panel = _plain(
+            result.output,
+        ).split(
+            "What it shows",
+            maxsplit=1,
+        )[1]
+
+        assert "--anki" in panel
+
+        assert "--quizlet" in panel
+
+        assert "--csv" in panel
+
+    def test_analyze_writes_all_three_files_and_says_so_once_each(
+        self,
+        *,
+        workspace: Path,
+    ) -> None:
+        (workspace / "a-scandal-in-bohemia.txt").write_text(
+            data=_TEXT,
+            encoding="utf-8",
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "analyze",
+                "a-scandal-in-bohemia.txt",
+                "--local",
+                "--no-dictionary",
+                "--level",
+                "A1",
+                "--rows",
+                "3",
+                "--anki",
+                "a.txt",
+                "--quizlet",
+                "q.txt",
+                "--csv",
+                "c.csv",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+
+        output = _words(
+            result.output,
+        )
+
+        assert search(
+            pattern=r"wrote 3 of \d+ rows to c\.csv; --rows raises the limit",
+            string=output,
+        )
+
+        assert search(
+            pattern=r"wrote 3 of \d+ words to study to a\.txt; --rows raises the limit",
+            string=output,
+        )
+
+        assert search(
+            pattern=r"wrote 3 of \d+ words to study to q\.txt; --rows raises the limit",
+            string=output,
+        )
+
+        anki = (workspace / "a.txt").read_bytes()
+
+        quizlet = (workspace / "q.txt").read_bytes()
+
+        for written in (
+            anki,
+            quizlet,
+        ):
+            assert not written.startswith(
+                b"\xef\xbb\xbf",
+            )
+
+            assert b"\r" not in written
+
+            assert written.endswith(
+                b"\n",
+            )
+
+        csv_fronts = _csv_fronts(
+            (workspace / "c.csv").read_text(
+                encoding="utf-8",
+            ),
+        )
+
+        assert (
+            len(
+                csv_fronts,
+            )
+            == 3
+        )
+
+        assert (
+            _flashcard_fronts(
+                anki.decode(
+                    encoding="utf-8",
+                ),
+                skipped=5,
+            )
+            == csv_fronts
+        )
+
+        assert (
+            _flashcard_fronts(
+                quizlet.decode(
+                    encoding="utf-8",
+                ),
+                skipped=0,
+            )
+            == csv_fronts
+        )
+
+    @mark.parametrize(
+        argnames=(
+            "selection",
+            "tiers",
+        ),
+        argvalues=(
+            (
+                (),
+                frozenset(
+                    (
+                        "focus",
+                        "stretch",
+                    ),
+                ),
+            ),
+            (
+                (
+                    "--rows",
+                    "1000",
+                ),
+                frozenset(
+                    (
+                        "focus",
+                        "stretch",
+                    ),
+                ),
+            ),
+            (
+                (
+                    "--tier",
+                    "focus",
+                ),
+                None,
+            ),
+            (
+                (
+                    "--tier",
+                    "stretch",
+                    "--rows",
+                    "4",
+                ),
+                None,
+            ),
+            (
+                (
+                    "--tier",
+                    "focus",
+                    "--tier",
+                    "stretch",
+                    "--known",
+                    "known.txt",
+                ),
+                None,
+            ),
+            (
+                (
+                    "--tier",
+                    "review",
+                    "--rows",
+                    "1000",
+                ),
+                None,
+            ),
+        ),
+        ids=(
+            "default",
+            "all-rows",
+            "focus",
+            "stretch-four",
+            "known",
+            "review-all",
+        ),
+    )
+    def test_the_selection_is_the_csv_s_in_the_same_order_with_tier_and_its_study_words_without(
+        self,
+        *,
+        workspace: Path,
+        selection: tuple[str, ...],
+        tiers: frozenset[str] | None,
+    ) -> None:
+        (workspace / "a-scandal-in-bohemia.txt").write_text(
+            data=_TEXT,
+            encoding="utf-8",
+        )
+
+        (workspace / "known.txt").write_text(
+            data="photograph\ndrunken\n",
+            encoding="utf-8",
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "analyze",
+                "a-scandal-in-bohemia.txt",
+                "--local",
+                "--no-dictionary",
+                "--level",
+                "A2",
+                "--target",
+                "B1",
+                *selection,
+                "--anki",
+                "a.txt",
+                "--quizlet",
+                "q.txt",
+                "--csv",
+                "c.csv",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+
+        # NOTE:
+        # The CSV takes every tier, so its rows are narrowed to the study list where no `--tier` chose the cards.
+        csv_fronts = _csv_fronts(
+            (workspace / "c.csv").read_text(
+                encoding="utf-8",
+            ),
+            only=tiers,
+        )
+
+        assert csv_fronts
+
+        assert (
+            _flashcard_fronts(
+                (workspace / "a.txt").read_text(
+                    encoding="utf-8",
+                ),
+                skipped=5,
+            )
+            == csv_fronts
+        )
+
+        assert (
+            _flashcard_fronts(
+                (workspace / "q.txt").read_text(
+                    encoding="utf-8",
+                ),
+                skipped=0,
+            )
+            == csv_fronts
+        )
+
+    @mark.parametrize(
+        argnames=(
+            "rows",
+            "line",
+        ),
+        argvalues=(
+            (
+                (),
+                "wrote 3 words to study to {name}",
+            ),
+            (
+                (
+                    "--rows",
+                    "2",
+                ),
+                "wrote 2 of 3 words to study to {name}; --rows raises the limit",
+            ),
+            (
+                (
+                    "--rows",
+                    "100",
+                ),
+                "wrote 3 words to study to {name}",
+            ),
+        ),
+        ids=(
+            "default",
+            "rows-below-the-study-list",
+            "rows-above-the-study-list",
+        ),
+    )
+    def test_without_tier_the_files_take_the_words_to_study_alone_up_to_rows(
+        self,
+        *,
+        workspace: Path,
+        rows: tuple[str, ...],
+        line: str,
+    ) -> None:
+        analysis = _tiered(
+            tiers=_MIXED,
+        )
+
+        _stored(
+            analysis,
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "show",
+                str(
+                    object=analysis.id,
+                ),
+                *rows,
+                "--anki",
+                "a.txt",
+                "--quizlet",
+                "q.txt",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+
+        output = _words(
+            result.output,
+        )
+
+        for name in (
+            "a.txt",
+            "q.txt",
+        ):
+            assert (
+                line.format_map(
+                    {
+                        "name": name,
+                    },
+                )
+                in output
+            )
+
+        fronts = (
+            "foo (noun)",
+            "bar (noun)",
+            "baz (noun)",
+        )[: 2 if rows == ("--rows", "2") else 3]
+
+        assert (
+            _flashcard_fronts(
+                (workspace / "a.txt").read_text(
+                    encoding="utf-8",
+                ),
+                skipped=5,
+            )
+            == fronts
+        )
+
+        assert (
+            _flashcard_fronts(
+                (workspace / "q.txt").read_text(
+                    encoding="utf-8",
+                ),
+                skipped=0,
+            )
+            == fronts
+        )
+
+    def test_tier_is_obeyed_and_the_line_keeps_its_form(
+        self,
+        *,
+        workspace: Path,
+    ) -> None:
+        analysis = _tiered(
+            tiers=_MIXED,
+        )
+
+        _stored(
+            analysis,
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "show",
+                str(
+                    object=analysis.id,
+                ),
+                "--tier",
+                "review",
+                "--anki",
+                "a.txt",
+                "--quizlet",
+                "q.txt",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+
+        output = _words(
+            result.output,
+        )
+
+        assert "wrote 3 flashcards to a.txt" in output
+
+        assert "wrote 3 flashcards to q.txt" in output
+
+        assert "words to study" not in output
+
+        fronts = (
+            "qux (noun)",
+            "quux (noun)",
+            "corge (noun)",
+        )
+
+        assert (
+            _flashcard_fronts(
+                (workspace / "a.txt").read_text(
+                    encoding="utf-8",
+                ),
+                skipped=5,
+            )
+            == fronts
+        )
+
+        assert (
+            _flashcard_fronts(
+                (workspace / "q.txt").read_text(
+                    encoding="utf-8",
+                ),
+                skipped=0,
+            )
+            == fronts
+        )
+
+    def test_an_analysis_with_no_word_to_study_writes_an_empty_selection(
+        self,
+        *,
+        workspace: Path,
+    ) -> None:
+        analysis = _tiered(
+            tiers=(
+                StudyTier.REVIEW,
+                StudyTier.REVIEW,
+                StudyTier.KNOWN,
+            ),
+        )
+
+        _stored(
+            analysis,
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "show",
+                str(
+                    object=analysis.id,
+                ),
+                "--anki",
+                "a.txt",
+                "--quizlet",
+                "q.txt",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+
+        output = _words(
+            result.output,
+        )
+
+        assert "wrote 0 words to study to a.txt" in output
+
+        assert "wrote 0 words to study to q.txt" in output
+
+        assert (
+            len(
+                (workspace / "a.txt")
+                .read_text(
+                    encoding="utf-8",
+                )
+                .splitlines(),
+            )
+            == 5
+        )
+
+        assert (workspace / "q.txt").read_bytes() == b""
+
+    def test_the_csv_beside_a_flashcard_file_is_the_csv_alone(
+        self,
+        *,
+        workspace: Path,
+    ) -> None:
+        analysis = _tiered(
+            tiers=_MIXED,
+        )
+
+        _stored(
+            analysis,
+        )
+
+        lines: list[str] = []
+
+        for (
+            name,
+            cards,
+        ) in (
+            (
+                "alone.csv",
+                (),
+            ),
+            (
+                "beside.csv",
+                (
+                    "--anki",
+                    "a.txt",
+                ),
+            ),
+        ):
+            result = _runner.invoke(
+                app=app,
+                args=[
+                    "show",
+                    str(
+                        object=analysis.id,
+                    ),
+                    "--rows",
+                    "5",
+                    *cards,
+                    "--csv",
+                    name,
+                ],
+            )
+
+            assert result.exit_code == 0, result.output
+
+            lines.append(
+                next(
+                    line
+                    for line in _words(
+                        result.output,
+                    ).split(
+                        sep="wrote ",
+                    )
+                    if f"to {name}" in line
+                ).strip(),
+            )
+
+        assert (
+            lines[0].replace(
+                "alone",
+                "beside",
+            )
+            == lines[1]
+        )
+
+        assert lines[0].startswith(
+            "5 of 7 rows to alone.csv; --rows raises the limit",
+        )
+
+        assert (workspace / "alone.csv").read_bytes() == (workspace / "beside.csv").read_bytes()
+
+        assert _csv_fronts(
+            (workspace / "beside.csv").read_text(
+                encoding="utf-8",
+            ),
+        ) == (
+            "foo (noun)",
+            "bar (noun)",
+            "baz (noun)",
+            "qux (noun)",
+            "quux (noun)",
+        )
+
+    def test_the_files_leave_out_the_words_with_no_meaning_and_say_how_many(
+        self,
+        *,
+        workspace: Path,
+    ) -> None:
+        output = _written_with_gaps(
+            workspace,
+            (),
+            fronts=(
+                "foo (noun)",
+                "baz (noun)",
+                "quux (noun)",
+                "corge (noun)",
+                "grault (noun)",
+            ),
+        )
+
+        assert "wrote 5 words to study to a.txt, leaving out 3 with no meaning" in output
+
+        assert "wrote 5 words to study to q.txt, leaving out 3 with no meaning" in output
+
+        assert "--rows raises the limit" not in output
+
+    def test_rows_fills_from_the_next_word_with_a_meaning(
+        self,
+        *,
+        workspace: Path,
+    ) -> None:
+        output = _written_with_gaps(
+            workspace,
+            (
+                "--rows",
+                "2",
+            ),
+            fronts=(
+                "foo (noun)",
+                "baz (noun)",
+            ),
+        )
+
+        for name in (
+            "a.txt",
+            "q.txt",
+        ):
+            assert (
+                f"wrote 2 of 5 words to study to {name}, leaving out 3 with no meaning; --rows raises the limit"
+                in output
+            )
+
+    def test_tier_leaves_out_the_words_with_no_meaning_too_and_the_line_says_flashcards(
+        self,
+        *,
+        workspace: Path,
+    ) -> None:
+        output = _written_with_gaps(
+            workspace,
+            (
+                "--tier",
+                "focus",
+            ),
+            fronts=(
+                "foo (noun)",
+                "baz (noun)",
+            ),
+        )
+
+        assert "wrote 2 flashcards to a.txt, leaving out 1 with no meaning" in output
+
+        assert "wrote 2 flashcards to q.txt, leaving out 1 with no meaning" in output
+
+        assert "words to study" not in output
+
+    def test_when_no_word_has_a_meaning_the_files_are_empty_and_the_line_counts_them_all(
+        self,
+        *,
+        workspace: Path,
+    ) -> None:
+        analysis = _tiered(
+            tiers=_MIXED,
+            meanings=(_with_no_meaning_asked_of_no_dictionary(),)
+            * len(
+                _MIXED,
+            ),
+        )
+
+        _stored(
+            analysis,
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "show",
+                str(
+                    object=analysis.id,
+                ),
+                "--anki",
+                "a.txt",
+                "--quizlet",
+                "q.txt",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+
+        output = _words(
+            result.output,
+        )
+
+        assert "wrote 0 words to study to a.txt, leaving out 3 with no meaning" in output
+
+        assert "wrote 0 words to study to q.txt, leaving out 3 with no meaning" in output
+
+        assert (
+            len(
+                (workspace / "a.txt")
+                .read_text(
+                    encoding="utf-8",
+                )
+                .splitlines(),
+            )
+            == 5
+        )
+
+        assert (workspace / "q.txt").read_bytes() == b""
+
+    def test_one_note_says_how_many_words_left_out_had_the_dictionary_unavailable(
+        self,
+        *,
+        workspace: Path,
+    ) -> None:
+        output = _written_with_gaps(
+            workspace,
+            (),
+            fronts=(
+                "foo (noun)",
+                "baz (noun)",
+                "quux (noun)",
+                "corge (noun)",
+                "grault (noun)",
+            ),
+        )
+
+        # NOTE:
+        # Of the three words left out, the one whose dictionary was unavailable counts, and the one it was not asked
+        # of and the one it had no entry for do not.
+        note = "the dictionary was unavailable for 1 of the words left out; analyzing again may find their meanings"
+
+        noted = output.count(
+            note,
+        )
+
+        after = output.index(
+            "to q.txt",
+        )
+
+        assert noted == 1
+
+        assert after < output.index(
+            note,
+        )
+
+    def test_no_note_without_an_unavailable_dictionary_or_without_a_flashcard_file(
+        self,
+        *,
+        workspace: Path,
+    ) -> None:
+        asked_of_none = _tiered(
+            tiers=_MIXED,
+            meanings=(_with_no_meaning_asked_of_no_dictionary(),)
+            * len(
+                _MIXED,
+            ),
+        )
+
+        gapped = _tiered(
+            tiers=_GAPPED_TIERS,
+            meanings=_gapped_meanings(),
+        )
+
+        _stored(
+            asked_of_none,
+        )
+
+        _stored(
+            gapped,
+        )
+
+        for (
+            analysis,
+            option,
+            name,
+            left_out,
+        ) in (
+            (
+                asked_of_none,
+                "--anki",
+                "a.txt",
+                "leaving out 3 with no meaning",
+            ),
+            (
+                gapped,
+                "--csv",
+                "c.csv",
+                "",
+            ),
+        ):
+            result = _runner.invoke(
+                app=app,
+                args=[
+                    "show",
+                    str(
+                        object=analysis.id,
+                    ),
+                    option,
+                    name,
+                ],
+            )
+
+            assert result.exit_code == 0, result.output
+
+            output = _words(
+                result.output,
+            )
+
+            assert left_out in output
+
+            assert "the dictionary was unavailable" not in output
+
+    def test_the_csv_beside_the_files_still_holds_the_words_with_no_meaning(
+        self,
+        *,
+        workspace: Path,
+    ) -> None:
+        analysis = _tiered(
+            tiers=_GAPPED_TIERS,
+            meanings=_gapped_meanings(),
+        )
+
+        _stored(
+            analysis,
+        )
+
+        lines: list[str] = []
+
+        for (
+            name,
+            cards,
+        ) in (
+            (
+                "alone.csv",
+                (),
+            ),
+            (
+                "beside.csv",
+                (
+                    "--anki",
+                    "a.txt",
+                    "--quizlet",
+                    "q.txt",
+                ),
+            ),
+        ):
+            result = _runner.invoke(
+                app=app,
+                args=[
+                    "show",
+                    str(
+                        object=analysis.id,
+                    ),
+                    "--rows",
+                    "5",
+                    *cards,
+                    "--csv",
+                    name,
+                ],
+            )
+
+            assert result.exit_code == 0, result.output
+
+            lines.append(
+                next(
+                    line
+                    for line in _words(
+                        result.output,
+                    ).split(
+                        sep="wrote ",
+                    )
+                    if f"to {name}" in line
+                ).strip(),
+            )
+
+        assert (workspace / "alone.csv").read_bytes() == (workspace / "beside.csv").read_bytes()
+
+        assert lines == [
+            "5 of 10 rows to alone.csv; --rows raises the limit",
+            "5 of 10 rows to beside.csv; --rows raises the limit",
+        ]
+
+        assert _csv_fronts(
+            (workspace / "beside.csv").read_text(
+                encoding="utf-8",
+            ),
+        ) == (
+            "foo (noun)",
+            "bar (noun)",
+            "baz (noun)",
+            "qux (noun)",
+            "quux (noun)",
+        )
+
+        assert _flashcard_fronts(
+            (workspace / "q.txt").read_text(
+                encoding="utf-8",
+            ),
+            skipped=0,
+        ) == (
+            "foo (noun)",
+            "baz (noun)",
+            "quux (noun)",
+            "corge (noun)",
+            "grault (noun)",
+        )
+
+    def test_show_writes_each_file_and_says_how_many_words_it_left_out(
+        self,
+        *,
+        workspace: Path,
+    ) -> None:
+        analysis = _tiered()
+
+        _stored(
+            analysis,
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "show",
+                str(
+                    object=analysis.id,
+                ),
+                "--rows",
+                "1",
+                "--detail",
+                "--anki",
+                "a.txt",
+                "--quizlet",
+                "q.txt",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+
+        output = _words(
+            result.output,
+        )
+
+        assert "wrote 1 of 2 words to study to a.txt; --rows raises the limit" in output
+
+        assert "wrote 1 of 2 words to study to q.txt; --rows raises the limit" in output
+
+        assert "shows this again" not in output
+
+        assert (
+            len(
+                (workspace / "a.txt")
+                .read_text(
+                    encoding="utf-8",
+                )
+                .splitlines(),
+            )
+            == 6
+        )
+
+        assert (
+            len(
+                (workspace / "q.txt")
+                .read_text(
+                    encoding="utf-8",
+                )
+                .splitlines(),
+            )
+            == 1
+        )
+
+        whole = _runner.invoke(
+            app=app,
+            args=[
+                "show",
+                str(
+                    object=analysis.id,
+                ),
+                "--quizlet",
+                "q.txt",
+            ],
+        )
+
+        assert whole.exit_code == 0, whole.output
+
+        assert "wrote 2 words to study to q.txt" in _words(
+            whole.output,
+        )
+
+    def test_detail_reaches_both_flashcard_files_and_its_absence_leaves_them_standard(
+        self,
+        *,
+        workspace: Path,
+    ) -> None:
+        analysis = _completed(
+            meaning="a first sense",
+            other_meaning="a second sense",
+        )
+
+        _stored(
+            analysis,
+        )
+
+        for (
+            option,
+            fuller,
+            standard,
+        ) in (
+            (
+                "--anki",
+                "a-detail.txt",
+                "a.txt",
+            ),
+            (
+                "--quizlet",
+                "q-detail.txt",
+                "q.txt",
+            ),
+        ):
+            for (
+                name,
+                detail,
+            ) in (
+                (
+                    fuller,
+                    ("--detail",),
+                ),
+                (
+                    standard,
+                    (),
+                ),
+            ):
+                result = _runner.invoke(
+                    app=app,
+                    args=[
+                        "show",
+                        str(
+                            object=analysis.id,
+                        ),
+                        *detail,
+                        option,
+                        name,
+                    ],
+                )
+
+                assert result.exit_code == 0, result.output
+
+            assert "Other meaning: a second sense" in (workspace / fuller).read_text(
+                encoding="utf-8",
+            )
+
+            assert "Other meaning:" not in (workspace / standard).read_text(
+                encoding="utf-8",
+            )
+
+    @mark.parametrize(
+        argnames="option",
+        argvalues=(
+            "--anki",
+            "--quizlet",
+        ),
+    )
+    def test_a_flashcard_file_of_an_unfinished_analysis_is_followed_by_the_note_that_says_why_it_is_empty(
+        self,
+        *,
+        workspace: Path,
+        option: str,
+    ) -> None:
+        analysis = _processing()
+
+        _stored(
+            analysis,
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "show",
+                str(
+                    object=analysis.id,
+                ),
+                option,
+                "cards.txt",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+
+        output = _words(
+            result.output,
+        )
+
+        assert "wrote 0 words to study to cards.txt" in output
+
+        assert output.endswith(
+            "a local analysis goes on only while the command that runs it is running; if that command has stopped, "
+            "run `wordwinnow analyze` on the text again",
+        )
+
+        assert output.index(
+            "wrote 0 words to study",
+        ) < output.index(
+            "a local analysis goes on",
+        )
+
+    def test_with_json_the_json_is_printed_and_no_flashcard_file_is_written(
+        self,
+        *,
+        workspace: Path,
+    ) -> None:
+        analysis = _completed()
+
+        _stored(
+            analysis,
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "show",
+                str(
+                    object=analysis.id,
+                ),
+                "--json",
+                "--anki",
+                "a.txt",
+                "--quizlet",
+                "q.txt",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+
+        assert (
+            loads(
+                s=result.stdout,
+            )["status"]
+            == "completed"
+        )
+
+        assert not (workspace / "a.txt").exists()
+
+        assert not (workspace / "q.txt").exists()
+
+    def test_a_text_that_may_not_be_kept_has_no_sentence_and_the_note_says_so_once(
+        self,
+        *,
+        workspace: Path,
+    ) -> None:
+        # NOTE:
+        # The store deletes a text kept for a while once that while has passed since it was requested, so it is
+        # requested now.
+        analysis = _completed(
+            retention=timedelta(
+                hours=24,
+            ),
+            at=datetime.now(
+                tz=UTC,
+            ),
+        )
+
+        _stored(
+            analysis,
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "show",
+                str(
+                    object=analysis.id,
+                ),
+                "--anki",
+                "a.txt",
+                "--quizlet",
+                "q.txt",
+                "--csv",
+                "c.csv",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+
+        assert (
+            _words(
+                result.output,
+            ).count(
+                "the sentences were left out: this text may not be kept",
+            )
+            == 1
+        )
+
+        for name in (
+            "a.txt",
+            "q.txt",
+        ):
+            assert "In the text" not in (workspace / name).read_text(
+                encoding="utf-8",
+            )
+
+    def test_the_csv_alone_is_written_as_it_was_and_prints_what_it_printed(
+        self,
+        *,
+        workspace: Path,
+    ) -> None:
+        analysis = _tiered()
+
+        _stored(
+            analysis,
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "show",
+                str(
+                    object=analysis.id,
+                ),
+                "--csv",
+                "c.csv",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+
+        assert (
+            _words(
+                result.output,
+            )
+            == "wrote 4 rows to c.csv"
+        )
+
+        assert (
+            (workspace / "c.csv")
+            .read_text(
+                encoding="utf-8",
+            )
+            .startswith(
+                "tier,lemma,part_of_speech,",
+            )
+        )
+
+        assert not (workspace / "a.txt").exists()

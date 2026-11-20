@@ -69,7 +69,8 @@ install it as above or extract the text another way.
 | `--limit N` | With `--source`, how many of the source's items to combine; with `list`, how many analyses to list |
 | `--tier`, `--rows` | Which tiers to show, `focus`, `stretch`, `review`, or `known`, and how many words |
 | `--detail` | One card per word with pronunciation, examples, related words, and the other meanings the word can have |
-| `--json`, `--csv FILE` | The whole analysis for another program, or the shown words for a flashcard tool |
+| `--json`, `--csv FILE` | The whole analysis, or the shown words as CSV, for another program |
+| `--anki FILE`, `--quizlet FILE` | The words to study as flashcards, FOCUS then STRETCH unless `--tier` chooses others: a file for Anki to import, or one to paste into Quizlet; with `--detail`, each card also lists up to two other meanings from the same source, and the dictionary's example or WordNet's synonyms; a word with no meaning from the dictionary or WordNet is left out, and the line says how many |
 | `--remote` | With `analyze`, `show`, and `list`, use the distributed mode's intake service rather than this process |
 | `--no-wait` | With `--remote`, return the id at once |
 | `--wait` | With `show` and `--remote`, wait for an analysis still in progress, as `analyze` does |
@@ -185,7 +186,7 @@ What The New York Times asks, and what Wordwinnow does about it:
 | Attribution wherever their content is shown | Prints "Data provided by The New York Times" above the list of words, the written form the branding guide allows where a logo cannot be shown |
 | A link to their page for every piece | Prints each story's link beside its headline |
 | No change to headlines, content, or links | Keeps each headline and abstract as its own paragraph, exactly as fetched |
-| No caching for users beyond 24 hours | Deletes an analysis once 24 hours have passed since it was requested, before anyone can read it again, and leaves the text and the sentences out of `--json` and `--csv`; the JSON keeps the attribution and each story's headline and link |
+| No caching for users beyond 24 hours | Deletes an analysis once 24 hours have passed since it was requested, before anyone can read it again, and leaves the text and the sentences out of `--json`, `--csv`, `--anki`, and `--quizlet`; the JSON keeps the attribution and each story's headline and link |
 | No commercial use, and no software product or machine learning built on their content | Trains, fits, and evaluates nothing on it: the level model learns its labels from the reference lists alone, and the frequency heuristic's boundaries, fitted once to the same lists, are fixed |
 | No archived or cached data sets for others | Keeps no text of theirs in its stores past the day; the per-word facts of an analysis, a lemma with its level, tier, and count, stay in the analytics store |
 | A reasonable request volume | Asks for one feed or a few pages per analysis |

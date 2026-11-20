@@ -132,8 +132,13 @@ services under Docker Compose.
    optionally, which words you already know.
 3. Read the vocabulary in study order: the FOCUS tier first, then the cards
    for the words you want to keep.
-4. Export the report as CSV for a flashcard tool, or read it again later with
+4. Write the words to study as flashcards, with `--anki FILE` for Anki or
+   `--quizlet FILE` for Quizlet, or read the report again later with
    `wordwinnow show`.
+   The file holds the words to study, FOCUS then STRETCH, up to `--rows`, unless
+   `--tier` chooses others, so delete in your tool the cards you do not want.
+   A word with no meaning from the dictionary or WordNet is left out, and the
+   line that names the file says how many.
 
 The list is a set of suggestions, not a syllabus: skim the FOCUS words before
 you read, keep the ones worth learning, and let the rest go.

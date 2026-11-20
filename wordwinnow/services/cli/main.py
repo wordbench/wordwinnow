@@ -71,6 +71,9 @@ from wordwinnow.domain.analysis import (
 from wordwinnow.domain.cefr import (
     CefrLevel,
 )
+from wordwinnow.domain.dictionary import (
+    LookupOutcome,
+)
 from wordwinnow.domain.document import (
     InvalidDocumentError,
 )
@@ -85,6 +88,7 @@ from wordwinnow.domain.learner import (
     InvalidLearnerProfileError,
 )
 from wordwinnow.domain.study import (
+    STUDY_TIERS,
     StudyTier,
 )
 from wordwinnow.infrastructure.composition import (
@@ -107,6 +111,10 @@ from wordwinnow.services.bench import (
 )
 from wordwinnow.services.cli import (
     commands,
+)
+from wordwinnow.services.cli.flashcards import (
+    to_anki,
+    to_quizlet,
 )
 from wordwinnow.services.cli.intake_client import (
     IntakeAddressError,
@@ -507,6 +515,8 @@ def _render(
     detail: bool,
     as_json: bool,
     csv_path: Path | None,
+    anki_path: Path | None,
+    quizlet_path: Path | None,
     remote: bool,
     /,
 ) -> None:
@@ -544,20 +554,120 @@ def _render(
         items,
     )
 
-    if csv_path is not None:
-        csv_path.write_text(
-            data=to_csv(
-                items=items,
-                with_sentences=not analysis.document.expires,
-            ),
-            encoding="utf-8",
+    if csv_path is not None or anki_path is not None or quizlet_path is not None:
+        # NOTE:
+        # A flashcard file is for study, so without `--tier` it takes the words to study alone, where the CSV, which
+        # carries each row's tier, takes every tier; the two selections are made apart, so neither changes the other.
+        cards_tiers = (
+            tiers
+            if tiers is not None
+            else tuple(
+                STUDY_TIERS,
+            )
         )
 
-        _console.print(
-            f"wrote {shown} of {available} rows to {csv_path}; --rows raises the limit"
-            if shown < available
-            else f"wrote {shown} rows to {csv_path}",
+        chosen_cards = select_items(
+            items=analysis.items,
+            tiers=cards_tiers,
+            limit=None,
         )
+
+        # NOTE:
+        # A card with no meaning asks a learner to recall what it does not give, so the files leave such words out
+        # before `--rows` counts, and the line says how many, where the table keeps them with the reason beside each,
+        # and the CSV with an empty meaning.
+        meant_cards = tuple(study_item for study_item in chosen_cards if study_item.gloss is not None)
+
+        cards = meant_cards[:rows]
+
+        cards_available = len(
+            meant_cards,
+        )
+
+        cards_left_out = (
+            len(
+                chosen_cards,
+            )
+            - cards_available
+        )
+
+        cards_shown = len(
+            cards,
+        )
+
+        # NOTE:
+        # A word the dictionary could not be asked about may have a meaning, so a learner who analyzed during an
+        # outage is told, once, that analyzing again may find it.
+        cards_unavailable = sum(
+            1
+            for study_item in chosen_cards
+            if study_item.gloss is None
+            and study_item.dictionary is not None
+            and study_item.dictionary.outcome is LookupOutcome.UNAVAILABLE
+        )
+
+        cards_omission = f", leaving out {cards_left_out} with no meaning" if cards_left_out else ""
+
+        # NOTE:
+        # What the line counts is what the file holds: words to study by default, what `--tier` chose otherwise.
+        cards_unit = "flashcards" if tiers is not None else "words to study"
+
+        if csv_path is not None:
+            csv_path.write_text(
+                data=to_csv(
+                    items=items,
+                    with_sentences=not analysis.document.expires,
+                ),
+                encoding="utf-8",
+            )
+
+            _console.print(
+                f"wrote {shown} of {available} rows to {csv_path}; --rows raises the limit"
+                if shown < available
+                else f"wrote {shown} rows to {csv_path}",
+            )
+
+        for (
+            flashcards_path,
+            flashcards,
+        ) in (
+            (
+                anki_path,
+                to_anki,
+            ),
+            (
+                quizlet_path,
+                to_quizlet,
+            ),
+        ):
+            if flashcards_path is None:
+                continue
+
+            # NOTE:
+            # Written with line feeds whatever the platform, since a flashcard tool reads one card a line.
+            flashcards_path.write_text(
+                data=flashcards(
+                    items=cards,
+                    with_sentences=not analysis.document.expires,
+                    detailed=detail,
+                ),
+                encoding="utf-8",
+                newline="\n",
+            )
+
+            _console.print(
+                f"wrote {cards_shown} of {cards_available} {cards_unit} to {flashcards_path}{cards_omission}; "
+                "--rows raises the limit"
+                if cards_shown < cards_available
+                else f"wrote {cards_shown} {cards_unit} to {flashcards_path}{cards_omission}",
+            )
+
+        if cards_unavailable and (anki_path is not None or quizlet_path is not None):
+            _console.print(
+                f"the dictionary was unavailable for {cards_unavailable} of the words left out; "
+                "analyzing again may find their meanings",
+                style="dim",
+            )
 
         if analysis.document.expires:
             _console.print(
@@ -907,6 +1017,28 @@ def analyze(
             rich_help_panel=_SHOWING,
         ),
     ] = None,
+    anki_path: Annotated[
+        Path | None,
+        Option(
+            "--anki",
+            help=(
+                "Write the words to study, FOCUS then STRETCH unless --tier chooses others, as flashcards for "
+                "Anki to import, instead of the terminal."
+            ),
+            rich_help_panel=_SHOWING,
+        ),
+    ] = None,
+    quizlet_path: Annotated[
+        Path | None,
+        Option(
+            "--quizlet",
+            help=(
+                "Write the words to study, FOCUS then STRETCH unless --tier chooses others, as flashcards to paste "
+                "into Quizlet, instead of the terminal."
+            ),
+            rich_help_panel=_SHOWING,
+        ),
+    ] = None,
     view: Annotated[
         View,
         Option(
@@ -1031,6 +1163,8 @@ def analyze(
         detail,
         as_json,
         csv_path,
+        anki_path,
+        quizlet_path,
         not local,
     )
 
@@ -1116,6 +1250,28 @@ def show(
         Option(
             "--csv",
             help="Write the selected words to a CSV file instead of the terminal.",
+            rich_help_panel=_SHOWING,
+        ),
+    ] = None,
+    anki_path: Annotated[
+        Path | None,
+        Option(
+            "--anki",
+            help=(
+                "Write the words to study, FOCUS then STRETCH unless --tier chooses others, as flashcards for Anki "
+                "to import, instead of the terminal."
+            ),
+            rich_help_panel=_SHOWING,
+        ),
+    ] = None,
+    quizlet_path: Annotated[
+        Path | None,
+        Option(
+            "--quizlet",
+            help=(
+                "Write the words to study, FOCUS then STRETCH unless --tier chooses others, as flashcards to paste "
+                "into Quizlet, instead of the terminal."
+            ),
             rich_help_panel=_SHOWING,
         ),
     ] = None,
@@ -1223,12 +1379,15 @@ def show(
         detail,
         as_json,
         csv_path,
+        anki_path,
+        quizlet_path,
         not local,
     )
 
     # NOTE:
-    # The JSON and the CSV are for programs, which read the status from them; a person reading the table is told where
-    # an analysis still in progress stands and how to wait for it.
+    # The JSON and the CSV are for programs, which read the status from them, so with either of them the note is
+    # withheld, whatever else is written; a person reading the table, or flashcard files written without them, is told
+    # where an analysis still in progress stands and how to wait for it, since nothing else says why a file is empty.
     note = (
         None
         if as_json or csv_path is not None
