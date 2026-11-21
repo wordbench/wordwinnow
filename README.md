@@ -62,8 +62,8 @@ flowchart LR
 The text can be a file of your own, in plain text, Markdown, SRT, or WebVTT,
 or one of the New York Times sources the tool fetches for you.
 
-The report is a table, one card per word, JSON for another program, or CSV for
-a flashcard tool.
+The report is a table, one card per word, JSON or CSV for another program, or
+flashcards for Anki or Quizlet.
 
 ## Running it
 

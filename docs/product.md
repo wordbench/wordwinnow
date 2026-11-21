@@ -321,9 +321,10 @@ A text that belongs to someone else says so: it is shown with the attribution
 its owner asks for and a link to read each piece in full, and nobody can read
 an analysis of it after a day.
 
-An export of such an analysis leaves out the text and its sentences and keeps
-the learner's words, levels, and tiers; the JSON also keeps the attribution
-and each piece's headline and link, so the credit travels with the words.
+An export of such an analysis leaves out the text and its sentences; the JSON
+and the CSV keep the learner's words, levels, and tiers, and the JSON also
+keeps the attribution and each piece's headline and link, so the credit
+travels with the words.
 
 ## Non-goals
 

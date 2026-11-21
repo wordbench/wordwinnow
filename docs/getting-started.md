@@ -93,8 +93,13 @@ Dictionary API's definitions, examples, and pronunciation, which take longer,
 because every distinct word to study, FOCUS and STRETCH, is a request to a
 service outside Wordwinnow.
 
-`--detail` prints one card per word, `--json` the whole analysis, and `--csv FILE`
-the shown words for a flashcard tool.
+`--detail` prints one card per word, `--json` the whole analysis, `--csv FILE` the
+shown words as CSV, and `--anki FILE` or `--quizlet FILE` the words to study as
+flashcards.
+
+In Anki, File, then Import, reads the file `--anki` writes as Basic notes, each
+tagged with the word's level; in Quizlet, the file `--quizlet` writes is pasted
+into a new flashcard set's import box.
 
 A text of your own is `wordwinnow analyze FILE --level LEVEL`.
 
