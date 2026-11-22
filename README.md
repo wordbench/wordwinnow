@@ -88,7 +88,7 @@ SQLite file in your user data directory, for a learner at A2 working toward
 B1, with the level model `wordwinnow setup` trains for the words the reference
 lists do not cover; [`data/corpus/README.md`](https://github.com/wordbench/wordwinnow/blob/v2.2.0/data/corpus/README.md) says why it is this story.
 
-![The story's opening, its study list at A2, a card, known words, CSV, then C1](docs/images/demo.gif)
+![The story's opening, its study list at A2, a card, known words, flashcards, C1](docs/images/demo.gif)
 
 From a clone, `make up-full` starts the distributed mode, where the same
 pipeline runs as services over PostgreSQL, Kafka, Redis, and ClickHouse, and
