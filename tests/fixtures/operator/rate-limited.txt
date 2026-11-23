@@ -1,0 +1,9 @@
+╭─ dictionary  RATE-LIMITED  ─────────────────────────────────────────────────╮
+│ to ask 79             breaker closed        ▁▁▁▁▁▁   provider               │
+│                                     in line ╷····╷ paused 9 s               │
+│ ──────────────────────────●━━━━━●───────────╰────╯──────◎─────────────────╮ │
+│ in line 8         ─────────────────────────1 dubious, eagerly  +6         │ │
+│ last 60 s                                                  ✓✓✓✓✓✓✓✓✓✓!────╯ │
+│ 429: the provider asked the client to slow down, and every request waits    │
+│ resolved 29 of 116:  6 cache  ✓ 23 found  0 not found  W 0 let go           │
+╰─────────────────────────────────────────────────────────────────────────────╯

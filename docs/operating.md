@@ -608,68 +608,80 @@ command line draws it as it always did.
 
 ## The operator view
 
-With `--view operator`, the line stays, and under it a panel shows the
-dictionary's mechanics while the analysis runs; its border and title say how
-the provider has been answering the client: answering, in green; rate-limited,
-in yellow, while a pause the provider asked for holds; and failing, in yellow
-while requests fail in a row and in red while the circuit is not closed.
+With `--view operator`, the line stays, and under it a panel draws the
+dictionary client as one loop while the analysis runs.
 
-In the panel stand the circuit, with what opened it; the next try, while the
-circuit or a pause holds the requests back; the last minute of the client's
-own requests, and how long ago one was last answered once that is longer than
-a minute; how the dictionary's lookups were answered since the view began,
-from the cache or by the provider; the ones it turned away and the retries,
-each by reason; the request budget; and the lookups in flight.
+A word travels along one wire, from the left: the breaker's switch lets
+requests through while the dictionary answers, the bucket hands out the tokens
+that pace them, and the provider answers them.
 
-The README's recording, below as well, follows the panel through a provider
-answering, failing, rate-limited, down, and back, as its title and rows say
-each; while the provider is down for good, the one word an earlier chapter
-looked up is answered from the cache, and only that word keeps its definition.
+Everything else in the panel is a word waiting somewhere along that wire, or a
+count of how the words ended.
 
-![The operator's view of failures, a request limit, an outage, and a recovery](images/operator.gif)
+Here is a frame, drawn while the provider fails three or four requests in a
+row:
 
-The row `last minute` has a mark for each second of the last minute, the newest
-on the right: `✓` when a request the client sent was answered in that second,
-found or not, `!` when the provider refused one with a 429, `✗` when one failed,
-by a server error, a timeout, a connection that failed, or an answer the
-client could not read, and `·` when none came back; in a second that held
-several, a failure outweighs a refusal, and a refusal an answer.
+```text
+╭─ dictionary  STRUGGLING  ───────────────────────────────────────────────────╮
+│ to ask 64             breaker closed        bucket   provider               │
+│                            ✗✗✗✗·    in line ╷○···╷ 2 a second               │
+│ ──────────────────────────●━━━━━●───────────╰────╯──────◎─────────────────╮ │
+│ ── 1 let go: W WordNet's meaning stands in where it has one ──────────────┤ │
+│ in line 6         ─────────────────────────1 former, kindly, hopeless  +3 │ │
+│ finely            ──────────────────────────────────────● 0.5 s, 3rd try  │ │
+│ intrusion         ──────────────────────────────────────● 0.0 s           │ │
+│ last 60 s                                      ─✓✓─✓✓✓✓✓✓✓✓─✓✗✗✗✗✗✗✗✗✗✗───╯ │
+│ 4 requests failed in a row; 1 more and the breaker opens (server error)     │
+│ resolved 44 of 116:  8 cache  ✓ 32 found  2 not found  W 2 let go           │
+╰─────────────────────────────────────────────────────────────────────────────╯
+```
 
-Every row is what the client saw of its own requests or what it decided, and
+The first row names the parts: `to ask` and its count at the left, the breaker
+and its word over the switch, the bucket, and the provider.
+
+Under it stand the failed requests in a row, or the breaker's wait, over the
+switch, and the bucket's tokens and pace.
+
+The third row is the wire itself, with the switch, the bucket's floor, and the
+provider, `◎`.
+
+Under the wire stand the words waiting at the client, the last minute, one
+sentence that says why the title says what it says, and how many words have
+their answer.
+
+Every part is what the client saw of its own requests or what it decided, and
 none says what the provider did otherwise, which the client cannot see: a
 provider that has recovered shows as recovered only once a trial is answered.
 
-While the circuit is open, its row says what opened it, five failed requests
-or the trial that failed last, with the reason, and the next try names the
-trial that comes next and in how many seconds, or the end of the provider's
-pause when that comes later, because the pause holds the trial too; while it
-is half-open, its row says which trial is in flight and how many lookups wait
-for its outcome.
-
-While the circuit is closed, its row counts the requests that failed in a row
-since the last answer, against the five that open the circuit; any answer
-starts the count again, a request to slow down included.
-
-The row `turned away` is a different number, a total of lookups by reason,
-`held back` among them, so it can pass five while the count in a row stays below
-it and the circuit stays closed; [the terms](#the-terms-and-what-each-row-counts) below say what each row counts.
-
-The lookups in flight are counted by what they wait for: asking the provider,
-retrying after a pause, behind the trial, paused while the provider's pause
-lasts, or queued for a token; each one asking or retrying has a row of its
-own, with a bar against the request's timeout or against the pause before its
-next attempt.
+A position changes only when the view reads the dictionary, four times a
+second, and a time that counts on between two reads, such as the seconds a
+request has asked, counts at the pace of the clock.
 
 In the local mode the view reads the dictionary in its own process, whose
-cache is a file the next command reads too; in the distributed mode it reads
-`GET /activity` on the enrichment service at `WORDWINNOW_ENRICHMENT_URL`,
-`http://127.0.0.1:8100` unless set, the port the Compose stack publishes, and
-counts what the service did since the view began, for every analysis it served
-meanwhile, so a second analysis running beside it shows in the counts.
+cache is a file the next command reads too.
 
-The activity names the words in flight, as each lookup a worker sends does,
-and like every port the stack publishes, the enrichment service's listens on
-127.0.0.1 alone.
+In the distributed mode it reads `GET /activity` on the enrichment service at
+`WORDWINNOW_ENRICHMENT_URL`, `http://127.0.0.1:8100` unless set, the port the
+Compose stack publishes.
+
+There the title, the switch, the bucket, the words at the client, the last
+minute, the sentence under it, and `next` show the enrichment service, for every
+analysis it serves, so a second analysis running beside this one shows in
+them.
+
+What the panel counts for this analysis alone comes from the progress the
+worker stores, about once a second: `to ask` counts this analysis's words not
+yet answered and not waiting to ask again, its words at the service included,
+and `to ask again`, the notice of words let go, and `resolved N of M` are this
+analysis's as well.
+
+The service's own counts of how lookups were answered are for every analysis
+it serves, so the distributed mode does not draw them: its last row is
+`resolved N of M` alone, without the parts the local mode shows after it.
+
+The activity names the words at the client, as each lookup a worker sends
+does, and like every port the stack publishes, the enrichment service's
+listens on 127.0.0.1 alone.
 
 After the report, on standard error, the view prints the analysis's figures
 under a line that names it: a failed analysis's whole reason first, then the
@@ -681,7 +693,202 @@ the queue wait, and the seconds of each stage.
 `--csv` they stay on standard error, so what a program or a file reads from
 standard output is unchanged.
 
-### The terms, and what each row counts
+### The title
+
+The title is `dictionary`, in bold, and one state's word as a badge: a block of
+the state's hue, with its word in capitals.
+
+The border has the state's hue too, and the state `idle` has none.
+
+The state is the first of these that holds, in this order.
+
+| State | Hue | When it holds |
+| --- | --- | --- |
+| `failing` | Red | The breaker is open, and the client sends no request but a trial |
+| `on trial` | Magenta | The breaker is half-open: one word, the trial, is asking, and the rest wait for its answer |
+| `rate-limited` | Yellow | A pause the provider asked for, with HTTP 429, holds every request |
+| `idle` | None | No word is at the client and none waits to be asked again |
+| `no answer` | Yellow | A request has asked for 5 s, and nothing has come back for 5 s |
+| `struggling` | Yellow | Requests have failed in a row, or a word waits out a backoff before it asks again |
+| `slow` | Yellow | Two requests have asked for 5 s or more, or the only one asking has |
+| `answering` | Green | None of the above |
+
+The title says how the provider has been answering, so it never uses the
+breaker's own words, `closed`, `half-open`, and `open`, which stand only over the
+switch.
+
+| Breaker | What it means |
+| --- | --- |
+| `closed` | The client sends requests, and counts the ones that fail in a row |
+| `half-open` | The wait is over, and the next word asked is the trial, whose answer decides |
+| `open` | The client sends nothing for about ten seconds, or for as long as the provider asked, and then tries one word |
+
+Before the first read, and when the dictionary cannot be read, the panel is
+the title `dictionary` alone, dim, over what it is waiting for or the reason.
+
+### What the panel shows
+
+Four hues mean one thing each: green, the dictionary or WordNet delivered;
+yellow, the provider makes the client wait; red, the provider failed, and what
+follows from it; and magenta, the breaker is testing.
+
+Nothing is told by a hue alone, because every fact is also a word, a number, a
+shape, or a place, and no hue is drawn on bold text.
+
+| Part | What it says |
+| --- | --- |
+| `to ask` | The words not yet asked: the stage's words, less those that have their answer, those waiting to ask again, and those at the client |
+| `to ask again` | The words the analysis holds, which the dictionary turned away with a time to ask again; at the right, `next in 8 s` when the first asks again, or `as places free` once none sleeps |
+| `in line` | The words at the client that wait for a token, in the order the bucket serves them, in one row: how many, the first nearest the bucket, then the first names and how many more |
+| `behind the trial` | The words that wait for the trial's answer, in one row: how many, then the first names |
+| `2nd try` | A word asking again after a failure, and then `3rd try`: its row says `0.5 s, 2nd try` while the request asks, and `2nd try in 0.1 s` while the word waits to ask it |
+| `last 60 s` | The last minute, a cell for each second, the newest at the right |
+| `resolved` | How many words of the stage have their answer, and of how many, `resolved 54 of 116` |
+| `cache`, `found`, `not found` | The words answered from the cache, found by the provider, and not found, since the view began |
+| `let go` | The words the dictionary left unanswered, for which WordNet's meaning stands in where it has a sense |
+
+Over the switch, while the breaker is closed and counting, each request that
+failed in a row is a `✗` and each one still short of the five that open it a dim
+`·`.
+
+An answer, or a refusal, takes them all away, because it clears the count.
+
+The fifth failure opens the breaker and clears the count in the same step, so
+the count is never shown as five: the marks go, and the breaker's wait takes
+their place, `trial 1 in 8 s`, or `trial 1 after the pause` where a pause outlasts
+it.
+
+Half-open, the same place says `trial 2 decides` while the trial is out and
+`trial 2 is next` before a word asks.
+
+The bucket holds four tokens: a `●` for each whole one, then, while it is
+refilling, a single `○` for the token that is forming, and `·` for the rest.
+
+The `○` says that the bucket is refilling and not how far, because in a busy run
+each token is taken as it forms.
+
+Beside it stands its pace, `2 a second`, or, while the provider's pause holds,
+`paused 9 s` and a lid, `▁▁▁▁▁▁`, in place of the word `bucket`.
+
+A word waiting at the client has a row while it asks or backs off, with its
+name at the left, its line as far as it has got, and what it waits for at the
+provider's column: `0.4 s` while it asks, turned yellow at 5 s, `trial 1, 1.2 s`
+for the trial, and `◂ 3rd try in 0.3 s` while it backs off.
+
+The seconds in a row count on between reads.
+
+At most eight words have a row, the trial first and then the oldest, and one
+row, `and 3 more asking`, counts the rest, as it does in the distributed mode,
+where the service's lookups can be several analyses'.
+
+A terminal too short for the frame folds the line at the bucket and the words
+behind the trial into the one row each they already have, and then gives the
+words asking fewer rows, counting the rows the learner's line takes as it is
+drawn, which is two or three at 80 columns.
+
+The tests show the frame fitting in a terminal of 16 rows or more, with the
+line above it of two rows or of three.
+
+The fold keeps a row for each part that is present, so in a terminal of 14
+rows or fewer the frame can be taller than the terminal, and Rich then crops
+its bottom row.
+
+A terminal narrower than 73 columns has the panel's title, its sentence, `next`
+where there is one, and `resolved N of M`, and says
+`the loop is drawn from 73 columns`.
+
+For three seconds after words are let go that have no row, which is how a
+waiting time runs out, a line across the loop says how many:
+`── 69 let go: W WordNet's meaning stands in where it has one ──┤`.
+
+The last minute, `last 60 s`, is a cell for each clock second, the newest at the
+right, where the wire's turn meets it.
+
+A cell holds a mark when something came back in that second: `✓` when a request
+was answered, found or not, `!` when the provider refused one with a 429, and `✗`
+when one failed, by a server error, a timeout, a connection that failed, or an
+answer the client could not read; and `W` when words were let go.
+
+Of several in one second, the most serious stands: `✗`, then `!`, then `W`, then `✓`.
+
+Where more words were let go in a second than requests came back, the cell is
+`W`, so the second a waiting time runs out is not hidden behind the one trial
+that failed in it.
+
+A cell with no mark is the wire in the breaker's state that second: `─` while
+closed, `╌` while open, and `┄` while half-open, with the word `open` written into
+every quiet stretch of eight cells or more.
+
+A request is placed by the second it came back in, so a mark stays in its cell
+and the lane moves once a second as a whole.
+
+Under the lane, one sentence says why the state is what it is: for an
+`answering` provider, how many requests of the last minute were answered,
+refused, and failed, or, within a minute of the breaker closing, which trial
+closed it and after how long.
+
+A second row, `next`, appears only where it says something no part says: while a
+request hangs, when the oldest one times out at the earliest, and while the
+breaker is open for longer than its own wait, as long as the provider asked.
+
+The last row is the tally,
+`resolved 54 of 116:  17 cache  ✓ 33 found  2 not found  W 2 let go`.
+
+Its parts count from the first read and never fall below nought, and they can
+lead the number before them by the words the progress has not yet counted.
+
+### The marks and the forms
+
+| Mark | ASCII | What it says |
+| --- | --- | --- |
+| `✓` | `+` | A request answered, or a word with the dictionary's definition |
+| `W` | `W` | A word for which WordNet's meaning stands in |
+| `!` | `!` | A request the provider refused with a 429 |
+| `✗` | `X` | A request that failed |
+| `●` | `o` | A token in the bucket, the head of a word asking, and the switch's two contacts |
+| `◂` | `<` | A word backing off |
+| `○` | `:` | The token that is forming |
+| `◎` | `@` | The provider |
+| `▁` | `_` | The bucket's lid |
+| `1` | `1` | The first word in line at the bucket |
+
+The panel has three forms.
+
+With color, it is as above.
+
+Without color, as under `NO_COLOR`, Rich drops the hues and keeps bold, dim, and
+the badge's reverse, so the same characters say the same things.
+
+In ASCII, where the terminal cannot show the glyphs, the marks take their
+second column and the frame's corners are `+`, its sides `|` and `-`; Rich chooses
+it from the terminal's encoding, and there is no option of its own.
+
+The learner's line above the panel keeps its words and figures, and is drawn
+without hue, so the four hues are the panel's alone.
+
+### What a word goes through, and the terms
+
+A word has three tries at the provider.
+
+A request that fails is asked again after a short wait, a quarter to half a
+second and then half a second to a second, or as long as the provider asked,
+up to 30 s, and the third failure ends the lookup, as does any failure while
+the breaker is not closed.
+
+A request the provider refuses with a 429 pauses the whole client and does not
+count as a failure; a word refused five times, or one whose pause would be
+longer than 30 s, ends its lookup with a time to ask again.
+
+The analysis holds a word turned away with a time to ask again: the word gives
+its place back, sleeps at least a second, takes a place again behind the words
+not yet asked, and asks again.
+
+All the held words share one waiting time, three minutes by default, which
+runs while any of them is held.
+
+When the waiting time runs out, every word still held is let go: WordNet's
+gloss stands in for it where WordNet has a sense, the panel counts it as
+`let go`, and the report counts it as unavailable.
 
 The panel counts words, lookups, and requests, three different things, and
 reading one as another is the usual way to misread it.
@@ -691,37 +898,23 @@ reading one as another is the usual way to misread it.
 | Word | A vocabulary item of the text, a lemma with its part of speech, that the analysis looks up; the progress line counts each one once |
 | Lookup | One question to the dictionary about one word, which ends one way: from the cache, found, not found, or turned away |
 | Request | One HTTP request the client sends; a lookup sends one or more, its retries included, or none when the cache answers it or the open circuit holds it back before its first |
-| Turned away | A lookup that ended without an answer, for one of six reasons: `server error`, `timed out`, `connection failed`, `rate limited`, `unreadable answer`, or `held back` |
-| Held back | A lookup the open circuit refused instead of sending its next request; one reason within turned away, never a count beside it |
 | Retry | A request a lookup sends again, after a failure or a pause, within that one lookup |
 | Circuit breaker | The client's switch that stops sending requests after five fail in a row: closed while it sends, open while it sends none, and half-open while one trial request decides |
 | Trial request | The one request the open circuit lets through, about ten seconds after it opened or after the last trial failed, never before a wait the service named; its answer closes the circuit, and its failure opens it again |
 | Pause | The whole client's wait after a request to slow down, HTTP 429, as long as `Retry-After` says |
 | Waiting time | How long one analysis waits, in all, for the words turned away with a time to ask again; three minutes by default |
 
-Each row counts one of them.
+A lookup turned away is one that ended without an answer, for one of six
+reasons: a server error, a timeout, a connection that failed, a refusal to
+slow down, an answer that could not be read, or a refusal by the open circuit,
+which holds the lookup back instead of sending its next request.
 
-| Row | What it counts | How often a word counts |
-| --- | --- | --- |
-| `answered` | The lookups answered since the view began: from the cache, found, or not found | At most once in an analysis, because an answered word is not asked again |
-| `turned away` | The lookups that ended without an answer since the view began, by reason | Once each time it is turned away |
-| `retries` | The requests sent again within lookups, by reason | Once each time a request is sent again; a retry is not a lookup |
-| `in flight` | The lookups not yet ended, by what they wait for | Once while it waits |
+The panel's tally counts each word once, as it has its answer, while a word
+turned away and asked again is turned away each time, so the number of lookups
+turned away can pass the number of words.
 
-A word turned away with a time to ask again, as every word the open circuit
-holds back is, is asked again then, while the analysis's waiting time lasts,
-and each refusal counts once more, so `turned away` can pass both the words the
-progress line counts and `answered`.
-
-The README's recording shows it: an analysis that looks up 40 words, each of
-them answered in the end, 39 found and 1 not found as the figures after its
-report count them, shows `turned away 80: 74 held back, 6 server error` in the
-panel, because each of the 40 was turned away twice, when the circuit opened
-and again behind the trial that failed, before it was answered; in the panel,
-`turned away` counts to 40 and then to 80 while `answered` stays at 0.
-
-The report counts each word once: its count of unavailable words, the words
-that show WordNet's gloss, is what the learner gets.
+The report counts each word once as well: its count of unavailable words, the
+words that show WordNet's gloss, is what the learner gets.
 
 ## Recovering
 
@@ -745,9 +938,10 @@ Four places answer four questions, best read in this order.
 
 1. **The report:** the words marked `(WordNet; dictionary unavailable)`, and its
    count of unavailable words, which is what the learner lost.
-2. **The operator view:** its title and its row `circuit` say whether this client
-   stopped asking and why, `next try` says when it asks again, `last minute` what
-   its own requests met, and `turned away` the reasons, lookup by lookup.
+2. **The operator view:** its title says how the provider has been answering, the
+   switch whether this client stopped asking, with the wait to its next trial,
+   the lane what its own requests met in the last minute, and the sentence
+   under it why.
 3. **The log:** the events listed at the end of [the dictionary client in detail](#the-dictionary-client-in-detail),
    `dictionary.circuit.opened` once per outage among them, each with its
    analysis's `correlation_id`.

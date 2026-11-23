@@ -1,0 +1,6 @@
+╭─ dictionary  FAILING  ──────────────────────────────────╮
+│ breaker opened 4 s ago after 5 failed requests in a ro… │
+│ next  trial 1 in 4 s                                    │
+│ resolved 53 of 116                                      │
+│ the loop is drawn from 73 columns                       │
+╰─────────────────────────────────────────────────────────╯

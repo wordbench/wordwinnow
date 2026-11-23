@@ -1,0 +1,12 @@
+╭─ dictionary  STRUGGLING  ───────────────────────────────────────────────────╮
+│ to ask 70             breaker closed        bucket   provider               │
+│                            ✗✗✗✗·    in line ╷○···╷ 2 a second               │
+│ ──────────────────────────●━━━━━●───────────╰────╯──────◎─────────────────╮ │
+│ in line 5         ─────────────────────────1 high-power, faculty  +3      │ │
+│ excellent         ─◂                                     3rd try in 0.1 s │ │
+│ factor            ──────────────────────────────────────● 0.0 s, 2nd try  │ │
+│ formerly          ─◂                                     2nd try in 0.1 s │ │
+│ last 60 s                                            ─✓✓─✓✓✓✓✓✓✓✓─✓✗✗✗✗───╯ │
+│ 4 requests failed in a row; 1 more and the breaker opens (server error)     │
+│ resolved 38 of 116:  7 cache  ✓ 30 found  1 not found  W 0 let go           │
+╰─────────────────────────────────────────────────────────────────────────────╯

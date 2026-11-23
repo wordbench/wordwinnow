@@ -20,9 +20,16 @@ from typing import (
 
 from pytest import (
     MonkeyPatch,
+    mark,
+)
+from rich.color import (
+    ColorSystem,
 )
 from rich.console import (
     Console,
+)
+from rich.progress_bar import (
+    ProgressBar,
 )
 
 from tests.fakes.ports import (
@@ -971,3 +978,375 @@ class TestTimesCountedFromNow:
         # NOTE:
         # The last answer came in the report of second 1, so the report of second 8 brings seven seconds without one.
         assert "12 of 156, no answer for 7 s" in stream.getvalue()
+
+
+_CHROMATIC: Final = frozenset(
+    (
+        *range(
+            31,
+            37,
+        ),
+        *range(
+            41,
+            47,
+        ),
+        *range(
+            91,
+            97,
+        ),
+        *range(
+            101,
+            107,
+        ),
+    ),
+)
+
+
+def _line(
+    *,
+    hue: bool | None,
+    steps: int | None,
+    done: int,
+) -> str:
+    """
+    What a terminal receives for the line after `done` of `steps` steps, in
+    true color so that each of Rich's own styles has a sequence of its own.
+
+    With no `hue` the line is built as it is built today, without the keyword.
+    """
+
+    stream = StringIO()
+
+    console = Console(
+        color_system="truecolor",
+        force_terminal=True,
+        file=stream,
+        width=80,
+        highlight=False,
+    )
+
+    progress = (
+        TerminalProgress(
+            console=console,
+        )
+        if hue is None
+        else TerminalProgress(
+            console=console,
+            hue=hue,
+        )
+    )
+
+    progress.begin(
+        description="looking the words up in the dictionary",
+        steps=steps,
+    )
+
+    for _ in range(
+        done,
+    ):
+        progress.advance()
+
+    console.print(
+        progress.line,
+    )
+
+    return stream.getvalue()
+
+
+def _colors(
+    output: str,
+    /,
+) -> list[str]:
+    """
+    Each color the escape sequences in `output` set, a standard one by its
+    code and a true color by its channels.
+    """
+
+    found: list[str] = []
+
+    for sequence in findall(
+        pattern=r"\x1b\[([0-9;]*)m",
+        string=output,
+    ):
+        codes = tuple(
+            int(
+                code,
+            )
+            for code in sequence.split(
+                sep=";",
+            )
+            if code
+        )
+
+        index = 0
+
+        while index < len(
+            codes,
+        ):
+            code = codes[index]
+
+            if code in (
+                38,
+                48,
+            ):
+                if codes[index + 1] != 2:
+                    raise ValueError(
+                        f"a palette color this test does not read: {codes}",
+                    )
+
+                found.append(
+                    "{};{}".format(
+                        code,
+                        ";".join(
+                            str(
+                                object=channel,
+                            )
+                            for channel in codes[index + 2 : index + 5]
+                        ),
+                    ),
+                )
+
+                index += 5
+
+                continue
+
+            if code in _CHROMATIC or 30 <= code <= 37 or 90 <= code <= 97 or 40 <= code <= 47 or 100 <= code <= 107:
+                found.append(
+                    str(
+                        object=code,
+                    ),
+                )
+
+            index += 1
+
+    return found
+
+
+def _is_hue(
+    color: str,
+    /,
+) -> bool:
+    """
+    Whether `color`, as `_colors` names it, is a hue: a gray, which has none,
+    and the terminal's own black and white, are not.
+    """
+
+    if ";" in color:
+        (
+            red,
+            green,
+            blue,
+        ) = (
+            int(
+                channel,
+            )
+            for channel in color.split(
+                sep=";",
+            )[1:]
+        )
+
+        return not red == green == blue
+
+    return int(
+        color,
+    ) % 10 in range(
+        1,
+        7,
+    ) and int(
+        color,
+    ) not in (
+        30,
+        37,
+        90,
+        97,
+    )
+
+
+def _hues(
+    output: str,
+    /,
+) -> tuple[str, ...]:
+    return tuple(
+        color
+        for color in _colors(
+            output,
+        )
+        if _is_hue(
+            color,
+        )
+    )
+
+
+def _sequence(
+    style: str,
+    /,
+) -> str:
+    """
+    The escape sequence that starts Rich's own `style` in true color.
+    """
+
+    rendered = (
+        Console(
+            color_system="truecolor",
+            force_terminal=True,
+        )
+        .get_style(
+            name=style,
+        )
+        .render(
+            text="x",
+            color_system=ColorSystem.TRUECOLOR,
+        )
+    )
+
+    return rendered[
+        : rendered.index(
+            "x",
+        )
+    ]
+
+
+def _pulse_colors() -> set[str]:
+    """
+    Every color Rich's own pulse takes in the course of one sweep.
+    """
+
+    colors: set[str] = set()
+
+    for step in range(
+        80,
+    ):
+        stream = StringIO()
+
+        Console(
+            color_system="truecolor",
+            force_terminal=True,
+            file=stream,
+            width=80,
+        ).print(
+            ProgressBar(
+                total=None,
+                width=24,
+                pulse=True,
+                animation_time=step * 0.05,
+            ),
+        )
+
+        colors.update(
+            _colors(
+                stream.getvalue(),
+            ),
+        )
+
+    return colors
+
+
+@final
+class TestTheLineWithoutHue:
+    @mark.parametrize(
+        argnames=(
+            "steps",
+            "done",
+        ),
+        argvalues=(
+            (
+                10,
+                3,
+            ),
+            (
+                10,
+                10,
+            ),
+            (
+                None,
+                0,
+            ),
+        ),
+    )
+    def test_drawn_without_hue_the_spinner_the_bar_and_the_elapsed_time_carry_none(
+        self,
+        *,
+        steps: int | None,
+        done: int,
+    ) -> None:
+        assert not _hues(
+            _line(
+                hue=False,
+                steps=steps,
+                done=done,
+            ),
+        )
+
+    def test_drawn_without_hue_the_bar_still_shows_what_is_done_and_what_is_left(
+        self,
+    ) -> None:
+        assert "\x1b[2m" in _line(
+            hue=False,
+            steps=10,
+            done=3,
+        )
+
+    def test_constructed_as_today_the_line_draws_them_in_richs_own_styles(
+        self,
+    ) -> None:
+        counting = _line(
+            hue=None,
+            steps=10,
+            done=3,
+        )
+
+        finished = _line(
+            hue=None,
+            steps=10,
+            done=10,
+        )
+
+        for (
+            drawn,
+            style,
+        ) in (
+            (
+                counting,
+                "progress.spinner",
+            ),
+            (
+                counting,
+                "bar.complete",
+            ),
+            (
+                counting,
+                "progress.elapsed",
+            ),
+            (
+                finished,
+                "bar.finished",
+            ),
+        ):
+            assert (
+                _sequence(
+                    style,
+                )
+                in drawn
+            ), style
+
+        pulsing = _colors(
+            _line(
+                hue=None,
+                steps=None,
+                done=0,
+            ),
+        )
+
+        assert (
+            frozenset(
+                pulsing,
+            )
+            & _pulse_colors()
+        )
+
+        assert any(
+            _is_hue(
+                color,
+            )
+            for color in pulsing
+        )

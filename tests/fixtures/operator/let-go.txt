@@ -1,0 +1,9 @@
+╭─ dictionary  FAILING  ──────────────────────────────────────────────────────╮
+│ to ask 0               breaker open         bucket   provider               │
+│                       trial 6 in 8 s        ╷●●●●╷ 2 a second               │
+│ ──────────────────────────●╱▔▔▔▔●╌╌╌╌╌╌╌╌╌╌╌╰────╯╌╌╌╌╌╌◎╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╮ │
+│ ── 77 let go: W WordNet's meaning stands in where it has one ─────────────┤ │
+│ last 60 s   ✓✓─✗✗✗✗✗╌╌╌╌╌╌┄✗╌ open ╌╌┄✗╌ open ╌╌┄✗╌ open ╌╌┄✗╌ open ╌┄W╌──╯ │
+│ breaker opened again just now after trial 5 failed (server error)           │
+│ resolved 116 of 116:  17 cache  ✓ 22 found  0 not found  W 77 let go        │
+╰─────────────────────────────────────────────────────────────────────────────╯

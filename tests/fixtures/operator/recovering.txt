@@ -1,0 +1,11 @@
+╭─ dictionary  ANSWERING  ────────────────────────────────────────────────────╮
+│ to ask 54             breaker closed        bucket   provider               │
+│                                     in line ╷○···╷ 2 a second               │
+│ ──────────────────────────●━━━━━●───────────╰────╯──────◎─────────────────╮ │
+│ in line 6         ─────────────────────────1 merely, observation  +4      │ │
+│ precise           ──────────────────────────────────────● 0.1 s           │ │
+│ marriage          ──────────────────────────────────────● 0.6 s           │ │
+│ last 60 s               ─✓✓─✓✓✓✓✓✓✓✓─✓✗✗✗✗✗✗✗✗✗✗──✗✗✗╌╌╌╌╌╌┄✗╌ open ╌╌✓───╯ │
+│ answering; the breaker closed just now by trial 2, after 20 s open          │
+│ resolved 54 of 116:  17 cache  ✓ 33 found  2 not found  W 2 let go          │
+╰─────────────────────────────────────────────────────────────────────────────╯

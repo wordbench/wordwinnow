@@ -20,6 +20,7 @@ from collections import (
 )
 from collections.abc import (
     Callable,
+    Mapping,
     Sequence,
 )
 from dataclasses import (
@@ -145,6 +146,31 @@ _LEAST_QUIET: Final = timedelta(
 )
 
 _BAR_WIDTH: Final = 24
+
+# NOTE:
+# The styles of the stage's bar: Rich's own, and, for a line drawn without hue, none, with the part that is left dim
+# so that the bar still shows how far the stage has come.
+#
+# A bar that pulses, because the stage's count is not known, blends two colors, and Rich blends magenta and black
+# where it is given none, so the pulse is given two grays.
+_STOCK_BAR: Final = MappingProxyType(
+    mapping={},
+)
+
+_BARE_BAR: Final = MappingProxyType(
+    mapping={
+        "style": "dim",
+        "complete_style": "none",
+        "finished_style": "none",
+    },
+)
+
+_BARE_PULSE: Final = MappingProxyType(
+    mapping={
+        "style": "grey23",
+        "pulse_style": "grey70",
+    },
+)
 
 
 @dataclass(
@@ -422,6 +448,36 @@ def _bar(
     wait for, so that the words have the room.
     """
 
+    return _stage_bar(
+        task,
+        _STOCK_BAR,
+        _STOCK_BAR,
+    )
+
+
+def _bare_bar(
+    task: Task,
+    now: datetime,
+    /,
+) -> RenderableType:
+    """
+    The same bar drawn without hue: what is done in the terminal's own color,
+    and what is left dim.
+    """
+
+    return _stage_bar(
+        task,
+        _BARE_BAR,
+        _BARE_PULSE,
+    )
+
+
+def _stage_bar(
+    task: Task,
+    styles: Mapping[str, str],
+    pulse_styles: Mapping[str, str],
+    /,
+) -> RenderableType:
     if not task.fields.get(
         "bar",
         True,
@@ -429,6 +485,8 @@ def _bar(
         return Text(
             text="",
         )
+
+    pulsing = not task.started or task.total is None
 
     # NOTE:
     # Built as `BarColumn.render` builds it with the width this line gives it, so the line draws what it drew with
@@ -449,6 +507,37 @@ def _bar(
         width=_BAR_WIDTH,
         pulse=not task.started,
         animation_time=task.get_time(),
+        **(pulse_styles if pulsing else styles),
+    )
+
+
+def _bare_elapsed(
+    task: Task,
+    now: datetime,
+    /,
+) -> RenderableType:
+    """
+    The time spent, as Rich's elapsed column says it, without its hue.
+    """
+
+    elapsed = task.finished_time if task.finished else task.elapsed
+
+    if elapsed is None:
+        return Text(
+            text="-:--:--",
+        )
+
+    return Text(
+        text=str(
+            object=timedelta(
+                seconds=max(
+                    0,
+                    int(
+                        elapsed,
+                    ),
+                ),
+            ),
+        ),
     )
 
 
@@ -573,6 +662,9 @@ class TerminalProgress:
 
     Satisfies `AnalysisProgress` and `RemoteAnalysisProgress` structurally,
     and shows nothing unless its console is an interactive terminal.
+
+    Its spinner, bar, and elapsed time keep Rich's own hues, unless `hue` is
+    false, as under a view that gives each hue a meaning of its own.
     """
 
     def __init__(
@@ -581,6 +673,7 @@ class TerminalProgress:
         console: Console,
         refresh_per_second: float = 10,
         clock: Callable[[], datetime] = _local_now,
+        hue: bool = True,
     ) -> None:
         # NOTE:
         # No percentage, and a time left only for the dictionary stage: the steps of other phases can differ a
@@ -588,20 +681,29 @@ class TerminalProgress:
         # figures always true there, while the dictionary stage keeps a pace the provider's budget and the cache set,
         # so its recent pace says when it may finish.
         self._progress: Final = Progress(
-            SpinnerColumn(),
+            SpinnerColumn(
+                style="progress.spinner" if hue else "none",
+            ),
             ClockColumn(
                 clock=clock,
                 draw=_description,
             ),
             ClockColumn(
                 clock=clock,
-                draw=_bar,
+                draw=_bar if hue else _bare_bar,
             ),
             ClockColumn(
                 clock=clock,
                 draw=_count_and_time,
             ),
-            TimeElapsedColumn(),
+            (
+                TimeElapsedColumn()
+                if hue
+                else ClockColumn(
+                    clock=clock,
+                    draw=_bare_elapsed,
+                )
+            ),
             console=console,
             refresh_per_second=refresh_per_second,
             transient=True,

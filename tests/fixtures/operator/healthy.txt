@@ -1,0 +1,10 @@
+╭─ dictionary  ANSWERING  ────────────────────────────────────────────────────╮
+│ to ask 68             breaker closed        bucket   provider               │
+│                                     in line ╷○···╷ 2 a second               │
+│ ──────────────────────────●━━━━━●───────────╰────╯──────◎─────────────────╮ │
+│ in line 7         ─────────────────────────1 finely, former, formerly  +4 │ │
+│ fierce            ──────────────────────────────────────● 0.3 s           │ │
+│ last 60 s                                    ✓✓✓✓✓✓✓✓✓✓!─────────✓✓✓✓✓✓───╯ │
+│ answering: in the last minute  ✓ 33 answered  ! 1 refused  ✗ 0 failed       │
+│ resolved 40 of 116:  7 cache  ✓ 32 found  1 not found  W 0 let go           │
+╰─────────────────────────────────────────────────────────────────────────────╯
