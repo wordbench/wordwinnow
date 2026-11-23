@@ -19,6 +19,10 @@ from datetime import (
     datetime,
     timedelta,
 )
+from errno import (
+    EISDIR,
+    ENOENT,
+)
 from io import (
     BytesIO,
     StringIO,
@@ -27,10 +31,14 @@ from io import (
 from json import (
     loads,
 )
+from os import (
+    strerror,
+)
 from pathlib import (
     Path,
 )
 from re import (
+    escape,
     match,
     search,
 )
@@ -5506,3 +5514,335 @@ class TestTheFlashcardFiles:
         )
 
         assert not (workspace / "a.txt").exists()
+
+
+_EXPORT_OPTIONS: Final = (
+    "--csv",
+    "--anki",
+    "--quizlet",
+)
+
+
+def _export_error(
+    *,
+    path: str,
+    reason: int,
+    analysis_id: str,
+    flag: str = "",
+) -> str:
+    return (
+        f"error: {path} could not be written ({
+            strerror(
+                reason,
+            )
+        }); "
+        f"wordwinnow show {analysis_id}{flag} shows this analysis again\n"
+    )
+
+
+@final
+class TestAnExportThatCannotBeWritten:
+    @mark.parametrize(
+        argnames="option",
+        argvalues=_EXPORT_OPTIONS,
+    )
+    def test_analyze_ends_in_one_line_that_names_the_stored_analysis(
+        self,
+        *,
+        workspace: Path,
+        option: str,
+    ) -> None:
+        (workspace / "a-scandal-in-bohemia.txt").write_text(
+            data=_TEXT,
+            encoding="utf-8",
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "analyze",
+                "a-scandal-in-bohemia.txt",
+                "--local",
+                "--no-dictionary",
+                "--level",
+                "A1",
+                option,
+                "no-such-folder/a.txt",
+            ],
+        )
+
+        assert result.exit_code == 1, result.output
+
+        assert isinstance(
+            result.exception,
+            SystemExit,
+        )
+
+        found = match(
+            pattern=r"error: no-such-folder/a\.txt could not be written \(.*\); wordwinnow show (\S+) shows",
+            string=result.output,
+        )
+
+        assert found is not None, result.output
+
+        assert result.output == _export_error(
+            path="no-such-folder/a.txt",
+            reason=ENOENT,
+            analysis_id=found[1],
+        )
+
+        shown = _runner.invoke(
+            app=app,
+            args=[
+                "show",
+                found[1],
+            ],
+        )
+
+        assert shown.exit_code == 0, shown.output
+
+    @mark.parametrize(
+        argnames="option",
+        argvalues=_EXPORT_OPTIONS,
+    )
+    def test_show_says_so_the_same_way_for_a_folder(
+        self,
+        *,
+        workspace: Path,
+        option: str,
+    ) -> None:
+        analysis = _completed()
+
+        _stored(
+            analysis,
+        )
+
+        (workspace / "a-folder").mkdir()
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "show",
+                str(
+                    object=analysis.id,
+                ),
+                option,
+                "a-folder",
+            ],
+        )
+
+        assert result.exit_code == 1, result.output
+
+        assert isinstance(
+            result.exception,
+            SystemExit,
+        )
+
+        assert result.output == _export_error(
+            path="a-folder",
+            reason=EISDIR,
+            analysis_id=str(
+                object=analysis.id,
+            ),
+        )
+
+    @mark.parametrize(
+        argnames="option",
+        argvalues=_EXPORT_OPTIONS,
+    )
+    def test_show_remote_adds_the_flag_to_the_hint(
+        self,
+        *,
+        workspace: Path,
+        monkeypatch: MonkeyPatch,
+        option: str,
+    ) -> None:
+        analysis = _completed()
+
+        async def watched(
+            *,
+            analysis_id: AnalysisId,
+            settings: Settings,
+            local: bool,
+        ) -> WatchedAnalysis:
+            return WatchedAnalysis(
+                analysis=analysis,
+                progress=None,
+            )
+
+        monkeypatch.setattr(
+            target=commands,
+            name="show",
+            value=watched,
+        )
+
+        (workspace / "a-folder").mkdir()
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "show",
+                str(
+                    object=analysis.id,
+                ),
+                "--remote",
+                option,
+                "a-folder",
+            ],
+        )
+
+        assert result.exit_code == 1, result.output
+
+        assert isinstance(
+            result.exception,
+            SystemExit,
+        )
+
+        assert result.output == _export_error(
+            path="a-folder",
+            reason=EISDIR,
+            analysis_id=str(
+                object=analysis.id,
+            ),
+            flag=" --remote",
+        )
+
+    def test_the_first_failure_stops_the_files_after_it_and_keeps_the_one_before(
+        self,
+        *,
+        workspace: Path,
+    ) -> None:
+        (workspace / "a-scandal-in-bohemia.txt").write_text(
+            data=_TEXT,
+            encoding="utf-8",
+        )
+
+        analyzed = (
+            "analyze",
+            "a-scandal-in-bohemia.txt",
+            "--local",
+            "--no-dictionary",
+            "--level",
+            "A1",
+            "--rows",
+            "3",
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                *analyzed,
+                "--csv",
+                "c.csv",
+                "--anki",
+                "no-such-folder/a.txt",
+                "--quizlet",
+                "q.txt",
+            ],
+        )
+
+        assert result.exit_code == 1, result.output
+
+        lines = result.output.splitlines()
+
+        assert (
+            len(
+                lines,
+            )
+            == 2
+        ), result.output
+
+        assert search(
+            pattern=r"^wrote 3 of \d+ rows to c\.csv; --rows raises the limit$",
+            string=lines[0],
+        )
+
+        assert lines[1].startswith(
+            "error: no-such-folder/a.txt could not be written ",
+        )
+
+        assert not (workspace / "q.txt").exists()
+
+        alone = _runner.invoke(
+            app=app,
+            args=[
+                *analyzed,
+                "--csv",
+                "alone.csv",
+            ],
+        )
+
+        assert alone.exit_code == 0, alone.output
+
+        assert (workspace / "c.csv").read_bytes() == (workspace / "alone.csv").read_bytes()
+
+    @mark.parametrize(
+        argnames="option",
+        argvalues=_EXPORT_OPTIONS,
+    )
+    @mark.parametrize(
+        argnames=(
+            "name",
+            "shown",
+        ),
+        argvalues=(
+            (
+                "cards[b1].csv",
+                "cards[b1].csv",
+            ),
+            (
+                "cards\x1b[31m.csv",
+                "cards\\x1b[31m.csv",
+            ),
+            (
+                "cards:smile:.csv",
+                "cards:smile:.csv",
+            ),
+        ),
+        ids=(
+            "a markup tag",
+            "a control character",
+            "an emoji code",
+        ),
+    )
+    def test_a_written_file_is_named_as_typed(
+        self,
+        *,
+        workspace: Path,
+        option: str,
+        name: str,
+        shown: str,
+    ) -> None:
+        (workspace / "a-scandal-in-bohemia.txt").write_text(
+            data=_TEXT,
+            encoding="utf-8",
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "analyze",
+                "a-scandal-in-bohemia.txt",
+                "--local",
+                "--no-dictionary",
+                "--level",
+                "A1",
+                option,
+                name,
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+
+        assert (workspace / name).is_file()
+
+        assert search(
+            pattern=rf"^wrote \d+ (rows|words to study) to {
+                escape(
+                    pattern=shown,
+                )
+            }$",
+            string=result.output,
+        )
+
+        assert all(character.isprintable() or character == "\n" for character in result.output)

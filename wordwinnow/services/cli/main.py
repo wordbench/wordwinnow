@@ -343,7 +343,7 @@ def _settings() -> Settings:
 
 
 def _fail(
-    exception: Exception,
+    exception: Exception | str,
     /,
 ) -> Exit:
     # NOTE:
@@ -508,6 +508,34 @@ def _duration(
     return f"{seconds / 3_600:.0f} h"
 
 
+def _write_export(
+    *,
+    path: Path,
+    data: str,
+    newline: str | None,
+    analysis: Analysis,
+    remote: bool,
+) -> None:
+    # NOTE:
+    # Only the write is caught, and only an `OSError`, so that a file the operating system refuses ends the command in
+    # the one line that says how to show the analysis again, which is stored all the same, while every other error
+    # stays what it was.
+    try:
+        path.write_text(
+            data=data,
+            encoding="utf-8",
+            newline=newline,
+        )
+
+    except OSError as exception:
+        flag = " --remote" if remote else ""
+
+        raise _fail(
+            f"{path} could not be written ({exception.strerror}); "
+            f"wordwinnow show {analysis.id}{flag} shows this analysis again",
+        ) from exception
+
+
 def _render(
     analysis: Analysis,
     tiers: Sequence[StudyTier] | None,
@@ -613,18 +641,35 @@ def _render(
         cards_unit = "flashcards" if tiers is not None else "words to study"
 
         if csv_path is not None:
-            csv_path.write_text(
+            _write_export(
+                path=csv_path,
                 data=to_csv(
                     items=items,
                     with_sentences=not analysis.document.expires,
                 ),
-                encoding="utf-8",
+                newline=None,
+                analysis=analysis,
+                remote=remote,
             )
 
             _console.print(
-                f"wrote {shown} of {available} rows to {csv_path}; --rows raises the limit"
+                f"wrote {shown} of {available} rows to {
+                    visible(
+                        message=str(
+                            object=csv_path,
+                        ),
+                    )
+                }; --rows raises the limit"
                 if shown < available
-                else f"wrote {shown} rows to {csv_path}",
+                else f"wrote {shown} rows to {
+                    visible(
+                        message=str(
+                            object=csv_path,
+                        ),
+                    )
+                }",
+                markup=False,
+                emoji=False,
             )
 
         for (
@@ -645,21 +690,36 @@ def _render(
 
             # NOTE:
             # Written with line feeds whatever the platform, since a flashcard tool reads one card a line.
-            flashcards_path.write_text(
+            _write_export(
+                path=flashcards_path,
                 data=flashcards(
                     items=cards,
                     with_sentences=not analysis.document.expires,
                     detailed=detail,
                 ),
-                encoding="utf-8",
                 newline="\n",
+                analysis=analysis,
+                remote=remote,
             )
 
             _console.print(
-                f"wrote {cards_shown} of {cards_available} {cards_unit} to {flashcards_path}{cards_omission}; "
-                "--rows raises the limit"
+                f"wrote {cards_shown} of {cards_available} {cards_unit} to {
+                    visible(
+                        message=str(
+                            object=flashcards_path,
+                        ),
+                    )
+                }{cards_omission}; --rows raises the limit"
                 if cards_shown < cards_available
-                else f"wrote {cards_shown} {cards_unit} to {flashcards_path}{cards_omission}",
+                else f"wrote {cards_shown} {cards_unit} to {
+                    visible(
+                        message=str(
+                            object=flashcards_path,
+                        ),
+                    )
+                }{cards_omission}",
+                markup=False,
+                emoji=False,
             )
 
         if cards_unavailable and (anki_path is not None or quizlet_path is not None):
