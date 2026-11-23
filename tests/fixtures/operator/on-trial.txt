@@ -2,9 +2,15 @@
 │ to ask 0             breaker half-open      bucket   provider               │
 │                       trial 1 decides       ╷●●●●╷ 2 a second               │
 │ ──────────────────────────●┄┄┄┄┄●┄┄┄┄┄┄┄┄┄┄┄╰────╯┄┄┄┄┄┄◎┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╮ │
-│ to ask again 63                                            as places free │ │
-│ behind 7          ──────● behind the trial: kindly, hopeless  +5          │ │
-│ intrusion         ──────────────────────────────────────● trial 1, 1.2 s  │ │
+│ to ask again 59                                            as places free │ │
+│ intrusion   again ──────────────────────────────────────● trial 1, 1.2 s  │ │
+│ kindly      again ──────● behind the trial                                │ │
+│ hopeless    again ──────●                                                 │ │
+│ observer          ──────●                                                 │ │
+│ place             ──────●                                                 │ │
+│ master            ──────●                                                 │ │
+│ lead        again ──────●                                                 │ │
+│ temperament       ──────●                                                 │ │
 │ last 60 s                           ─✓✓─✓✓✓✓✓✓✓✓─✓✗✗✗✗✗✗✗✗✗✗──✗✗✗╌╌╌╌╌╌┄──╯ │
 │ breaker half-open: trial 1, intrusion, decides; the rest wait for it        │
 │ resolved 53 of 116:  17 cache  ✓ 32 found  2 not found  W 2 let go          │

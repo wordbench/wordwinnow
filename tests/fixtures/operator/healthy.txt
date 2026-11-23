@@ -1,9 +1,15 @@
 ╭─ dictionary  ANSWERING  ────────────────────────────────────────────────────╮
 │ to ask 68             breaker closed        bucket   provider               │
 │                                     in line ╷○···╷ 2 a second               │
-│ ──────────────────────────●━━━━━●───────────╰────╯──────◎─────────────────╮ │
-│ in line 7         ─────────────────────────1 finely, former, formerly  +4 │ │
+│ ──────────────────────────●━━━━━●───────────╰────╯──────◎─ ✓ faculty ─────╮ │
+│ incident          ───────────────────7                                    │ │
 │ fierce            ──────────────────────────────────────● 0.3 s           │ │
+│ finely            ─────────────────────────1                              │ │
+│ former            ────────────────────────2                               │ │
+│ formerly          ───────────────────────3                                │ │
+│ high-power        ──────────────────────4                                 │ │
+│ home-centr…       ─────────────────────5                                  │ │
+│ hopeless          ────────────────────6                                   │ │
 │ last 60 s                                    ✓✓✓✓✓✓✓✓✓✓!─────────✓✓✓✓✓✓───╯ │
 │ answering: in the last minute  ✓ 33 answered  ! 1 refused  ✗ 0 failed       │
 │ resolved 40 of 116:  7 cache  ✓ 32 found  1 not found  W 0 let go           │

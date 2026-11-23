@@ -10,8 +10,9 @@ The loop shows how a word travels: through the breaker's switch, past the
 bucket that hands out tokens, to the provider, and where the words wait on the
 way.
 
-Under the wire stand the words at the client, the last minute, and one
-sentence that says why the state is what it is.
+Under the wire stand the words at the client, each on a row of its own that it
+keeps while it is there, the last minute, and one sentence that says why the
+state is what it is.
 
 Every part is what the client saw of its own requests or what it decided; none
 says what the provider did otherwise, which the client cannot see.

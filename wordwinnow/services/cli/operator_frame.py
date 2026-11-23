@@ -12,6 +12,7 @@ A position changes only at a read, and a clock counts on between reads.
 """
 
 from collections.abc import (
+    Mapping,
     Sequence,
 )
 from dataclasses import (
@@ -27,6 +28,9 @@ from typing import (
 
 from rich.box import (
     ROUNDED,
+)
+from rich.cells import (
+    cell_len,
 )
 from rich.console import (
     Group,
@@ -54,6 +58,11 @@ from wordwinnow.infrastructure.dictionary.resilience import (
 from wordwinnow.services.cli.operator_canvas import (
     Canvas,
 )
+from wordwinnow.services.cli.operator_clock import (
+    MINUTE,
+    clock_second,
+    within,
+)
 from wordwinnow.services.cli.operator_look import (
     ASCII,
     HUES,
@@ -64,10 +73,20 @@ from wordwinnow.services.cli.operator_look import (
     Mark,
     Role,
 )
+from wordwinnow.services.cli.operator_rows import (
+    LINGER_SECONDS,
+    OUT_SECONDS,
+    WORD_ROWS,
+    Ending,
+    Followed,
+    behind_the_trial,
+    folded_away,
+    in_line,
+    places,
+    queued,
+)
 from wordwinnow.services.cli.operator_seen import (
-    MINUTE,
     Seen,
-    clock_second,
 )
 from wordwinnow.services.cli.operator_states import (
     SLOW_AFTER,
@@ -81,7 +100,6 @@ from wordwinnow.services.cli.operator_states import (
     next_clause,
     ordinal,
     pause_of,
-    queued,
     state_of,
     tally,
     to_ask,
@@ -99,10 +117,6 @@ PANEL_LEAST: Final = 40
 # The least panel the loop is drawn in, a terminal of 73 columns; a narrower one keeps the title, the sentences, and
 # the count.
 LOOP_LEAST: Final = 72
-
-# NOTE:
-# The most words drawn a row each, the eight lookups an analysis has at once by default.
-WORD_ROWS: Final = 8
 
 # NOTE:
 # How long a notice of words let go stays, in seconds.
@@ -171,6 +185,23 @@ _LANE_ROLES: Final = MappingProxyType(
     },
 )
 
+# NOTE:
+# What a lookup that has left says of how it ended, where it has its answer.
+_ENDINGS: Final = MappingProxyType(
+    mapping={
+        Ending.FOUND: "found",
+        Ending.NOT_FOUND: "not found",
+        Ending.LET_GO: "let go",
+    },
+)
+
+_PAST_ROLES: Final = MappingProxyType(
+    mapping={
+        Mark.ANSWERED: Role.PAST_ANSWERED,
+        Mark.WORDNET: Role.PAST_WORDNET,
+    },
+)
+
 _TALLY_MARKS: Final = MappingProxyType(
     mapping={
         "found": Mark.ANSWERED,
@@ -216,6 +247,8 @@ class _Geometry:
 
     name: int
 
+    again_at: int
+
     line_at: int
 
     backoff_at: int
@@ -255,6 +288,7 @@ def _geometry(
         inner=inner,
         right=right,
         name=name,
+        again_at=name + 1,
         line_at=line_at,
         backoff_at=line_at + 1,
         behind_at=switch_at - 2,
@@ -282,6 +316,8 @@ class _Frame:
     since: float
 
     provider: ProviderActivity
+
+    places: Mapping[str, int]
 
     state: State
 
@@ -330,17 +366,40 @@ def _clip(
     ellipsis: str,
     /,
 ) -> str:
+    """
+    `text` cut to `room` cells with the ellipsis, where it is longer.
+    """
+
     if room <= 0:
         return ""
 
-    return (
-        text
-        if len(
-            text,
+    if (
+        cell_len(
+            text=text,
         )
         <= room
-        else text[: room - 1] + ellipsis
+    ):
+        return text
+
+    kept = ""
+
+    used = cell_len(
+        text=ellipsis,
     )
+
+    for character in text:
+        width = cell_len(
+            text=character,
+        )
+
+        if used + width > room:
+            break
+
+        kept += character
+
+        used += width
+
+    return kept + ellipsis
 
 
 def _fit(
@@ -352,8 +411,8 @@ def _fit(
         (
             candidate
             for candidate in candidates
-            if len(
-                candidate,
+            if cell_len(
+                text=candidate,
             )
             <= room
         ),
@@ -767,6 +826,79 @@ def _header(
         Role.STRUCTURE,
     )
 
+    _out(
+        frame,
+        wire,
+    )
+
+
+def _out(
+    frame: _Frame,
+    y: int,
+    /,
+) -> None:
+    """
+    On the wire past the provider, the word that last left found, not found,
+    or let go: bright for a second after the read it left at, dim until ten,
+    then gone.
+    """
+
+    seen = frame.seen
+
+    out = seen.out
+
+    at = frame.at
+
+    room = at.right - at.provider_at - 3
+
+    if out is None or out.left_at is None or room < 8:
+        return
+
+    if not within(
+        since=out.left_at,
+        now=seen.read_at,
+        seconds=OUT_SECONDS,
+    ):
+        return
+
+    fresh = within(
+        since=out.left_at,
+        now=seen.read_at,
+        seconds=LINGER_SECONDS,
+    )
+
+    mark = Mark.WORDNET if out.ending is Ending.LET_GO else Mark.ANSWERED
+
+    x = _put(
+        frame,
+        y,
+        at.provider_at + 2,
+        " ",
+        Role.TEXT,
+    )
+
+    x = _put(
+        frame,
+        y,
+        x,
+        frame.glyphs.marks[mark],
+        _MARK_ROLES[mark] if fresh else _PAST_ROLES[mark],
+    )
+
+    _put(
+        frame,
+        y,
+        x,
+        f" {
+            _clip(
+                out.lemma,
+                room - 4,
+                frame.glyphs.ellipsis,
+            )
+        } ",
+        Role.NAME if fresh else Role.LABEL,
+    )
+
 
 def _held_row(
     frame: _Frame,
@@ -835,23 +967,27 @@ def _held_row(
 
 def _notice(
     frame: _Frame,
+    shown: int,
     /,
 ) -> None:
     """
-    For three seconds after words are let go, how many, and what stands in for
-    them.
+    For three seconds after words are let go, how many of them have no row of
+    their own, and what stands in for them.
     """
 
-    words = sum(
-        count
-        for (
-            at,
-            count,
-        ) in frame.seen.let_go
-        if frame.seen.read_at - at < NOTICE_SECONDS
+    words = (
+        sum(
+            count
+            for (
+                at,
+                count,
+            ) in frame.seen.let_go
+            if frame.seen.read_at - at < NOTICE_SECONDS
+        )
+        - shown
     )
 
-    if not words:
+    if words <= 0:
         return
 
     at = frame.at
@@ -1000,8 +1136,8 @@ def _list(
 
         more = f"+{left}"
 
-        need = len(
-            name,
+        need = cell_len(
+            text=name,
         ) + (2 if index else 0)
 
         if (
@@ -1135,14 +1271,108 @@ def _try(
     } try"
 
 
-def _word_row(
+def _line(
     frame: _Frame,
-    lookup: LookupActivity,
+    y: int,
+    head: int,
     /,
 ) -> None:
     """
-    A word asking the provider or backing off, on a row of its own: its line
-    as far as it has got, and what it waits for.
+    The word's line, from where lines start to its head.
+    """
+
+    _put(
+        frame,
+        y,
+        frame.at.line_at,
+        frame.glyphs.wire
+        * max(
+            head - frame.at.line_at,
+            0,
+        ),
+        Role.STRUCTURE,
+    )
+
+
+def _shown(
+    frame: _Frame,
+    followed: Followed,
+    /,
+) -> tuple[RequestOutcome, ...]:
+    """
+    The marks of the lookup's requests that fit before the provider, the
+    newest.
+    """
+
+    room = frame.at.provider_at - frame.at.bucket_at - 7
+
+    return followed.marks[-room:] if room > 0 else ()
+
+
+def _way(
+    frame: _Frame,
+    y: int,
+    followed: Followed,
+    head: int,
+    /,
+) -> None:
+    """
+    The requests of this lookup that failed or were refused, at the provider,
+    where it happened, and the way the word went, dotted, from where its head
+    is now.
+    """
+
+    marks = _shown(
+        frame,
+        followed,
+    )
+
+    if not marks:
+        return
+
+    start = frame.at.provider_at - len(
+        marks,
+    )
+
+    if head < start - 1:
+        _put(
+            frame,
+            y,
+            head + 1,
+            frame.glyphs.trace * (start - head - 1),
+            Role.STRUCTURE,
+        )
+
+    for (
+        offset,
+        outcome,
+    ) in enumerate(
+        iterable=marks,
+    ):
+        mark = _MARKS[outcome]
+
+        _put(
+            frame,
+            y,
+            start + offset,
+            frame.glyphs.marks[mark],
+            _MARK_ROLES[mark],
+        )
+
+
+def _word_row(
+    *,
+    frame: _Frame,
+    followed: Followed,
+    caption: bool,
+) -> None:
+    """
+    A lookup on a row of its own: its name, `again` where the view saw the
+    word turned away before, its line as far as it has got, and what it waits
+    for at its head.
+
+    `caption` says whether a word behind the trial says so, which only the
+    topmost of them does.
     """
 
     canvas = frame.canvas
@@ -1158,54 +1388,194 @@ def _word_row(
         y,
     )
 
+    ending = followed.ending
+
     _put(
         frame,
         y,
         0,
         _clip(
-            lookup.lemma,
+            followed.lemma,
             at.name,
             glyphs.ellipsis,
         ),
-        Role.NAME,
+        Role.NAME if ending is None else Role.LABEL,
     )
 
-    seconds = lookup.seconds + frame.since
+    if followed.earlier:
+        _put(
+            frame,
+            y,
+            at.again_at,
+            "again",
+            Role.LABEL,
+        )
+
+    if ending is not None:
+        _ending(
+            frame,
+            y,
+            followed,
+            ending,
+        )
+
+        return
+
+    lookup = followed.lookup
+
+    match lookup.waiting_for:
+        case WaitCause.RETRY:
+            _backing_off(
+                frame,
+                y,
+                followed,
+            )
+
+        case WaitCause.TRIAL:
+            head = at.behind_at
+
+            _line(
+                frame,
+                y,
+                head,
+            )
+
+            _put(
+                frame,
+                y,
+                head,
+                glyphs.head,
+                Role.BEHIND,
+            )
+
+            _way(
+                frame,
+                y,
+                followed,
+                head,
+            )
+
+            if caption:
+                marks = _shown(
+                    frame,
+                    followed,
+                )
+
+                reach = (
+                    at.provider_at
+                    - len(
+                        marks,
+                    )
+                    if marks
+                    else at.right
+                )
+
+                _put(
+                    frame,
+                    y,
+                    head + 2,
+                    _fit(
+                        reach - head - 3,
+                        "behind the trial",
+                        "waits",
+                    ),
+                    Role.BEHIND,
+                )
+
+        case WaitCause.BUDGET | WaitCause.COOLDOWN:
+            place = frame.places[lookup.lemma]
+
+            head = max(
+                at.bucket_at - place,
+                at.switch_at + _SWITCH_WIDTH + 1,
+            )
+
+            _line(
+                frame,
+                y,
+                head,
+            )
+
+            _put(
+                frame,
+                y,
+                head,
+                str(
+                    object=place,
+                )
+                if place <= 9
+                else "+",
+                Role.QUEUE,
+            )
+
+            _way(
+                frame,
+                y,
+                followed,
+                head,
+            )
+
+        case WaitCause.PROVIDER:
+            _asking(
+                frame,
+                y,
+                followed,
+            )
+
+
+def _backing_off(
+    frame: _Frame,
+    y: int,
+    followed: Followed,
+    /,
+) -> None:
+    """
+    A word that waits out a backoff: its head `◂` just after its line starts,
+    the way it went, and when it asks again.
+    """
+
+    at = frame.at
+
+    lookup = followed.lookup
+
+    head = at.backoff_at
+
+    _line(
+        frame,
+        y,
+        head,
+    )
+
+    _put(
+        frame,
+        y,
+        head,
+        frame.glyphs.back,
+        Role.BACKOFF,
+    )
+
+    _way(
+        frame,
+        y,
+        followed,
+        head,
+    )
+
+    left = max(
+        (lookup.delay_seconds or 0.0) - (lookup.seconds + frame.since),
+        0.0,
+    )
 
     caption_at = at.provider_at + 2
 
-    if lookup.waiting_for is WaitCause.RETRY:
-        head = at.backoff_at
-
-        _put(
-            frame,
-            y,
-            at.line_at,
-            glyphs.wire
-            * max(
-                head - at.line_at,
-                0,
-            ),
-            Role.STRUCTURE,
-        )
-
-        _put(
-            frame,
-            y,
-            head,
-            glyphs.back,
-            Role.BACKOFF,
-        )
-
-        left = max(
-            (lookup.delay_seconds or 0.0) - seconds,
-            0.0,
-        )
-
-        # NOTE:
-        # No head stands at the provider for a word backing off, so its caption starts a cell earlier than an asking
-        # word's, and stops a cell short of the wire as that one does.
-        text = _fit(
+    # NOTE:
+    # No head stands at the provider for a word backing off, so its caption starts a cell earlier than an asking
+    # word's, and stops a cell short of the wire as that one does.
+    _put(
+        frame,
+        y,
+        caption_at - 1,
+        _fit(
             at.right - caption_at,
             f"{
                 _try(
@@ -1213,31 +1583,60 @@ def _word_row(
                 )
             } in {left:.1f} s",
             f"in {left:.1f} s",
-        )
+        ),
+        Role.BACKOFF,
+    )
+
+
+def _asking(
+    frame: _Frame,
+    y: int,
+    followed: Followed,
+    /,
+) -> None:
+    """
+    A word asking the provider: its line to the marks of its earlier requests,
+    its head at the provider, and how long it has asked.
+    """
+
+    at = frame.at
+
+    lookup = followed.lookup
+
+    head = at.provider_at
+
+    marks = _shown(
+        frame,
+        followed,
+    )
+
+    _line(
+        frame,
+        y,
+        head
+        - len(
+            marks,
+        ),
+    )
+
+    for (
+        offset,
+        outcome,
+    ) in enumerate(
+        iterable=marks,
+        start=-len(
+            marks,
+        ),
+    ):
+        mark = _MARKS[outcome]
 
         _put(
             frame,
             y,
-            caption_at - 1,
-            text,
-            Role.BACKOFF,
+            head + offset,
+            frame.glyphs.marks[mark],
+            _MARK_ROLES[mark],
         )
-
-        return
-
-    head = at.provider_at
-
-    _put(
-        frame,
-        y,
-        at.line_at,
-        glyphs.wire
-        * max(
-            head - at.line_at,
-            0,
-        ),
-        Role.STRUCTURE,
-    )
 
     late = lookup.seconds >= SLOW_AFTER
 
@@ -1247,11 +1646,11 @@ def _word_row(
         frame,
         y,
         head,
-        glyphs.head,
+        frame.glyphs.head,
         role,
     )
 
-    asked = f"{seconds:.1f} s"
+    asked = f"{lookup.seconds + frame.since:.1f} s"
 
     again = (
         f", {
@@ -1293,141 +1692,285 @@ def _word_row(
     )
 
 
-def _body(
+def _ending(
     frame: _Frame,
-    capacity: int,
+    y: int,
+    followed: Followed,
+    ending: Ending,
     /,
 ) -> None:
     """
-    The line at the bucket and the words behind the trial in a row each, a row
-    for each word asking or backing off, at most `capacity`, and a row that
-    counts the rest.
+    A lookup that has left, for a second: what the counts say of how it ended,
+    on its own line, which runs into the right edge when the word has its
+    answer, and stops short when it was turned away to be asked again.
     """
 
-    _queue_row(
-        frame,
-    )
+    at = frame.at
 
-    _behind_row(
-        frame,
-    )
+    glyphs = frame.glyphs
 
-    own = _own(
-        frame.provider,
-    )
-
-    chosen = _chosen(
-        own,
-        capacity,
-    )
-
-    for lookup in chosen:
-        _word_row(
-            frame,
-            lookup,
-        )
-
-    rest = len(
-        own,
-    ) - len(
-        chosen,
-    )
-
-    if rest:
-        y = frame.canvas.row()
-
-        _edge(
+    if ending in (
+        Ending.TURNED_AWAY,
+        Ending.ENDED,
+    ):
+        _line(
             frame,
             y,
-        )
-
-        text = _clip(
-            f"and {rest} more asking",
-            frame.at.right - 2,
-            frame.glyphs.ellipsis,
+            at.backoff_at,
         )
 
         _put(
             frame,
             y,
-            0,
-            text,
+            at.backoff_at,
+            glyphs.back,
             Role.LABEL,
         )
 
+        if ending is Ending.ENDED:
+            _put(
+                frame,
+                y,
+                at.backoff_at + 2,
+                "ended",
+                Role.LABEL,
+            )
 
-def _own(
-    provider: ProviderActivity,
-    /,
-) -> tuple[LookupActivity, ...]:
-    """
-    The lookups that have a row: those asking the provider or backing off.
-    """
+            return
 
-    return tuple(
-        lookup
-        for lookup in provider.lookups
-        if lookup.waiting_for
-        in (
-            WaitCause.PROVIDER,
-            WaitCause.RETRY,
+        marks = _shown(
+            frame,
+            followed,
         )
+
+        end = _put(
+            frame,
+            y,
+            at.backoff_at + 2,
+            _fit(
+                at.provider_at
+                - len(
+                    marks,
+                )
+                - at.backoff_at
+                - 4,
+                "turned away",
+            ),
+            Role.HELD,
+        )
+
+        _way(
+            frame,
+            y,
+            followed,
+            end,
+        )
+
+        return
+
+    mark = Mark.WORDNET if ending is Ending.LET_GO else Mark.ANSWERED
+
+    text = _fit(
+        at.right - at.line_at - 8,
+        _ENDINGS[ending],
+    )
+
+    start = (
+        at.right
+        - 3
+        - cell_len(
+            text=text,
+        )
+        - 2
+    )
+
+    _line(
+        frame,
+        y,
+        at.right,
+    )
+
+    _put(
+        frame,
+        y,
+        at.right,
+        glyphs.tee_left,
+        Role.STRUCTURE,
+    )
+
+    _put(
+        frame,
+        y,
+        start - 1,
+        " ",
+        Role.TEXT,
+    )
+
+    after = _put(
+        frame,
+        y,
+        start,
+        glyphs.marks[mark],
+        _MARK_ROLES[mark],
+    )
+
+    _put(
+        frame,
+        y,
+        after,
+        f" {text} ",
+        _MARK_ROLES[mark],
     )
 
 
-def _chosen(
-    own: tuple[LookupActivity, ...],
-    capacity: int,
+def _body(
+    frame: _Frame,
+    rows: Sequence[Followed | None],
+    fold: bool,
     /,
-) -> tuple[LookupActivity, ...]:
+) -> None:
     """
-    The lookups that get a row where there are more than `capacity`: the trial
-    first, then the oldest, shown in the order the activity gives them.
+    A row for each lookup that has one, a free row between them drawn as the
+    panel's edge alone so that the rows beneath it do not move, and a row that
+    counts the lookups at the client that have none.
     """
 
-    if (
+    said = False
+
+    for row in rows:
+        if row is None:
+            _edge(
+                frame,
+                frame.canvas.row(),
+            )
+
+            continue
+
+        behind = behind_the_trial(
+            followed=row,
+        )
+
+        _word_row(
+            frame=frame,
+            followed=row,
+            caption=behind and not said,
+        )
+
+        said = said or behind
+
+    shown = frozenset(row.number for row in rows if row is not None)
+
+    _more(
+        frame,
+        tuple(
+            each
+            for each in frame.seen.followed
+            if each.number not in shown
+            and not (
+                fold
+                and folded_away(
+                    followed=each,
+                )
+            )
+        ),
+    )
+
+
+def _more(
+    frame: _Frame,
+    rest: Sequence[Followed],
+    /,
+) -> None:
+    """
+    One dim row that counts the lookups at the client that have no row: those
+    in line by their places, those behind the trial, and those asking.
+    """
+
+    if not rest:
+        return
+
+    in_the_line = tuple(
+        sorted(
+            frame.places[each.lemma]
+            for each in rest
+            if in_line(
+                followed=each,
+            )
+        ),
+    )
+
+    behind = sum(
+        1
+        for each in rest
+        if behind_the_trial(
+            followed=each,
+        )
+    )
+
+    others = (
         len(
-            own,
+            rest,
         )
-        <= capacity
-    ):
-        return own
-
-    trial = tuple(
-        index
-        for (
-            index,
-            lookup,
-        ) in enumerate(
-            iterable=own,
+        - len(
+            in_the_line,
         )
-        if lookup.trial
+        - behind
     )
 
-    rest = tuple(
-        index
-        for (
-            index,
-            lookup,
-        ) in enumerate(
-            iterable=own,
+    parts: list[str] = []
+
+    if in_the_line:
+        first = ordinal(
+            number=in_the_line[0],
         )
-        if not lookup.trial
+
+        last = ordinal(
+            number=in_the_line[-1],
+        )
+
+        parts.append(
+            f"{
+                len(
+                    in_the_line,
+                )
+            } more in line, {first} to {last}"
+            if len(
+                in_the_line,
+            )
+            > 1
+            else f"1 more in line, {first}",
+        )
+
+    if behind:
+        parts.append(
+            f"{behind} more behind the trial",
+        )
+
+    if others:
+        parts.append(
+            f"{others} more asking",
+        )
+
+    y = frame.canvas.row()
+
+    _edge(
+        frame,
+        y,
     )
 
-    picked = frozenset(
-        (trial + rest)[:capacity],
-    )
-
-    return tuple(
-        lookup
-        for (
-            index,
-            lookup,
-        ) in enumerate(
-            iterable=own,
-        )
-        if index in picked
+    _put(
+        frame,
+        y,
+        0,
+        _clip(
+            "and "
+            + ", ".join(
+                parts,
+            ),
+            frame.at.right - 2,
+            frame.glyphs.ellipsis,
+        ),
+        Role.LABEL,
     )
 
 
@@ -1942,6 +2485,9 @@ def _frame(
         now=now,
         since=since,
         provider=provider,
+        places=places(
+            provider=provider,
+        ),
         state=state_of(
             seen=seen,
         ),
@@ -1969,14 +2515,23 @@ def _loop(
     now: float,
     inner: int,
     glyphs: Glyphs,
-    capacity: int,
+    folded: int | None,
 ) -> tuple[Text, ...]:
+    """
+    The loop's rows, for each lookup that has one of the rows the view kept:
+    at the loop's own budget, or, with `folded` the budget of the rows the
+    folded body keeps, the line at the bucket and the words behind the trial
+    in one row each.
+    """
+
     frame = _frame(
         seen=seen,
         now=now,
         inner=inner,
         glyphs=glyphs,
     )
+
+    rows = seen.rows.loop if folded is None else seen.rows.folded[folded]
 
     _header(
         frame,
@@ -1988,11 +2543,22 @@ def _loop(
 
     _notice(
         frame,
+        sum(1 for row in rows if row is not None and row.ending is Ending.LET_GO),
     )
+
+    if folded is not None:
+        _queue_row(
+            frame,
+        )
+
+        _behind_row(
+            frame,
+        )
 
     _body(
         frame,
-        capacity,
+        rows,
+        folded is not None,
     )
 
     _lane(
@@ -2130,9 +2696,10 @@ def _fold(
     room: int,
 ) -> tuple[Text, ...]:
     """
-    The loop's rows, with fewer rows for the words asking or backing off where
-    the terminal leaves the panel less than `room` rows, and one row that
-    counts the rest.
+    The loop's rows, folded where the terminal leaves the panel less than
+    `room` rows: first the line at the bucket and the words behind the trial
+    into one row each, then fewer rows for the words asking or backing off,
+    the oldest kept, and one row that counts the rest.
     """
 
     lines = _loop(
@@ -2140,7 +2707,24 @@ def _fold(
         now=now,
         inner=inner,
         glyphs=glyphs,
-        capacity=WORD_ROWS,
+        folded=None,
+    )
+
+    if (
+        len(
+            lines,
+        )
+        + 2
+        <= room
+    ):
+        return lines
+
+    lines = _loop(
+        seen=seen,
+        now=now,
+        inner=inner,
+        glyphs=glyphs,
+        folded=WORD_ROWS,
     )
 
     over = (
@@ -2154,40 +2738,31 @@ def _fold(
     if over <= 0:
         return lines
 
-    own = len(
-        _own(
-            seen.activity.provider,
-        ),
+    own = sum(
+        1
+        for followed in seen.followed
+        if not folded_away(
+            followed=followed,
+        )
     )
 
-    shown = min(
+    # NOTE:
+    # The words asking or backing off take `rows` rows now, the row that counts the rest included where there are more
+    # than eight; `over` rows must go, and the row that counts the rest takes one of the rows left.
+    rows = min(
         own,
         WORD_ROWS,
-    )
-
-    base = (
-        len(
-            lines,
-        )
-        - shown
-        - (1 if own > WORD_ROWS else 0)
-    )
-
-    capacity = (
-        own
-        if base + own + 2 <= room
-        else max(
-            room - base - 2 - 1,
-            1,
-        )
-    )
+    ) + (1 if own > WORD_ROWS else 0)
 
     return _loop(
         seen=seen,
         now=now,
         inner=inner,
         glyphs=glyphs,
-        capacity=capacity,
+        folded=max(
+            rows - over - 1,
+            1,
+        ),
     )
 
 
@@ -2244,7 +2819,7 @@ def loop_panel(
 
     # WARN:
     # Rich's `Panel` stylizes its title with the border's style underneath, so a bold `dictionary` takes the state's
-    # hue unless its own style names the default color; the design forbids a hue on bold text.
+    # hue unless its own style names the default color, and the guide's rule is that no hue is drawn on bold text.
     title = Text(
         no_wrap=True,
     )

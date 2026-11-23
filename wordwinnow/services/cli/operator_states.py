@@ -35,9 +35,11 @@ from wordwinnow.infrastructure.dictionary.resilience import (
 from wordwinnow.infrastructure.dictionary.wire import (
     FailureReason,
 )
-from wordwinnow.services.cli.operator_seen import (
+from wordwinnow.services.cli.operator_clock import (
     EPSILON,
     MINUTE,
+)
+from wordwinnow.services.cli.operator_seen import (
     Seen,
 )
 from wordwinnow.services.progress import (
@@ -304,31 +306,6 @@ def slow(
     )
 
 
-def queued(
-    *,
-    provider: ProviderActivity,
-) -> tuple[LookupActivity, ...]:
-    """
-    The lookups waiting for a token, in the order the bucket serves them: the
-    order they came, which is how long each has waited.
-    """
-
-    return tuple(
-        sorted(
-            (
-                lookup
-                for lookup in provider.lookups
-                if lookup.waiting_for
-                in (
-                    WaitCause.BUDGET,
-                    WaitCause.COOLDOWN,
-                )
-            ),
-            key=lambda lookup: -lookup.seconds,
-        ),
-    )
-
-
 def trial_name(
     *,
     provider: ProviderActivity,
@@ -359,6 +336,18 @@ def held_words(
     return 0 if report is None else report.turned_away + report.others_sleeping
 
 
+def again_words(
+    *,
+    seen: Seen,
+) -> int:
+    """
+    How many lookups at the client are of words the view saw turned away
+    before.
+    """
+
+    return sum(1 for followed in seen.followed if followed.earlier)
+
+
 def held_of(
     *,
     seen: Seen,
@@ -368,7 +357,9 @@ def held_of(
     The words to ask again at `now`.
 
     Where the stage reports them, the count leaves out the held words that
-    have woken and are at the client again, which `to ask` counts.
+    have woken and are at the client again, which the view knows by the
+    lookups it saw turned away before, and which `to ask` leaves out too,
+    since they are at the client.
     """
 
     if seen.stored is not None:
@@ -407,7 +398,11 @@ def held_of(
 
     return Held(
         count=max(
-            report.turned_away + report.others_sleeping,
+            report.turned_away
+            + report.others_sleeping
+            - again_words(
+                seen=seen,
+            ),
             0,
         ),
         wake_in=wake,
@@ -421,8 +416,9 @@ def to_ask(
     """
     The words not yet asked, or `None` before the stage's count is known.
 
-    For the stage here, the count less the words done, the words to ask again
-    by the last report, and the lookups at the client; for a worker's
+    For the stage here, the count less the words done, the words to ask again,
+    and the lookups at the client, so that a held word that has woken and is
+    at the client again is counted once, among the lookups; for a worker's
     analysis, less the words done and those it counts as waiting only, because
     the lookups at the client are the service's, for every analysis it serves.
     """
@@ -430,20 +426,23 @@ def to_ask(
     if seen.steps is None:
         return None
 
-    waiting = held_words(
-        seen=seen,
-    )
-
     if seen.stored is not None:
         return max(
-            seen.steps - seen.done - waiting,
+            seen.steps
+            - seen.done
+            - held_words(
+                seen=seen,
+            ),
             0,
         )
 
     return max(
         seen.steps
         - seen.done
-        - waiting
+        - held_of(
+            seen=seen,
+            now=seen.read_at,
+        ).count
         - len(
             seen.activity.provider.lookups,
         ),

@@ -10,7 +10,11 @@ only as the recording does.
 from collections import (
     Counter,
 )
+from collections.abc import (
+    Mapping,
+)
 from dataclasses import (
+    dataclass,
     replace,
 )
 from datetime import (
@@ -21,15 +25,19 @@ from datetime import (
 from io import (
     StringIO,
 )
+from math import (
+    inf,
+)
 from pathlib import (
     Path,
 )
 from re import (
-    compile as compile_pattern,
-)
-from re import (
+    DOTALL,
     search,
     sub,
+)
+from re import (
+    compile as compile_pattern,
 )
 from types import (
     MappingProxyType,
@@ -68,11 +76,14 @@ from tests.fakes.dictionary_stage import (
     Script,
     StageStarted,
     Watched,
+    WordTruth,
     record,
 )
 from tests.fakes.dictionary_stage_scenarios import (
     EVERY_MECHANISM_IN_TURN,
     HEALTHY_AGAINST_THE_PROVIDERS_OWN_LIMIT,
+    LONG_PAUSES_AND_REQUESTS_THAT_NEVER_COME_BACK,
+    OUTAGE_AS_THE_OPERATING_GUIDE_DESCRIBES_IT,
     OUTAGE_LONGER_THAN_THE_ANALYSIS_WAITS,
     PROVIDER_THAT_ANSWERS_SLOWLY,
     TWENTY_FOUR_LOOKUPS_AT_ONCE,
@@ -116,8 +127,17 @@ from wordwinnow.infrastructure.dictionary.wire import (
 from wordwinnow.services.cli.operator import (
     OperatorProgress,
 )
+from wordwinnow.services.cli.operator_canvas import (
+    Canvas,
+)
 from wordwinnow.services.cli.operator_look import (
     WORDS,
+)
+from wordwinnow.services.cli.operator_rows import (
+    MARKS_AT_MOST,
+    WORD_ROWS,
+    Ending,
+    Followed,
 )
 from wordwinnow.services.cli.operator_seen import (
     Keeper,
@@ -139,14 +159,15 @@ _FIXTURES: Final = (
 )
 
 # NOTE:
-# The frames of the reference set: its name, the script it is drawn from, the second of the recording, the width of
-# the terminal, and whether the terminal can draw only ASCII.
+# The frames of the reference set: its name, the script it is drawn from, the second of the recording, the width and
+# the height of the terminal, and whether the terminal can draw only ASCII.
 _FRAMES: Final = (
     (
         "healthy",
         HEALTHY_AGAINST_THE_PROVIDERS_OWN_LIMIT,
         26.0,
         80,
+        200,
         False,
     ),
     (
@@ -154,6 +175,7 @@ _FRAMES: Final = (
         HEALTHY_AGAINST_THE_PROVIDERS_OWN_LIMIT,
         12.0,
         80,
+        200,
         False,
     ),
     (
@@ -161,6 +183,7 @@ _FRAMES: Final = (
         EVERY_MECHANISM_IN_TURN,
         24.5,
         80,
+        200,
         False,
     ),
     (
@@ -168,6 +191,7 @@ _FRAMES: Final = (
         EVERY_MECHANISM_IN_TURN,
         18.0,
         80,
+        200,
         False,
     ),
     (
@@ -175,6 +199,7 @@ _FRAMES: Final = (
         EVERY_MECHANISM_IN_TURN,
         26.5,
         80,
+        200,
         False,
     ),
     (
@@ -182,6 +207,7 @@ _FRAMES: Final = (
         EVERY_MECHANISM_IN_TURN,
         31.0,
         80,
+        200,
         False,
     ),
     (
@@ -189,6 +215,7 @@ _FRAMES: Final = (
         EVERY_MECHANISM_IN_TURN,
         35.5,
         80,
+        200,
         False,
     ),
     (
@@ -196,6 +223,15 @@ _FRAMES: Final = (
         EVERY_MECHANISM_IN_TURN,
         47.5,
         80,
+        200,
+        False,
+    ),
+    (
+        "refused-word",
+        EVERY_MECHANISM_IN_TURN,
+        55.0,
+        80,
+        200,
         False,
     ),
     (
@@ -203,6 +239,7 @@ _FRAMES: Final = (
         EVERY_MECHANISM_IN_TURN,
         85.0,
         80,
+        200,
         False,
     ),
     (
@@ -210,6 +247,7 @@ _FRAMES: Final = (
         PROVIDER_THAT_ANSWERS_SLOWLY,
         20.0,
         80,
+        200,
         False,
     ),
     (
@@ -217,6 +255,31 @@ _FRAMES: Final = (
         OUTAGE_LONGER_THAN_THE_ANALYSIS_WAITS,
         68.5,
         80,
+        200,
+        False,
+    ),
+    (
+        "long-pause-held",
+        LONG_PAUSES_AND_REQUESTS_THAT_NEVER_COME_BACK,
+        70.0,
+        80,
+        200,
+        False,
+    ),
+    (
+        "trial-that-hangs",
+        LONG_PAUSES_AND_REQUESTS_THAT_NEVER_COME_BACK,
+        160.0,
+        80,
+        200,
+        False,
+    ),
+    (
+        "documented-outage",
+        OUTAGE_AS_THE_OPERATING_GUIDE_DESCRIBES_IT,
+        60.0,
+        80,
+        200,
         False,
     ),
     (
@@ -224,6 +287,7 @@ _FRAMES: Final = (
         EVERY_MECHANISM_IN_TURN,
         119.0,
         80,
+        200,
         False,
     ),
     (
@@ -231,6 +295,31 @@ _FRAMES: Final = (
         TWENTY_FOUR_LOOKUPS_AT_ONCE,
         30.0,
         80,
+        200,
+        False,
+    ),
+    (
+        "folded-short-terminal",
+        EVERY_MECHANISM_IN_TURN,
+        55.0,
+        80,
+        16,
+        False,
+    ),
+    (
+        "folded-on-trial",
+        EVERY_MECHANISM_IN_TURN,
+        35.5,
+        80,
+        14,
+        False,
+    ),
+    (
+        "folded-eight-asking",
+        PROVIDER_THAT_ANSWERS_SLOWLY,
+        20.0,
+        80,
+        16,
         False,
     ),
     (
@@ -238,15 +327,56 @@ _FRAMES: Final = (
         EVERY_MECHANISM_IN_TURN,
         31.0,
         60,
+        200,
         False,
+    ),
+    (
+        "wide-terminal",
+        EVERY_MECHANISM_IN_TURN,
+        24.5,
+        120,
+        200,
+        False,
+    ),
+    (
+        "ascii-struggling",
+        EVERY_MECHANISM_IN_TURN,
+        24.5,
+        80,
+        200,
+        True,
     ),
     (
         "ascii-on-trial",
         EVERY_MECHANISM_IN_TURN,
         35.5,
         80,
+        200,
         True,
     ),
+    (
+        "ascii-rate-limited",
+        EVERY_MECHANISM_IN_TURN,
+        55.0,
+        80,
+        200,
+        True,
+    ),
+)
+
+_GUIDE: Final = (
+    Path(
+        __file__,
+    )
+    .resolve()
+    .parents[3]
+    / "docs"
+    / "operating.md"
+)
+
+_FENCED: Final = compile_pattern(
+    pattern=r"```text\n(.*?)```\n",
+    flags=DOTALL,
 )
 
 _FIVE: Final = (
@@ -293,6 +423,15 @@ _HUES: Final = frozenset(
         "yellow",
         "red",
         "magenta",
+    ),
+)
+
+# NOTE:
+# The numbers of rows the view keeps an assignment of the fold's rows for, from one to the loop's eight.
+_FOLD_BUDGETS: Final = frozenset(
+    range(
+        1,
+        WORD_ROWS + 1,
     ),
 )
 
@@ -793,6 +932,14 @@ def _canvas_rows(
         Group,
     )
 
+    assert all(
+        isinstance(
+            row,
+            Text,
+        )
+        for row in rows.renderables
+    )
+
     return tuple(
         row
         for row in rows.renderables
@@ -860,6 +1007,234 @@ def _last_activity(
             Watched,
         )
     )[-1].activity
+
+
+# NOTE:
+# What the provider did to one lookup, by the recorder's truth, and what the view made of it at the read the lookup
+# left the client at: the lookup is its lemma's stay at the client, which ends at the first read without the lemma.
+@dataclass(
+    frozen=True,
+    kw_only=True,
+    slots=True,
+)
+@final
+class _Left:
+    followed: Followed
+
+    ending: Ending | None
+
+    marks: tuple[RequestOutcome, ...]
+
+
+_LEFT: Final[dict[Script, tuple[_Left, ...]]] = {}
+
+
+def _truth_of(
+    script: Script,
+    /,
+) -> MappingProxyType[tuple[str, float], tuple[Ending | None, tuple[RequestOutcome, ...]]]:
+    """
+    How each lookup that left the client ended, and the requests of it that
+    came back failed or refused, by the recorder's truth, keyed by its lemma
+    and the read it left at.
+
+    A lookup was turned away if a sleep of a word with its lemma began at or
+    after the read before; otherwise its ending is the answer the stage handed
+    back for those words.
+
+    Its requests are those for the lemma that arrived at or after the end of
+    the latest sleep that ended no later than the read that first saw it, and
+    no later than the read it left at, and that came back: `!` for a 429, `✗`
+    for a timeout or any status but 200 and 404.
+    """
+
+    recording = _recorded(
+        script,
+    )
+
+    words: dict[str, list[WordTruth]] = {}
+
+    for word in recording.words:
+        words.setdefault(
+            word.lemma.strip().lower(),
+            [],
+        ).append(
+            word,
+        )
+
+    truth: dict[tuple[str, float], tuple[Ending | None, tuple[RequestOutcome, ...]]] = {}
+
+    first: dict[str, float] = {}
+
+    before: tuple[float, frozenset[str]] | None = None
+
+    for entry in recording.timeline:
+        if not isinstance(
+            entry,
+            Watched,
+        ):
+            continue
+
+        now = frozenset(lookup.lemma for lookup in entry.activity.provider.lookups)
+
+        for lemma in now:
+            first.setdefault(
+                lemma,
+                entry.at,
+            )
+
+        if before is not None:
+            for lemma in sorted(
+                before[1] - now,
+            ):
+                group = words[lemma]
+
+                sleeps = tuple(sleep for word in group for sleep in word.sleeps)
+
+                if any(sleep.began >= before[0] - _SECOND for sleep in sleeps):
+                    ending: Ending | None = Ending.TURNED_AWAY
+
+                else:
+                    outcomes = frozenset(word.ending.outcome for word in group if word.ending is not None)
+
+                    ending = _TRUTH_ENDINGS.get(
+                        outcomes,
+                    )
+
+                begun = max(
+                    (sleep.ended for sleep in sleeps if sleep.ended <= first[lemma] + _SECOND),
+                    default=-inf,
+                )
+
+                requests = MappingProxyType(
+                    mapping={request.number: request for word in group for request in word.requests},
+                )
+
+                marks = tuple(
+                    RequestOutcome.REFUSED if request.status == 429 else RequestOutcome.FAILED
+                    for request in sorted(
+                        requests.values(),
+                        key=lambda request: request.arrived,
+                    )
+                    if begun - _SECOND <= request.arrived <= entry.at + _SECOND
+                    and request.answered is not None
+                    and request.status not in _ANSWERED_STATUSES
+                )
+
+                truth[
+                    (
+                        lemma,
+                        entry.at,
+                    )
+                ] = (
+                    ending,
+                    marks,
+                )
+
+                first.pop(
+                    lemma,
+                )
+
+        before = (
+            entry.at,
+            now,
+        )
+
+    return MappingProxyType(
+        mapping=truth,
+    )
+
+
+_TRUTH_ENDINGS: Final = MappingProxyType(
+    mapping={
+        frozenset(
+            (LookupOutcome.FOUND,),
+        ): Ending.FOUND,
+        frozenset(
+            (LookupOutcome.NOT_FOUND,),
+        ): Ending.NOT_FOUND,
+        frozenset(
+            (LookupOutcome.UNAVAILABLE,),
+        ): Ending.LET_GO,
+    },
+)
+
+
+def _lookups_that_left(
+    script: Script,
+    /,
+) -> tuple[_Left, ...]:
+    """
+    Every lookup the view followed that left the client in `script`, as it
+    stood at the read it left at, with the truth about it.
+    """
+
+    if script not in _LEFT:
+        truth = _truth_of(
+            script,
+        )
+
+        left: list[_Left] = []
+
+        for (
+            second,
+            progress,
+        ) in _reads(
+            script,
+        ):
+            seen = progress._keeper.seen
+
+            assert seen is not None
+
+            for followed in seen.lingering:
+                if (
+                    followed.left_at is None
+                    or abs(
+                        followed.left_at - second,
+                    )
+                    > _SECOND
+                ):
+                    continue
+
+                known = truth.get(
+                    (
+                        followed.lemma,
+                        second,
+                    ),
+                )
+
+                if known is None:
+                    continue
+
+                left.append(
+                    _Left(
+                        followed=followed,
+                        ending=known[0],
+                        marks=known[1],
+                    ),
+                )
+
+        _LEFT[script] = tuple(
+            left,
+        )
+
+    return _LEFT[script]
+
+
+# NOTE:
+# The statuses of the provider that answer a request, found or not: any other status, or none, is a failure.
+_ANSWERED_STATUSES: Final = frozenset(
+    (
+        200,
+        404,
+    ),
+)
+
+_SEVEN: Final = (
+    *_FIVE,
+    LONG_PAUSES_AND_REQUESTS_THAT_NEVER_COME_BACK,
+    OUTAGE_AS_THE_OPERATING_GUIDE_DESCRIBES_IT,
+)
 
 
 _CLOSED: Final = ProviderActivity(
@@ -1194,6 +1569,7 @@ class TestTheReferenceFrames:
             "script",
             "second",
             "columns",
+            "rows",
             "ascii_form",
         ),
         argvalues=_FRAMES,
@@ -1205,12 +1581,14 @@ class TestTheReferenceFrames:
         script: Script,
         second: float,
         columns: int,
+        rows: int,
         ascii_form: bool,
     ) -> None:
         progress = _view_at(
             script,
             second,
             columns=columns,
+            rows=rows,
             ascii_form=ascii_form,
         )
 
@@ -1804,6 +2182,7 @@ class TestTheThreeForms:
             "script",
             "second",
             "columns",
+            "rows",
             "ascii_form",
         ),
         argvalues=_FRAMES,
@@ -1815,12 +2194,14 @@ class TestTheThreeForms:
         script: Script,
         second: float,
         columns: int,
+        rows: int,
         ascii_form: bool,
     ) -> None:
         progress = _view_at(
             script,
             second,
             columns=columns,
+            rows=rows,
             ascii_form=ascii_form,
         )
 
@@ -1897,6 +2278,7 @@ class TestTheThreeForms:
             "script",
             "second",
             "columns",
+            "rows",
             "ascii_form",
         ),
         argvalues=_FRAMES,
@@ -1908,12 +2290,14 @@ class TestTheThreeForms:
         script: Script,
         second: float,
         columns: int,
+        rows: int,
         ascii_form: bool,
     ) -> None:
         progress = _view_at(
             script,
             second,
             columns=columns,
+            rows=rows,
             ascii_form=ascii_form,
         )
 
@@ -2081,6 +2465,86 @@ class TestShortAndNarrow:
 
         assert tallest > 10
 
+    def test_every_read_of_the_tour_at_60_columns_draws_the_narrow_form(
+        self,
+    ) -> None:
+        reads = 0
+
+        for (
+            _,
+            progress,
+        ) in _reads(
+            EVERY_MECHANISM_IN_TURN,
+            columns=60,
+        ):
+            rows = _plain(
+                progress,
+                columns=60,
+            )
+
+            assert any("the loop is drawn from 73 columns" in row for row in rows)
+
+            assert not any(
+                row.startswith(
+                    "│ last ",
+                )
+                for row in rows
+            )
+
+            reads += 1
+
+        assert reads > 400
+
+    def test_a_workers_sixteen_lookups_fold_to_fewer_rows_in_a_short_terminal(
+        self,
+    ) -> None:
+        (
+            progress,
+            _,
+        ) = _progress(
+            rows=16,
+        )
+
+        progress.processing(
+            progress=_stored(
+                steps=198,
+                done=10,
+            ),
+        )
+
+        _watched(
+            progress,
+            replace(
+                _CLOSED,
+                lookups=tuple(
+                    _asking(
+                        f"foo{number}",
+                        1.0 + number,
+                    )
+                    for number in range(
+                        16,
+                    )
+                ),
+            ),
+        )
+
+        assert (
+            _frame_height(
+                progress,
+            )
+            <= 16
+        )
+
+        assert any(
+            row.startswith(
+                "│ and ",
+            )
+            and " more asking " in row
+            for row in _plain(
+                progress,
+            )
+        )
+
     def test_a_panel_too_narrow_for_the_loop_draws_its_narrow_form(
         self,
     ) -> None:
@@ -2207,8 +2671,17 @@ class TestAnOlderServicesPayload:
 
 @final
 class TestDrawingReadsAndNeverWrites:
+    @mark.parametrize(
+        argnames="rows",
+        argvalues=(
+            200,
+            16,
+        ),
+    )
     def test_drawing_the_same_state_twice_gives_the_same_panel_and_changes_nothing_the_view_keeps(
         self,
+        *,
+        rows: int,
     ) -> None:
         recording = _recorded(
             EVERY_MECHANISM_IN_TURN,
@@ -2217,7 +2690,9 @@ class TestDrawingReadsAndNeverWrites:
         (
             progress,
             clock,
-        ) = _progress()
+        ) = _progress(
+            rows=rows,
+        )
 
         drawn = 0
 
@@ -2242,6 +2717,13 @@ class TestDrawingReadsAndNeverWrites:
 
             kept = progress._keeper.seen
 
+            # NOTE:
+            # What the view keeps is read-only, so a drawing that changed a lookup's marks, its rows, or the word last
+            # out would change what it says of itself, which this text holds, contents and all.
+            said = repr(
+                kept,
+            )
+
             first = _sent(
                 progress,
                 color=True,
@@ -2264,6 +2746,13 @@ class TestDrawingReadsAndNeverWrites:
 
                 assert progress._keeper.seen is kept
 
+                assert (
+                    repr(
+                        kept,
+                    )
+                    == said
+                )
+
             clock.now = entry.at
 
             assert (
@@ -2275,6 +2764,13 @@ class TestDrawingReadsAndNeverWrites:
             )
 
             assert progress._keeper.seen is kept
+
+            assert (
+                repr(
+                    kept,
+                )
+                == said
+            )
 
             drawn += 1
 
@@ -2301,6 +2797,56 @@ def _row_starting(
     )
 
     return found
+
+
+def _kept(
+    progress: OperatorProgress,
+    /,
+) -> tuple[object, ...]:
+    """
+    Everything the view keeps: what the drawing reads, and what the follower
+    keeps of its own.
+    """
+
+    follower = progress._keeper._follower
+
+    return (
+        repr(
+            progress._keeper.seen,
+        ),
+        follower._followed,
+        follower._lingering,
+        follower._out,
+        follower._turned_away,
+        follower._number,
+        repr(
+            follower._before,
+        ),
+        follower._unavailable_heard,
+        follower._loop._slots,
+        {
+            budget: assigner._slots
+            for (
+                budget,
+                assigner,
+            ) in follower._folds.items()
+        },
+    )
+
+
+def _followed(
+    progress: OperatorProgress,
+    /,
+) -> tuple[Followed, ...]:
+    """
+    The lookups at the client that the view follows.
+    """
+
+    seen = progress._keeper.seen
+
+    assert seen is not None
+
+    return seen.followed
 
 
 def _watched(
@@ -2554,13 +3100,19 @@ class TestTheWordsToAsk:
 
         assert any("and 8 more asking" in row for row in rows)
 
-    def test_a_workers_analysis_folds_the_line_at_the_bucket_into_one_row(
+    def test_a_workers_analysis_in_a_short_terminal_folds_the_line_at_the_bucket_into_one_row(
         self,
     ) -> None:
+        # NOTE:
+        # A row for each word is drawn where the terminal has room for it, and the line at the bucket is folded into
+        # one row only where it has not: this terminal leaves the panel 15 rows under a learner's line of two, and a
+        # row for each of the eight words that can have one takes 17.
         (
             progress,
             _,
-        ) = _progress()
+        ) = _progress(
+            rows=17,
+        )
 
         progress.processing(
             progress=_stored(
@@ -3142,3 +3694,1481 @@ class TestTheSentences:
                 progress,
             )
         )
+
+
+@final
+class TestEachWordHasARow:
+    def test_the_marks_of_every_lookup_the_view_followed_are_the_providers_script_or_it_ended_unknown(
+        self,
+    ) -> None:
+        total = 0
+
+        with_marks = 0
+
+        right = 0
+
+        wrong: list[tuple[str, tuple[RequestOutcome, ...], tuple[RequestOutcome, ...]]] = []
+
+        for script in _SEVEN:
+            for left in _lookups_that_left(
+                script,
+            ):
+                total += 1
+
+                truth = left.marks[-MARKS_AT_MOST:]
+
+                matches = left.followed.marks == truth
+
+                if truth:
+                    with_marks += 1
+
+                    right += matches
+
+                # NOTE:
+                # The one kind of lookup the rules miss: it was asking at the read before and left in the same quarter
+                # second as another lookup that ended otherwise, so the counts leave its ending unknown and its last
+                # request gets no mark.
+                if not matches and left.followed.ending is not Ending.ENDED:
+                    wrong.append(
+                        (
+                            left.followed.lemma,
+                            left.followed.marks,
+                            truth,
+                        ),
+                    )
+
+        print(
+            f"marks: {total} lookups left the client, {with_marks} with a mark, {right} marked as the provider's "
+            f"script says, {with_marks - right} not, all of them ended unknown",
+        )
+
+        assert not wrong, wrong
+
+        assert total > 600
+
+        assert right > 0.9 * with_marks
+
+    def test_the_ending_of_every_lookup_is_the_providers_or_unknown_and_never_another(
+        self,
+    ) -> None:
+        total = 0
+
+        known = 0
+
+        right = 0
+
+        wrong: list[tuple[str, Ending, Ending | None]] = []
+
+        for script in _SEVEN:
+            for left in _lookups_that_left(
+                script,
+            ):
+                ending = left.followed.ending
+
+                assert ending is not None
+
+                if left.ending is None:
+                    continue
+
+                total += 1
+
+                if ending is Ending.ENDED:
+                    continue
+
+                known += 1
+
+                if ending is left.ending:
+                    right += 1
+
+                else:
+                    wrong.append(
+                        (
+                            left.followed.lemma,
+                            ending,
+                            left.ending,
+                        ),
+                    )
+
+        mistaken = len(
+            wrong,
+        )
+
+        print(
+            f"endings: {total} lookups left the client, {known} told, {right} right, {mistaken} wrong, "
+            f"{total - known} ended unknown",
+        )
+
+        assert not wrong, wrong
+
+        assert total > 700
+
+        assert right > 0.9 * total
+
+    @mark.parametrize(
+        argnames="script",
+        argvalues=(
+            EVERY_MECHANISM_IN_TURN,
+            TWENTY_FOUR_LOOKUPS_AT_ONCE,
+        ),
+    )
+    def test_a_word_keeps_its_row_in_the_loop_and_in_each_fold_for_as_long_as_it_has_one(
+        self,
+        *,
+        script: Script,
+    ) -> None:
+        before: dict[int, Mapping[int, int]] = {}
+
+        compared = 0
+
+        for (
+            second,
+            progress,
+        ) in _reads(
+            script,
+        ):
+            seen = progress._keeper.seen
+
+            assert seen is not None
+
+            # NOTE:
+            # The loop's rows are key 0, and each fold's the budget it keeps rows for.
+            assignments = MappingProxyType(
+                mapping={
+                    0: seen.rows.loop,
+                    **seen.rows.folded,
+                },
+            )
+
+            assert seen.rows.folded.keys() == _FOLD_BUDGETS
+
+            for (
+                key,
+                rows,
+            ) in assignments.items():
+                now = MappingProxyType(
+                    mapping={
+                        row.number: slot
+                        for (
+                            slot,
+                            row,
+                        ) in enumerate(
+                            iterable=rows,
+                        )
+                        if row is not None
+                    },
+                )
+
+                assert len(
+                    now,
+                ) <= (key or WORD_ROWS), (
+                    second,
+                    key,
+                )
+
+                for (
+                    number,
+                    slot,
+                ) in before.get(
+                    key,
+                    {},
+                ).items():
+                    if number in now:
+                        assert now[number] == slot, (
+                            second,
+                            key,
+                            number,
+                        )
+
+                        compared += 1
+
+                before[key] = now
+
+        assert compared > 1000
+
+    def test_more_lookups_than_rows_draw_eight_rows_and_one_that_counts_those_in_line(
+        self,
+    ) -> None:
+        progress = _view_at(
+            TWENTY_FOUR_LOOKUPS_AT_ONCE,
+            30.0,
+        )
+
+        rows = _plain(
+            progress,
+        )
+
+        words = rows[4:-4]
+
+        assert (
+            len(
+                words,
+            )
+            == 9
+        )
+
+        assert words[-1].startswith(
+            "│ and 16 more in line, 5th to 20th ",
+        )
+
+        assert not any(
+            row.startswith(
+                "│ in line ",
+            )
+            for row in rows
+        )
+
+    def test_a_workers_lookups_of_every_kind_draw_eight_rows_and_one_row_that_counts_the_rest_by_kind(
+        self,
+    ) -> None:
+        (
+            progress,
+            _,
+        ) = _progress()
+
+        progress.processing(
+            progress=_stored(
+                steps=198,
+                done=10,
+            ),
+        )
+
+        _watched(
+            progress,
+            replace(
+                _CLOSED,
+                lookups=(
+                    *(
+                        _asking(
+                            f"foo{number}",
+                            1.0 + number,
+                        )
+                        for number in range(
+                            9,
+                        )
+                    ),
+                    *(
+                        LookupActivity(
+                            lemma=f"bar{number}",
+                            waiting_for=WaitCause.BUDGET,
+                            attempt=1,
+                            seconds=10.0 - number,
+                        )
+                        for number in range(
+                            4,
+                        )
+                    ),
+                    *(
+                        LookupActivity(
+                            lemma=f"baz{number}",
+                            waiting_for=WaitCause.TRIAL,
+                            attempt=1,
+                            seconds=1.0,
+                        )
+                        for number in range(
+                            3,
+                        )
+                    ),
+                ),
+            ),
+        )
+
+        rows = _plain(
+            progress,
+        )
+
+        assert (
+            sum(
+                1
+                for row in rows
+                if row.startswith(
+                    "│ foo",
+                )
+            )
+            == 8
+        )
+
+        assert any(
+            row.startswith(
+                "│ and 4 more in line, 1st to 4th, 3 more behind the trial, 1 more asking ",
+            )
+            for row in rows
+        )
+
+    def test_a_lemma_that_is_absent_at_a_read_and_present_again_is_a_new_lookup_with_a_clean_row(
+        self,
+    ) -> None:
+        (
+            progress,
+            clock,
+        ) = _progress()
+
+        progress.stage_started(
+            stage=Stage.DICTIONARY_ENRICHMENT,
+            steps=30,
+        )
+
+        _watched(
+            progress,
+            replace(
+                _CLOSED,
+                lookups=(
+                    LookupActivity(
+                        lemma="foo",
+                        waiting_for=WaitCause.RETRY,
+                        attempt=2,
+                        seconds=0.1,
+                        delay_seconds=0.5,
+                        reason=FailureReason.PROVIDER_ERROR,
+                    ),
+                ),
+            ),
+        )
+
+        (first,) = _followed(
+            progress,
+        )
+
+        assert first.marks == (RequestOutcome.FAILED,)
+
+        clock.now = 0.25
+
+        _watched(
+            progress,
+            _CLOSED,
+        )
+
+        clock.now = 0.5
+
+        _watched(
+            progress,
+            replace(
+                _CLOSED,
+                lookups=(
+                    _asking(
+                        "foo",
+                        0.1,
+                    ),
+                ),
+            ),
+        )
+
+        (second,) = _followed(
+            progress,
+        )
+
+        assert second.number != first.number
+
+        assert second.marks == ()
+
+        assert "✗" not in _row_starting(
+            progress,
+            "foo",
+        )
+
+    def test_a_word_behind_the_trial_keeps_the_mark_of_the_request_that_failed_and_says_where_it_waits(
+        self,
+    ) -> None:
+        (
+            progress,
+            clock,
+        ) = _progress()
+
+        progress.stage_started(
+            stage=Stage.DICTIONARY_ENRICHMENT,
+            steps=30,
+        )
+
+        _watched(
+            progress,
+            replace(
+                _CLOSED,
+                lookups=(
+                    LookupActivity(
+                        lemma="foo",
+                        waiting_for=WaitCause.RETRY,
+                        attempt=2,
+                        seconds=0.1,
+                        delay_seconds=0.5,
+                        reason=FailureReason.PROVIDER_ERROR,
+                    ),
+                ),
+            ),
+        )
+
+        clock.now = 0.25
+
+        _watched(
+            progress,
+            replace(
+                _CLOSED,
+                circuit=BreakerState.HALF_OPEN,
+                lookups=(
+                    _asking(
+                        "bar",
+                        0.1,
+                        trial=True,
+                    ),
+                    LookupActivity(
+                        lemma="foo",
+                        waiting_for=WaitCause.TRIAL,
+                        attempt=2,
+                        seconds=0.35,
+                    ),
+                ),
+            ),
+        )
+
+        row = _row_starting(
+            progress,
+            "foo",
+        )
+
+        assert "●" in row
+
+        assert (
+            row.count(
+                "✗",
+            )
+            == 1
+        )
+
+        assert "behind the trial" in row
+
+    def test_a_lemma_whose_attempt_falls_between_two_reads_is_a_new_lookup(
+        self,
+    ) -> None:
+        (
+            progress,
+            clock,
+        ) = _progress()
+
+        progress.stage_started(
+            stage=Stage.DICTIONARY_ENRICHMENT,
+            steps=30,
+        )
+
+        _watched(
+            progress,
+            replace(
+                _CLOSED,
+                lookups=(
+                    replace(
+                        _asking(
+                            "foo",
+                            0.5,
+                        ),
+                        attempt=3,
+                    ),
+                ),
+            ),
+        )
+
+        (first,) = _followed(
+            progress,
+        )
+
+        assert first.attempt == 3
+
+        clock.now = 0.25
+
+        _watched(
+            progress,
+            replace(
+                _CLOSED,
+                lookups=(
+                    _asking(
+                        "foo",
+                        0.1,
+                    ),
+                ),
+            ),
+        )
+
+        (second,) = _followed(
+            progress,
+        )
+
+        assert second.number != first.number
+
+        assert (
+            second.attempt,
+            second.marks,
+        ) == (
+            1,
+            (),
+        )
+
+    def test_a_lookup_that_earns_six_marks_draws_the_newest_five(
+        self,
+    ) -> None:
+        (
+            progress,
+            clock,
+        ) = _progress()
+
+        progress.stage_started(
+            stage=Stage.DICTIONARY_ENRICHMENT,
+            steps=30,
+        )
+
+        for attempt in range(
+            1,
+            8,
+        ):
+            clock.now = attempt * 0.25
+
+            _watched(
+                progress,
+                replace(
+                    _CLOSED,
+                    lookups=(
+                        LookupActivity(
+                            lemma="foo",
+                            waiting_for=WaitCause.RETRY,
+                            attempt=attempt,
+                            seconds=0.1,
+                            delay_seconds=0.5,
+                            reason=(FailureReason.RATE_LIMITED if attempt > 5 else FailureReason.PROVIDER_ERROR),
+                        ),
+                    ),
+                ),
+            )
+
+        (followed,) = _followed(
+            progress,
+        )
+
+        assert followed.marks == (
+            RequestOutcome.FAILED,
+            RequestOutcome.FAILED,
+            RequestOutcome.FAILED,
+            RequestOutcome.REFUSED,
+            RequestOutcome.REFUSED,
+        )
+
+        row = _row_starting(
+            progress,
+            "foo",
+        )
+
+        assert "✗✗✗!!" in row
+
+        assert "✗✗✗✗" not in row
+
+    def test_a_held_word_that_has_woken_and_is_at_the_client_is_counted_once_in_to_ask(
+        self,
+    ) -> None:
+        (
+            progress,
+            clock,
+        ) = _progress()
+
+        progress.stage_started(
+            stage=Stage.DICTIONARY_ENRICHMENT,
+            steps=30,
+        )
+
+        for (
+            second,
+            lookups,
+            unavailable,
+        ) in (
+            (
+                0.0,
+                (
+                    _asking(
+                        "foo",
+                        0.5,
+                    ),
+                ),
+                0,
+            ),
+            (
+                0.25,
+                (),
+                1,
+            ),
+        ):
+            clock.now = second
+
+            _watched(
+                progress,
+                replace(
+                    _CLOSED,
+                    lookups=lookups,
+                ),
+                LookupCounts(
+                    cached=0,
+                    found=0,
+                    not_found=0,
+                    unavailable=MappingProxyType(
+                        mapping={
+                            FailureReason.PROVIDER_ERROR: unavailable,
+                        },
+                    ),
+                ),
+            )
+
+        # NOTE:
+        # The stage holds the word it was turned away, and reports it with two others; it is asked again, so it is at
+        # the client with a word the stage asks for the first time, and the report still counts it among its three.
+        clock.now = 0.5
+
+        progress.dictionary_waiting(
+            held=(
+                held_words(
+                    reason=FailureReason.PROVIDER_ERROR,
+                    turned_away=3,
+                    turned_away_wake_in_seconds=9.0,
+                ),
+            ),
+            ending=False,
+            retry_in_seconds=9.0,
+            patience_left_seconds=170.0,
+        )
+
+        _watched(
+            progress,
+            replace(
+                _CLOSED,
+                lookups=(
+                    _asking(
+                        "foo",
+                        0.1,
+                    ),
+                    _asking(
+                        "bar",
+                        0.1,
+                    ),
+                ),
+            ),
+            LookupCounts(
+                cached=0,
+                found=0,
+                not_found=0,
+                unavailable=MappingProxyType(
+                    mapping={
+                        FailureReason.PROVIDER_ERROR: 1,
+                    },
+                ),
+            ),
+        )
+
+        assert _plain(
+            progress,
+        )[1].startswith(
+            "│ to ask 26 ",
+        )
+
+        assert _row_starting(
+            progress,
+            "to ask again",
+        ).startswith(
+            "│ to ask again 2 ",
+        )
+
+        assert _row_starting(
+            progress,
+            "foo",
+        ).startswith(
+            "│ foo         again ",
+        )
+
+    def test_at_the_tours_47_5_s_where_the_report_holds_nothing_to_ask_is_the_recorders_truth(
+        self,
+    ) -> None:
+        recording = _recorded(
+            EVERY_MECHANISM_IN_TURN,
+        )
+
+        read = tuple(
+            entry
+            for entry in recording.timeline
+            if isinstance(
+                entry,
+                Watched,
+            )
+            and entry.at <= 47.5 + _SECOND
+        )[-1]
+
+        steps = next(
+            entry.steps
+            for entry in recording.timeline
+            if isinstance(
+                entry,
+                StageStarted,
+            )
+        )
+
+        done = sum(
+            1
+            for entry in recording.timeline
+            if isinstance(
+                entry,
+                LookedUp,
+            )
+            and entry.at <= read.at + _SECOND
+        )
+
+        asleep = sum(1 for word in recording.words for sleep in word.sleeps if sleep.began <= read.at < sleep.ended)
+
+        at_the_client = len(
+            read.activity.provider.lookups,
+        )
+
+        # NOTE:
+        # The words neither done, nor asleep, nor at the client: here the last report holds none of them, so the words
+        # woken and not at the client are all there is to ask.
+        assert steps is not None
+
+        truth = steps - done - asleep - at_the_client
+
+        progress = _view_at(
+            EVERY_MECHANISM_IN_TURN,
+            47.5,
+        )
+
+        seen = progress._keeper.seen
+
+        assert seen is not None
+
+        assert seen.done == done
+
+        assert seen.report is not None
+
+        assert seen.report.turned_away + seen.report.others_sleeping == 0
+
+        assert any(followed.earlier for followed in seen.followed)
+
+        assert truth == 54
+
+        assert _plain(
+            progress,
+        )[1].startswith(
+            f"│ to ask {truth} ",
+        )
+
+    def test_where_the_report_holds_fewer_words_than_the_lookups_marked_again_to_ask_leaves_none_out_or_twice(
+        self,
+    ) -> None:
+        (
+            progress,
+            clock,
+        ) = _progress()
+
+        progress.stage_started(
+            stage=Stage.DICTIONARY_ENRICHMENT,
+            steps=30,
+        )
+
+        for (
+            second,
+            lookups,
+            unavailable,
+        ) in (
+            (
+                0.0,
+                (
+                    _asking(
+                        "foo",
+                        0.5,
+                    ),
+                ),
+                0,
+            ),
+            (
+                0.25,
+                (),
+                1,
+            ),
+            (
+                0.5,
+                (
+                    _asking(
+                        "foo",
+                        0.1,
+                    ),
+                    _asking(
+                        "bar",
+                        0.1,
+                    ),
+                ),
+                1,
+            ),
+        ):
+            clock.now = second
+
+            _watched(
+                progress,
+                replace(
+                    _CLOSED,
+                    lookups=lookups,
+                ),
+                LookupCounts(
+                    cached=0,
+                    found=0,
+                    not_found=0,
+                    unavailable=MappingProxyType(
+                        mapping={
+                            FailureReason.PROVIDER_ERROR: unavailable,
+                        },
+                    ),
+                ),
+            )
+
+        # NOTE:
+        # The stage has reported no held word, and `foo` is at the client marked `again`, so nothing is to ask again
+        # and the two lookups at the client are the only words of the thirty that are neither done nor to ask.
+        assert _plain(
+            progress,
+        )[1].startswith(
+            "│ to ask 28 ",
+        )
+
+        assert not any(
+            row.startswith(
+                "│ to ask again",
+            )
+            for row in _plain(
+                progress,
+            )
+        )
+
+    def test_a_view_given_the_services_reads_before_any_stage_or_report_tells_no_ending_from_unavailable_alone(
+        self,
+    ) -> None:
+        (
+            progress,
+            clock,
+        ) = _progress()
+
+        for (
+            second,
+            lookups,
+            unavailable,
+        ) in (
+            (
+                0.0,
+                (
+                    _asking(
+                        "foo",
+                        0.5,
+                    ),
+                ),
+                0,
+            ),
+            (
+                0.25,
+                (),
+                1,
+            ),
+            (
+                0.5,
+                (
+                    _asking(
+                        "foo",
+                        0.1,
+                    ),
+                ),
+                1,
+            ),
+        ):
+            clock.now = second
+
+            _watched(
+                progress,
+                replace(
+                    _CLOSED,
+                    lookups=lookups,
+                ),
+                LookupCounts(
+                    cached=0,
+                    found=0,
+                    not_found=0,
+                    unavailable=MappingProxyType(
+                        mapping={
+                            FailureReason.PROVIDER_ERROR: unavailable,
+                        },
+                    ),
+                ),
+            )
+
+            if second == 0.25:
+                row = _row_starting(
+                    progress,
+                    "foo",
+                )
+
+                assert "◂ ended" in row
+
+                assert "turned away" not in row
+
+        assert "again" not in _row_starting(
+            progress,
+            "foo",
+        )
+
+    def test_where_the_service_holds_the_lookups_a_lookup_that_leaves_as_only_unavailable_grows_ended_unknown(
+        self,
+    ) -> None:
+        (
+            progress,
+            clock,
+        ) = _progress()
+
+        progress.processing(
+            progress=_stored(
+                steps=198,
+                done=10,
+            ),
+        )
+
+        for (
+            second,
+            lookups,
+            unavailable,
+        ) in (
+            (
+                0.0,
+                (
+                    _asking(
+                        "foo",
+                        0.5,
+                    ),
+                ),
+                0,
+            ),
+            (
+                0.25,
+                (),
+                1,
+            ),
+        ):
+            clock.now = second
+
+            _watched(
+                progress,
+                replace(
+                    _CLOSED,
+                    lookups=lookups,
+                ),
+                LookupCounts(
+                    cached=0,
+                    found=0,
+                    not_found=0,
+                    unavailable=MappingProxyType(
+                        mapping={
+                            FailureReason.PROVIDER_ERROR: unavailable,
+                        },
+                    ),
+                ),
+            )
+
+        row = _row_starting(
+            progress,
+            "foo",
+        )
+
+        assert "◂ ended" in row
+
+        assert "turned away" not in row
+
+        assert "let go" not in row
+
+        clock.now = 0.5
+
+        _watched(
+            progress,
+            replace(
+                _CLOSED,
+                lookups=(
+                    _asking(
+                        "foo",
+                        0.1,
+                    ),
+                ),
+            ),
+            LookupCounts(
+                cached=0,
+                found=0,
+                not_found=0,
+                unavailable=MappingProxyType(
+                    mapping={
+                        FailureReason.PROVIDER_ERROR: 1,
+                    },
+                ),
+            ),
+        )
+
+        assert "again" not in _row_starting(
+            progress,
+            "foo",
+        )
+
+    def test_a_row_that_has_left_stays_for_a_second_and_the_last_word_out_is_bright_for_one_and_gone_after_ten(
+        self,
+    ) -> None:
+        (
+            progress,
+            clock,
+        ) = _progress()
+
+        progress.stage_started(
+            stage=Stage.DICTIONARY_ENRICHMENT,
+            steps=30,
+        )
+
+        _watched(
+            progress,
+            replace(
+                _CLOSED,
+                lookups=(
+                    _asking(
+                        "foo",
+                        0.5,
+                    ),
+                ),
+            ),
+        )
+
+        clock.now = 10.0
+
+        _watched(
+            progress,
+            _CLOSED,
+            LookupCounts(
+                cached=0,
+                found=0,
+                not_found=1,
+                unavailable=MappingProxyType(
+                    mapping={},
+                ),
+            ),
+        )
+
+        left_at = 10.0
+
+        for (
+            after,
+            has_row,
+            bright,
+            on_the_wire,
+        ) in (
+            (
+                0.0,
+                True,
+                True,
+                True,
+            ),
+            (
+                0.75,
+                True,
+                True,
+                True,
+            ),
+            (
+                1.0,
+                False,
+                False,
+                True,
+            ),
+            (
+                9.75,
+                False,
+                False,
+                True,
+            ),
+            (
+                10.0,
+                False,
+                False,
+                False,
+            ),
+        ):
+            clock.now = left_at + after
+
+            _watched(
+                progress,
+                _CLOSED,
+                LookupCounts(
+                    cached=0,
+                    found=0,
+                    not_found=1,
+                    unavailable=MappingProxyType(
+                        mapping={},
+                    ),
+                ),
+            )
+
+            rows = _plain(
+                progress,
+            )
+
+            assert (
+                any(
+                    row.startswith(
+                        "│ foo ",
+                    )
+                    and "✓ not found" in row
+                    for row in rows
+                )
+                is has_row
+            ), after
+
+            assert any("◎─ ✓ foo " in row for row in rows) is on_the_wire, after
+
+            if on_the_wire:
+                wire = next(
+                    row
+                    for row in _cells(
+                        _sent(
+                            progress,
+                            color=True,
+                        ),
+                    )
+                    if "".join(cell.character for cell in row).count(
+                        "◎─ ✓ foo ",
+                    )
+                )
+
+                text = "".join(cell.character for cell in wire)
+
+                start = text.index(
+                    "✓ foo",
+                )
+
+                assert wire[start].dim is not bright, after
+
+                assert wire[start + 2].bold is bright, after
+
+    @mark.parametrize(
+        argnames="lemma",
+        argvalues=(
+            "漢字漢字漢字漢字漢字漢字",
+            "e\N{COMBINING ACUTE ACCENT}" * 13,
+        ),
+    )
+    def test_a_lemma_of_wide_characters_or_with_combining_marks_leaves_every_row_its_width_in_cells(
+        self,
+        *,
+        lemma: str,
+    ) -> None:
+        (
+            progress,
+            clock,
+        ) = _progress()
+
+        progress.stage_started(
+            stage=Stage.DICTIONARY_ENRICHMENT,
+            steps=30,
+        )
+
+        _watched(
+            progress,
+            replace(
+                _CLOSED,
+                lookups=(
+                    _asking(
+                        lemma,
+                        0.5,
+                    ),
+                    LookupActivity(
+                        lemma=lemma + "s",
+                        waiting_for=WaitCause.BUDGET,
+                        attempt=1,
+                        seconds=0.1,
+                    ),
+                ),
+            ),
+        )
+
+        clock.now = 0.25
+
+        _watched(
+            progress,
+            replace(
+                _CLOSED,
+                lookups=(
+                    LookupActivity(
+                        lemma=lemma + "s",
+                        waiting_for=WaitCause.BUDGET,
+                        attempt=1,
+                        seconds=0.35,
+                    ),
+                ),
+            ),
+            LookupCounts(
+                cached=0,
+                found=1,
+                not_found=0,
+                unavailable=MappingProxyType(
+                    mapping={},
+                ),
+            ),
+        )
+
+        rows = _canvas_rows(
+            progress,
+        )
+
+        assert (
+            len(
+                rows,
+            )
+            > 5
+        )
+
+        for row in rows:
+            assert row.cell_len == 75, row.plain
+
+        assert any(
+            row.plain.startswith(
+                lemma[:3],
+            )
+            for row in rows
+        )
+
+        assert any("✓ " in row.plain and "…" in row.plain for row in rows)
+
+
+@final
+class TestTheGuide:
+    def test_every_frame_the_guide_shows_is_a_panel_the_product_draws_and_every_row_it_quotes_a_whole_row(
+        self,
+    ) -> None:
+        text = _GUIDE.read_text(
+            encoding="utf-8",
+        )
+
+        start = text.index(
+            "\n## The operator view\n",
+        )
+
+        section = text[
+            start : text.index(
+                "\n## ",
+                start + 1,
+            )
+        ]
+
+        fixtures = MappingProxyType(
+            mapping={
+                path.stem: path.read_text(
+                    encoding="utf-8",
+                )
+                for path in _FIXTURES.glob(
+                    pattern="*.txt",
+                )
+            },
+        )
+
+        rows = frozenset(row for fixture in fixtures.values() for row in fixture.splitlines())
+
+        shown = []
+
+        for block in _FENCED.findall(
+            string=section,
+        ):
+            if block in fixtures.values():
+                shown.append(
+                    block,
+                )
+
+                continue
+
+            assert block.splitlines(), block
+
+            for row in block.splitlines():
+                assert row in rows, row
+
+        assert (
+            len(
+                shown,
+            )
+            >= 5
+        )
+
+        assert all(
+            block.startswith(
+                "╭─ dictionary",
+            )
+            for block in shown
+        )
+
+
+@final
+class TestTheCanvas:
+    @mark.parametrize(
+        argnames=(
+            "puts",
+            "expected",
+        ),
+        argvalues=(
+            (
+                (
+                    (
+                        1,
+                        "漢",
+                    ),
+                ),
+                " 漢   ",
+            ),
+            (
+                (
+                    (
+                        1,
+                        "漢",
+                    ),
+                    (
+                        2,
+                        "x",
+                    ),
+                ),
+                "  x   ",
+            ),
+            (
+                (
+                    (
+                        1,
+                        "漢",
+                    ),
+                    (
+                        0,
+                        "x",
+                    ),
+                    (
+                        0,
+                        "yz",
+                    ),
+                ),
+                "yz    ",
+            ),
+            (
+                (
+                    (
+                        1,
+                        "漢",
+                    ),
+                    (
+                        0,
+                        "xy",
+                    ),
+                ),
+                "xy    ",
+            ),
+            (
+                (
+                    (
+                        5,
+                        "漢",
+                    ),
+                ),
+                "      ",
+            ),
+            (
+                (
+                    (
+                        0,
+                        "e\N{COMBINING ACUTE ACCENT}f",
+                    ),
+                ),
+                "e\N{COMBINING ACUTE ACCENT}f    ",
+            ),
+        ),
+    )
+    def test_a_row_is_its_width_in_cells_whatever_is_put_on_it_and_over_what(
+        self,
+        *,
+        puts: tuple[tuple[int, str], ...],
+        expected: str,
+    ) -> None:
+        canvas = Canvas(
+            width=6,
+        )
+
+        y = canvas.row()
+
+        for (
+            x,
+            text,
+        ) in puts:
+            canvas.put(
+                y=y,
+                x=x,
+                text=text,
+            )
+
+        (line,) = canvas.lines()
+
+        assert line.plain == expected
+
+        assert line.cell_len == 6
+
+
+@final
+class TestDrawingChangesNothingTheViewKeeps:
+    def test_a_view_drawn_at_every_read_and_between_them_keeps_what_one_never_drawn_keeps(
+        self,
+    ) -> None:
+        recording = _recorded(
+            EVERY_MECHANISM_IN_TURN,
+        )
+
+        (
+            drawn,
+            drawn_clock,
+        ) = _progress(
+            rows=16,
+        )
+
+        (
+            never,
+            never_clock,
+        ) = _progress(
+            rows=16,
+        )
+
+        compared = 0
+
+        for entry in recording.timeline:
+            _heard(
+                drawn,
+                drawn_clock,
+                entry,
+            )
+
+            _heard(
+                never,
+                never_clock,
+                entry,
+            )
+
+            if not isinstance(
+                entry,
+                Watched,
+            ):
+                continue
+
+            for step in (
+                0.0,
+                0.05,
+                0.2,
+            ):
+                drawn_clock.now = entry.at + step
+
+                _sent(
+                    drawn,
+                    color=True,
+                )
+
+            drawn_clock.now = entry.at
+
+            assert _kept(
+                drawn,
+            ) == _kept(
+                never,
+            ), entry.at
+
+            compared += 1
+
+        assert compared > 400

@@ -9,9 +9,6 @@ from collections.abc import (
 from dataclasses import (
     dataclass,
 )
-from math import (
-    floor,
-)
 from types import (
     MappingProxyType,
 )
@@ -49,16 +46,17 @@ from wordwinnow.infrastructure.dictionary.resilience import (
 from wordwinnow.infrastructure.dictionary.wire import (
     FailureReason,
 )
-
-# NOTE:
-# The seconds the lane and the notice of words let go look back over: the lane shows a minute, and a word let go is
-# kept for as long as the lane can show it.
-MINUTE: Final = 60
-
-# NOTE:
-# A clock second is the whole second of the clock's reading, and a reading a hair under a whole second is that second:
-# the recorded times of a virtual clock are sums of fractions, and a request must stay in the cell it came back in.
-EPSILON: Final = 1e-6
+from wordwinnow.services.cli.operator_clock import (
+    MINUTE,
+    clock_second,
+)
+from wordwinnow.services.cli.operator_follow import (
+    Follower,
+)
+from wordwinnow.services.cli.operator_rows import (
+    Followed,
+    Rows,
+)
 
 _RANK: Final = MappingProxyType(
     mapping={
@@ -67,19 +65,6 @@ _RANK: Final = MappingProxyType(
         BreakerState.OPEN: 2,
     },
 )
-
-
-def clock_second(
-    *,
-    moment: float,
-) -> int:
-    """
-    The clock second that `moment` falls in.
-    """
-
-    return floor(
-        moment + EPSILON,
-    )
 
 
 @dataclass(
@@ -141,6 +126,12 @@ class Seen:
     `let_go` holds each time some words were let go, with how many, for the
     last minute, and `circuits` the breaker's worst state in each clock second
     of it, the oldest first.
+
+    `followed` holds each lookup at the client, the first seen first, and
+    `lingering` each that left less than a second before the read, both with
+    the marks of their requests that failed or were refused; `out` is the
+    lookup that last left found, not found, or let go, and `rows` which of
+    them has which row.
     """
 
     activity: DictionaryActivity
@@ -172,6 +163,14 @@ class Seen:
     circuits: tuple[tuple[int, BreakerState], ...]
 
     last_reason: FailureReason | None
+
+    followed: tuple[Followed, ...]
+
+    lingering: tuple[Followed, ...]
+
+    out: Followed | None
+
+    rows: Rows
 
 
 @final
@@ -228,6 +227,10 @@ class Keeper:
         self._activity: DictionaryActivity | None = None
 
         self._read_at = 0.0
+
+        self._follower: Final = Follower()
+
+        self._staged = False
 
     @property
     def seen(
@@ -288,6 +291,12 @@ class Keeper:
         if not provider.consecutive_failures and not retrying:
             self._last_reason = None
 
+        self._follower.read(
+            activity=activity,
+            now=now,
+            distributed=self._stored is not None or not self._staged,
+        )
+
         self._before = provider
 
         self._activity = activity
@@ -312,6 +321,12 @@ class Keeper:
 
         if stage is not Stage.DICTIONARY_ENRICHMENT:
             return
+
+        # NOTE:
+        # The local mode reports the stage before any lookup, and the distributed mode never reports it, so until it
+        # is reported the lookups may be the service's, for every analysis, so no ending is told from `unavailable`
+        # alone and no row is marked `again`; found and not found are still told.
+        self._staged = True
 
         self._steps = steps
 
@@ -338,6 +353,8 @@ class Keeper:
         self._done += 1
 
         if lookup.outcome is LookupOutcome.UNAVAILABLE:
+            self._follower.let_go_heard()
+
             self._let_go.append(
                 (
                     now,
@@ -497,4 +514,8 @@ class Keeper:
                 ),
             ),
             last_reason=self._last_reason,
+            followed=self._follower.followed,
+            lingering=self._follower.lingering,
+            out=self._follower.out,
+            rows=self._follower.rows,
         )

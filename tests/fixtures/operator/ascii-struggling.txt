@@ -1,0 +1,17 @@
++- dictionary  STRUGGLING  ---------------------------------------------------+
+| to ask 64             breaker closed        bucket   provider               |
+|                            XXXX.    in line |:...| 2 a second               |
+| --------------------------o=====o-----------\____/------@- W faculty -----+ |
+| -- 1 let go: W WordNet's meaning stands in where it has one --------------+ |
+| finely            ------------------------------------XXo 0.5 s, 3rd try  | |
+| incident          ---------------------5...............X                  | |
+| kindly            ------------------------2                               | |
+| intrusion         --------------------------------------o 0.0 s           | |
+| former            -------------------------1..........XX                  | |
+| high-power        ----------------------4.............XX                  | |
+| lead              --------------------6                                   | |
+| hopeless          -----------------------3.............X                  | |
+| last 60 s                                      -++-++++++++-+XXXXXXXXXX---+ |
+| 4 requests failed in a row; 1 more and the breaker opens (server error)     |
+| resolved 44 of 116:  8 cache  + 32 found  2 not found  W 2 let go           |
++-----------------------------------------------------------------------------+

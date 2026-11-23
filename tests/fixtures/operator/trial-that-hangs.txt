@@ -1,0 +1,17 @@
+╭─ dictionary  ON TRIAL  ─────────────────────────────────────────────────────╮
+│ to ask 0             breaker half-open      bucket   provider               │
+│                       trial 1 decides       ╷●●●●╷ 2 a second               │
+│ ──────────────────────────●┄┄┄┄┄●┄┄┄┄┄┄┄┄┄┄┄╰────╯┄┄┄┄┄┄◎┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╮ │
+│ to ask again 11                                            as places free │ │
+│ swiftly           ─────────────────────────────────────✗● 19.1 s, 2nd try │ │
+│ soul        again ──────────────────────────────────────● trial 1, 8.1 s  │ │
+│ spirit            ─────────────────────────────────────✗● 17.7 s, 2nd try │ │
+│ tragedy           ──────● behind the trial                                │ │
+│ scent             ──────●                                                 │ │
+│ questionab…       ──────●                                                 │ │
+│ sunk              ─────────────────────────────────────✗● 18.7 s, 2nd try │ │
+│ sufficient        ─────────────────────────────────────✗● 18.2 s, 2nd try │ │
+│ last 60 s   ✓✓✓✓✓✓✓✓✓✓✓────────────────────────────✗✗✗✗╌ open ╌┄┄┄┄┄┄┄┄┄──╯ │
+│ breaker half-open: trial 1, soul, decides; the rest wait for it             │
+│ resolved 100 of 116:  18 cache  ✓ 77 found  5 not found  W 0 let go         │
+╰─────────────────────────────────────────────────────────────────────────────╯

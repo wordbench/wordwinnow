@@ -1,11 +1,15 @@
 ╭─ dictionary  STRUGGLING  ───────────────────────────────────────────────────╮
 │ to ask 70             breaker closed        bucket   provider               │
 │                            ✗✗✗✗·    in line ╷○···╷ 2 a second               │
-│ ──────────────────────────●━━━━━●───────────╰────╯──────◎─────────────────╮ │
-│ in line 5         ─────────────────────────1 high-power, faculty  +3      │ │
-│ excellent         ─◂                                     3rd try in 0.1 s │ │
-│ factor            ──────────────────────────────────────● 0.0 s, 2nd try  │ │
-│ formerly          ─◂                                     2nd try in 0.1 s │ │
+│ ──────────────────────────●━━━━━●───────────╰────╯──────◎─ ✓ fierce ──────╮ │
+│ finely            ──────────────────────4┄┄┄┄┄┄┄┄┄┄┄┄┄┄✗                  │ │
+│ home-centr…       ───────────────────────3                                │ │
+│ formerly          ─◂┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄✗ 2nd try in 0.1 s │ │
+│ excellent         ─◂┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄✗✗ 3rd try in 0.1 s │ │
+│ former            ─────────────────────5┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄✗                  │ │
+│ high-power        ─────────────────────────1                              │ │
+│ faculty           ────────────────────────2┄┄┄┄┄┄┄┄┄┄┄┄✗                  │ │
+│ factor            ─────────────────────────────────────✗● 0.0 s, 2nd try  │ │
 │ last 60 s                                            ─✓✓─✓✓✓✓✓✓✓✓─✓✗✗✗✗───╯ │
 │ 4 requests failed in a row; 1 more and the breaker opens (server error)     │
 │ resolved 38 of 116:  7 cache  ✓ 30 found  1 not found  W 0 let go           │

@@ -1,5 +1,5 @@
 """
-Five scripts for the dictionary stage's recorder, each of one analysis's
+Seven scripts for the dictionary stage's recorder, each of one analysis's
 dictionary stage against a provider that misbehaves in its own way.
 
 The analysis is the sample story's, 116 words to look up, 17 of them already
@@ -21,6 +21,7 @@ from tests.fakes.dictionary_stage import (
     Refusing,
     Script,
     Settings,
+    Silent,
     Window,
     Word,
 )
@@ -388,6 +389,89 @@ TWENTY_FOUR_LOOKUPS_AT_ONCE: Final = Script(
         starts_seconds=0.5,
         after_seconds=3.0,
         limit_seconds=200.0,
+        seed=11,
+    ),
+)
+
+
+# NOTE:
+# Long pauses, and requests that never come back.
+LONG_PAUSES_AND_REQUESTS_THAT_NEVER_COME_BACK: Final = Script(
+    chapters=(
+        Chapter(
+            at=0.0,
+            behavior=Answering(),
+        ),
+        Chapter(
+            at=8.0,
+            behavior=Refusing(
+                retry_after_seconds=25,
+            ),
+        ),
+        Chapter(
+            at=9.0,
+            behavior=Answering(),
+        ),
+        Chapter(
+            at=50.0,
+            behavior=Refusing(
+                retry_after_seconds=45,
+            ),
+        ),
+        Chapter(
+            at=51.0,
+            behavior=Answering(),
+        ),
+        Chapter(
+            at=110.0,
+            behavior=Silent(),
+        ),
+        Chapter(
+            at=175.0,
+            behavior=Answering(),
+        ),
+    ),
+    words=_words(),
+    settings=Settings(
+        concurrency=8,
+        patience_seconds=180.0,
+        timeout_seconds=30.0,
+        starts_seconds=0.5,
+        after_seconds=3.0,
+        limit_seconds=300.0,
+        seed=11,
+    ),
+)
+
+
+# NOTE:
+# The provider's outage as the operating guide describes it: every request held 20 s and then failed with 522, and the
+# provider asking for 120 s.
+OUTAGE_AS_THE_OPERATING_GUIDE_DESCRIBES_IT: Final = Script(
+    chapters=(
+        Chapter(
+            at=0.0,
+            behavior=Answering(),
+        ),
+        Chapter(
+            at=10.0,
+            behavior=Hanging(
+                retry_after_seconds=120,
+            ),
+        ),
+        Chapter(
+            at=140.0,
+            behavior=Answering(),
+        ),
+    ),
+    words=_words(),
+    settings=Settings(
+        concurrency=8,
+        patience_seconds=180.0,
+        timeout_seconds=30.0,
+        starts_seconds=0.5,
+        after_seconds=3.0,
+        limit_seconds=320.0,
         seed=11,
     ),
 )

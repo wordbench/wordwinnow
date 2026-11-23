@@ -1,0 +1,10 @@
+╭─ dictionary  FAILING  ──────────────────────────────────────────────────────╮
+│ to ask 0               breaker open         bucket   provider               │
+│                    trial 1 in 1 min 52 s    ╷●●●●╷ 2 a second               │
+│ ──────────────────────────●╱▔▔▔▔●╌╌╌╌╌╌╌╌╌╌╌╰────╯╌╌╌╌╌╌◎╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╮ │
+│ to ask again 77                                        next in 1 min 30 s │ │
+│ last 60 s   ✓✓─✓✓✓✓✓✓✓───────────────────✗✗✗✗╌╌╌╌╌ open ╌╌╌╌╌✗✗╌ open ╌╌──╯ │
+│ breaker opened 28 s ago after 5 failed requests in a row (server error)     │
+│ next  trial 1 in 1 min 52 s: as long as the provider asked                  │
+│ resolved 39 of 116:  17 cache  ✓ 22 found  0 not found  W 0 let go          │
+╰─────────────────────────────────────────────────────────────────────────────╯

@@ -625,11 +625,16 @@ row:
 ╭─ dictionary  STRUGGLING  ───────────────────────────────────────────────────╮
 │ to ask 64             breaker closed        bucket   provider               │
 │                            ✗✗✗✗·    in line ╷○···╷ 2 a second               │
-│ ──────────────────────────●━━━━━●───────────╰────╯──────◎─────────────────╮ │
+│ ──────────────────────────●━━━━━●───────────╰────╯──────◎─ W faculty ─────╮ │
 │ ── 1 let go: W WordNet's meaning stands in where it has one ──────────────┤ │
-│ in line 6         ─────────────────────────1 former, kindly, hopeless  +3 │ │
-│ finely            ──────────────────────────────────────● 0.5 s, 3rd try  │ │
+│ finely            ────────────────────────────────────✗✗● 0.5 s, 3rd try  │ │
+│ incident          ─────────────────────5┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄✗                  │ │
+│ kindly            ────────────────────────2                               │ │
 │ intrusion         ──────────────────────────────────────● 0.0 s           │ │
+│ former            ─────────────────────────1┄┄┄┄┄┄┄┄┄┄✗✗                  │ │
+│ high-power        ──────────────────────4┄┄┄┄┄┄┄┄┄┄┄┄┄✗✗                  │ │
+│ lead              ────────────────────6                                   │ │
+│ hopeless          ───────────────────────3┄┄┄┄┄┄┄┄┄┄┄┄┄✗                  │ │
 │ last 60 s                                      ─✓✓─✓✓✓✓✓✓✓✓─✓✗✗✗✗✗✗✗✗✗✗───╯ │
 │ 4 requests failed in a row; 1 more and the breaker opens (server error)     │
 │ resolved 44 of 116:  8 cache  ✓ 32 found  2 not found  W 2 let go           │
@@ -737,11 +742,16 @@ shape, or a place, and no hue is drawn on bold text.
 
 | Part | What it says |
 | --- | --- |
-| `to ask` | The words not yet asked: the stage's words, less those that have their answer, those waiting to ask again, and those at the client |
-| `to ask again` | The words the analysis holds, which the dictionary turned away with a time to ask again; at the right, `next in 8 s` when the first asks again, or `as places free` once none sleeps |
-| `in line` | The words at the client that wait for a token, in the order the bucket serves them, in one row: how many, the first nearest the bucket, then the first names and how many more |
-| `behind the trial` | The words that wait for the trial's answer, in one row: how many, then the first names |
+| `to ask` | The words not yet asked: the stage's words, less those that have their answer, those to ask again, and those at the client, so that a held word that has woken and is at the client again is counted once, among those at the client |
+| `to ask again` | The words the analysis holds, which the dictionary turned away with a time to ask again, less those at the client again; at the right, `next in 8 s` when the first asks again, or `as places free` once none sleeps |
+| `in line` | In a terminal too short for a row to each word, the words at the client that wait for a token, in the order the bucket serves them, in one row: how many, the first nearest the bucket, then the first names and how many more |
+| `behind the trial` | The words that wait for the trial's answer: beside the topmost of their rows, and in a terminal too short for a row to each word, in one row of their own with how many and the first names |
 | `2nd try` | A word asking again after a failure, and then `3rd try`: its row says `0.5 s, 2nd try` while the request asks, and `2nd try in 0.1 s` while the word waits to ask it |
+| `again` | Beside a word's name: the view saw this word turned away before, and it is at the client again |
+| `turned away`, `ended` | A word that has just left, which the counts say was turned away to be asked again, or do not say how it ended |
+| `✓ not found`, `W let go` | A word that has just left, which the counts say was not found, or was let go |
+| `✓ faculty` | Past the provider: the word that last left found, not found, or let go |
+| `and 16 more` | One dim row that counts the words at the client that have no row, by kind |
 | `last 60 s` | The last minute, a cell for each second, the newest at the right |
 | `resolved` | How many words of the stage have their answer, and of how many, `resolved 54 of 116` |
 | `cache`, `found`, `not found` | The words answered from the cache, found by the provider, and not found, since the view began |
@@ -770,36 +780,14 @@ each token is taken as it forms.
 Beside it stands its pace, `2 a second`, or, while the provider's pause holds,
 `paused 9 s` and a lid, `▁▁▁▁▁▁`, in place of the word `bucket`.
 
-A word waiting at the client has a row while it asks or backs off, with its
-name at the left, its line as far as it has got, and what it waits for at the
-provider's column: `0.4 s` while it asks, turned yellow at 5 s, `trial 1, 1.2 s`
-for the trial, and `◂ 3rd try in 0.3 s` while it backs off.
+Each word at the client has a row of its own, which [a row for each word](#a-row-for-each-word)
+describes.
 
 The seconds in a row count on between reads.
-
-At most eight words have a row, the trial first and then the oldest, and one
-row, `and 3 more asking`, counts the rest, as it does in the distributed mode,
-where the service's lookups can be several analyses'.
-
-A terminal too short for the frame folds the line at the bucket and the words
-behind the trial into the one row each they already have, and then gives the
-words asking fewer rows, counting the rows the learner's line takes as it is
-drawn, which is two or three at 80 columns.
-
-The tests show the frame fitting in a terminal of 16 rows or more, with the
-line above it of two rows or of three.
-
-The fold keeps a row for each part that is present, so in a terminal of 14
-rows or fewer the frame can be taller than the terminal, and Rich then crops
-its bottom row.
 
 A terminal narrower than 73 columns has the panel's title, its sentence, `next`
 where there is one, and `resolved N of M`, and says
 `the loop is drawn from 73 columns`.
-
-For three seconds after words are let go that have no row, which is how a
-waiting time runs out, a line across the loop says how many:
-`── 69 let go: W WordNet's meaning stands in where it has one ──┤`.
 
 The last minute, `last 60 s`, is a cell for each clock second, the newest at the
 right, where the wire's turn meets it.
@@ -837,6 +825,180 @@ The last row is the tally,
 Its parts count from the first read and never fall below nought, and they can
 lead the number before them by the words the progress has not yet counted.
 
+### A row for each word
+
+Each word at the client has a row of its own for as long as it stays there, so
+that a reader can follow one word from the left edge to the provider and back.
+
+Here is a frame as the breaker opens, with words in line, asking, and turned
+away:
+
+```text
+╭─ dictionary  FAILING  ──────────────────────────────────────────────────────╮
+│ to ask 0               breaker open         bucket   provider               │
+│                       trial 1 in 8 s        ╷○···╷ 2 a second               │
+│ ──────────────────────────●╱▔▔▔▔●╌╌╌╌╌╌╌╌╌╌╌╰────╯╌╌╌╌╌╌◎╌ W faculty ╌╌╌╌╌╮ │
+│ to ask again 57                                               next in 8 s │ │
+│ ── 1 let go: W WordNet's meaning stands in where it has one ──────────────┤ │
+│ finely            ─◂ turned away ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄✗✗✗                  │ │
+│ incident          ─────────────────────────1┄┄┄┄┄┄┄┄┄┄┄✗                  │ │
+│ kindly            ──────────────────────────────────────● 1.0 s           │ │
+│ intrusion         ──────────────────────────────────────● 2.0 s           │ │
+│ former            ────────────────────────────────────✗✗● 1.5 s, 3rd try  │ │
+│ high-power        ─◂ turned away ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄✗✗                  │ │
+│ lead              ────────────────────────2                               │ │
+│ hopeless          ─────────────────────────────────────✗● 0.5 s, 2nd try  │ │
+│ last 60 s                                    ─✓✓─✓✓✓✓✓✓✓✓─✓✗✗✗✗✗✗✗✗✗✗──✗──╯ │
+│ breaker opened just now after 5 failed requests in a row (server error)     │
+│ resolved 53 of 116:  17 cache  ✓ 32 found  2 not found  W 2 let go          │
+╰─────────────────────────────────────────────────────────────────────────────╯
+```
+
+A row starts with the word's name, in bold and cut with `…` to fit, and `again`
+stands beside it where the view saw this word turned away before.
+
+The word's line runs from there as far as the word has got, and its head says
+what it waits for.
+
+| The word waits for | Its head | What stands beside it |
+| --- | --- | --- |
+| A token | Its place in line, a digit, and `+` past the ninth | Nothing: the place says it |
+| The provider's answer | `●` at the provider's column | `0.4 s`, then `0.4 s, 2nd try` from the second request, yellow from 5 s |
+| The provider, as the trial | `●` in magenta at the provider's column | `trial 1, 1.2 s`, in magenta |
+| The end of a backoff | `◂` just after the line starts | `3rd try in 0.3 s`, near the provider |
+| The trial's outcome | `●`, dim, before the switch | `behind the trial`, on the topmost of these rows alone |
+
+The words in line stand before the bucket in the order it serves them, the
+first one cell before it, so every half second, as a token forms and the first
+word takes it, each of the others steps a cell closer.
+
+Each request of a word that failed leaves a `✗` in red at the provider, and each
+that was refused with a 429 leaves a `!` in yellow, the oldest at the left and
+five at most.
+
+A dotted way, `┄`, runs from the word's head to those marks, as the way the word
+went and came back.
+
+A word keeps its row for as long as it is at the client, unless more than
+eight are there and one ranked higher takes it, so the rows are not in the
+line's order, and the digits and the distances say that order.
+
+A row that is free between two that are not is left empty, so that the rows
+beneath it do not move.
+
+A word that has left keeps its row for a second, its name dim, and the row
+says how it ended, as far as the counts say.
+
+| It ended | Its row |
+| --- | --- |
+| Found | No row: the word stands past the provider, as the last word out |
+| Not found | `✓ not found`, with the line running into the right edge |
+| Let go | `W let go`, in the same place |
+| Turned away | `◂ turned away`, then the way it went and the marks it earned |
+| Not known | `◂ ended`, dim |
+
+The counts say it this way: if only the count of words found grew since the
+read before, the words that left were found, and if only the count of words
+not found grew, not found.
+
+Where only the count of words left unanswered grew, the words were turned away
+if the stage reported no word let go meanwhile, and let go if it reported at
+least as many as left, and anything else is `ended`.
+
+In the distributed mode the lookups are the service's, for every analysis it
+serves, and the command hears no word let go, so an ending is `ended` unless the
+counts say found or not found, and no row says `turned away`, `let go`, or `again`.
+
+Past the provider stands the last word out, the word that last left found, not
+found, or let go, as `✓` and its name, or `W` and its name where it was let go.
+
+It is bright for a second after the read it left at, dim until ten seconds,
+and then gone.
+
+For three seconds after words are let go that have no row, which is how a
+waiting time runs out, a line across the loop says how many, and the rows that
+say `W let go` are not counted in it:
+
+```text
+╭─ dictionary  FAILING  ──────────────────────────────────────────────────────╮
+│ to ask 0               breaker open         bucket   provider               │
+│                       trial 6 in 8 s        ╷●●●●╷ 2 a second               │
+│ ──────────────────────────●╱▔▔▔▔●╌╌╌╌╌╌╌╌╌╌╌╰────╯╌╌╌╌╌╌◎╌ W lodging ╌╌╌╌╌╮ │
+│ ── 69 let go: W WordNet's meaning stands in where it has one ─────────────┤ │
+│ lead        again ──────────────────────────────────────────── W let go ──┤ │
+│ spare             ──────────────────────────────────────────── W let go ──┤ │
+│ sneer             ──────────────────────────────────────────── W let go ──┤ │
+│ drowsiness  again ──────────────────────────────────────────── W let go ──┤ │
+│ predominate again ──────────────────────────────────────────── W let go ──┤ │
+│ eagerly     again ──────────────────────────────────────────── W let go ──┤ │
+│ pace        again ──────────────────────────────────────────── W let go ──┤ │
+│ lodging     again ──────────────────────────────────────────── W let go ──┤ │
+│ last 60 s   ✓✓─✗✗✗✗✗╌╌╌╌╌╌┄✗╌ open ╌╌┄✗╌ open ╌╌┄✗╌ open ╌╌┄✗╌ open ╌┄W╌──╯ │
+│ breaker opened again just now after trial 5 failed (server error)           │
+│ resolved 116 of 116:  17 cache  ✓ 22 found  0 not found  W 77 let go        │
+╰─────────────────────────────────────────────────────────────────────────────╯
+```
+
+At most eight words have a row: the trial first, then the words asking or
+backing off, then the words in line, the first first, then the words behind
+the trial, and last the words that have left.
+
+One dim row, `and N more`, counts the rest by kind: those in line, with the
+first and the last of their places, those behind the trial, and those asking,
+as in this frame, where the line is longer than eight:
+
+```text
+╭─ dictionary  ANSWERING  ────────────────────────────────────────────────────╮
+│ to ask 36             breaker closed        bucket   provider               │
+│                                     in line ╷○···╷ 2 a second               │
+│ ──────────────────────────●━━━━━●───────────╰────╯──────◎─ ✓ intrusion ───╮ │
+│ lodging           ──────────────────────────────────────● 0.8 s           │ │
+│ mission           ──────────────────────4                                 │ │
+│ light             ──────────────────────────────────────● 1.3 s           │ │
+│ marriage          ──────────────────────────────────────● 0.3 s           │ │
+│ lead              ──────────────────────────────────────● 1.8 s           │ │
+│ merely            ───────────────────────3                                │ │
+│ mention           ────────────────────────2                               │ │
+│ master            ─────────────────────────1                              │ │
+│ and 16 more in line, 5th to 20th                                          │ │
+│ last 60 s                                ──✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓!✓───────────╯ │
+│ answering: in the last minute  ✓ 42 answered  ! 1 refused  ✗ 0 failed       │
+│ resolved 56 of 116:  14 cache  ✓ 39 found  3 not found  W 0 let go          │
+╰─────────────────────────────────────────────────────────────────────────────╯
+```
+
+The same row counts the service's lookups in the distributed mode, where they
+can be several analyses'.
+
+A terminal too short for the frame folds it, and counts the rows the learner's
+line takes as it is drawn, which is two or three at 80 columns.
+
+First the line at the bucket goes into one row and the words behind the trial
+into another, as in this frame for a terminal of 16 rows, and then the words
+asking or backing off are given fewer rows, the oldest kept, with the row that
+counts the rest.
+
+```text
+╭─ dictionary  RATE-LIMITED  ─────────────────────────────────────────────────╮
+│ to ask 43             breaker closed        ▁▁▁▁▁▁   provider               │
+│                                     in line ╷····╷ paused 4 s               │
+│ ──────────────────────────●━━━━━●───────────╰────╯──────◎─ ✓ spare ───────╮ │
+│ in line 8         ─────────────────────────1 mention, whole, seldom  +5   │ │
+│ last 60 s       ─✓✓─✓✓✓✓✓✓✓✓─✓✗✗✗✗✗✗✗✗✗✗──✗✗✗╌╌╌╌╌╌┄✗╌ open ╌╌✓─✓✓✓✓!✓────╯ │
+│ 429: the provider asked the client to slow down, and every request waits    │
+│ resolved 65 of 116:  17 cache  ✓ 44 found  2 not found  W 2 let go          │
+╰─────────────────────────────────────────────────────────────────────────────╯
+```
+
+The tests show the frame fitting in a terminal of 16 rows or more, with the
+line above it of two rows or of three.
+
+The fold keeps a row for each part that is present, so in a terminal of 14
+rows or fewer the frame can be taller than the terminal.
+
+Rich's live display then keeps a row fewer than the terminal and writes `...` in
+place of its last rows.
+
 ### The marks and the forms
 
 | Mark | ASCII | What it says |
@@ -846,11 +1008,12 @@ lead the number before them by the words the progress has not yet counted.
 | `!` | `!` | A request the provider refused with a 429 |
 | `✗` | `X` | A request that failed |
 | `●` | `o` | A token in the bucket, the head of a word asking, and the switch's two contacts |
-| `◂` | `<` | A word backing off |
+| `◂` | `<` | A word backing off, or turned away |
 | `○` | `:` | The token that is forming |
 | `◎` | `@` | The provider |
 | `▁` | `_` | The bucket's lid |
-| `1` | `1` | The first word in line at the bucket |
+| `┄` | `.` | The way a word went and came back |
+| `1` to `9`, `+` | The same | A word's place in line, the first at the bucket |
 
 The panel has three forms.
 

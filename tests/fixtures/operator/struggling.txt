@@ -1,11 +1,16 @@
 ╭─ dictionary  STRUGGLING  ───────────────────────────────────────────────────╮
 │ to ask 64             breaker closed        bucket   provider               │
 │                            ✗✗✗✗·    in line ╷○···╷ 2 a second               │
-│ ──────────────────────────●━━━━━●───────────╰────╯──────◎─────────────────╮ │
+│ ──────────────────────────●━━━━━●───────────╰────╯──────◎─ W faculty ─────╮ │
 │ ── 1 let go: W WordNet's meaning stands in where it has one ──────────────┤ │
-│ in line 6         ─────────────────────────1 former, kindly, hopeless  +3 │ │
-│ finely            ──────────────────────────────────────● 0.5 s, 3rd try  │ │
+│ finely            ────────────────────────────────────✗✗● 0.5 s, 3rd try  │ │
+│ incident          ─────────────────────5┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄✗                  │ │
+│ kindly            ────────────────────────2                               │ │
 │ intrusion         ──────────────────────────────────────● 0.0 s           │ │
+│ former            ─────────────────────────1┄┄┄┄┄┄┄┄┄┄✗✗                  │ │
+│ high-power        ──────────────────────4┄┄┄┄┄┄┄┄┄┄┄┄┄✗✗                  │ │
+│ lead              ────────────────────6                                   │ │
+│ hopeless          ───────────────────────3┄┄┄┄┄┄┄┄┄┄┄┄┄✗                  │ │
 │ last 60 s                                      ─✓✓─✓✓✓✓✓✓✓✓─✓✗✗✗✗✗✗✗✗✗✗───╯ │
 │ 4 requests failed in a row; 1 more and the breaker opens (server error)     │
 │ resolved 44 of 116:  8 cache  ✓ 32 found  2 not found  W 2 let go           │

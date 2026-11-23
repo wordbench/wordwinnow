@@ -108,6 +108,10 @@ class Role(
 
     WORDNET = auto()
 
+    PAST_ANSWERED = auto()
+
+    PAST_WORDNET = auto()
+
     REFUSED = auto()
 
     FAILED = auto()
@@ -188,6 +192,14 @@ STYLES: Final = MappingProxyType(
         ),
         Role.WORDNET: Style(
             color="green",
+        ),
+        Role.PAST_ANSWERED: Style(
+            color="green",
+            dim=True,
+        ),
+        Role.PAST_WORDNET: Style(
+            color="green",
+            dim=True,
         ),
         Role.REFUSED: Style(
             color="yellow",
@@ -289,6 +301,8 @@ class Glyphs:
 
     back: str
 
+    trace: str
+
     marks: Mapping[Mark, str]
 
     lane: Mapping[BreakerState, str]
@@ -327,6 +341,7 @@ UNICODE: Final = Glyphs(
     provider="◎",
     head="●",
     back="◂",
+    trace="┄",
     marks=MappingProxyType(
         mapping={
             Mark.ANSWERED: "✓",
@@ -375,6 +390,7 @@ ASCII: Final = Glyphs(
     provider="@",
     head="o",
     back="<",
+    trace=".",
     marks=MappingProxyType(
         mapping={
             Mark.ANSWERED: "+",
