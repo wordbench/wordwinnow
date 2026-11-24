@@ -495,7 +495,7 @@ those variables are set.
 | `WORDWINNOW_DICTIONARY_FOUND_TTL_SECONDS`, `WORDWINNOW_DICTIONARY_NOT_FOUND_TTL_SECONDS` | 30 days, 7 days | How long the cache keeps a found and a not-found answer |
 | `WORDWINNOW_DICTIONARY_CACHE_PATH` | `dictionary-cache.db` in the user cache directory | The local mode's dictionary cache, kept from one command to the next; a file that cannot be opened leaves the command a cache in its own process and is left as it was, and deleting it only makes the next analysis ask the provider again |
 | `WORDWINNOW_STALE_AFTER_SECONDS` | 600 | How long an analysis may wait since it was requested, or process without a report from its worker, before `wordwinnow admin requeue` hands it back |
-| `WORDWINNOW_LOG_FORMAT`, `WORDWINNOW_LOG_LEVEL` | `console`, unset | `json` for the services; unset, the command line logs warnings and worse and a service logs from `INFO` up |
+| `WORDWINNOW_LOG_FORMAT`, `WORDWINNOW_LOG_LEVEL` | `console`, unset | `json` for the services; unset, the command line logs warnings and worse but `dictionary.circuit.opened`, which the learner's line already says, and a service logs from `INFO` up |
 | `WORDWINNOW_TRACING_ENABLED` | false | Export traces to `OTEL_EXPORTER_OTLP_ENDPOINT` |
 
 The New York Times key is a secret value that is never printed, and it is
@@ -1115,7 +1115,8 @@ Four places answer four questions, best read in this order.
    under it why.
 3. **The log:** the events listed at the end of [the dictionary client in detail](#the-dictionary-client-in-detail),
    `dictionary.circuit.opened` once per outage among them, each with its
-   analysis's `correlation_id`.
+   analysis's `correlation_id`; the command line writes
+   `dictionary.circuit.opened` only when `WORDWINNOW_LOG_LEVEL` names a level.
 4. **In the distributed mode,** `GET /activity` on the enrichment service and the
    dashboard's dictionary panels show the same client while no analysis is
    watched.

@@ -473,6 +473,7 @@ def reached(
         service_name: str,
         tracing: bool = True,
         default_log_level: str = "INFO",
+        default_events_left_out: AbstractSet[str] = frozenset(),
     ) -> None:
         return None
 

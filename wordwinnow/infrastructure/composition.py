@@ -22,6 +22,9 @@ from collections.abc import (
     Coroutine,
     Mapping,
 )
+from collections.abc import (
+    Set as AbstractSet,
+)
 from contextlib import (
     AsyncExitStack,
     asynccontextmanager,
@@ -197,18 +200,21 @@ def configure_process(
     service_name: str,
     tracing: bool = True,
     default_log_level: str = "INFO",
+    default_events_left_out: AbstractSet[str] = frozenset(),
 ) -> Tracing | None:
     """
     The things every process does first: logging, the NLTK data path, and, for
     a service, tracing.
 
     `default_log_level` applies when the settings name no level, an empty
-    value included.
+    value included, and so do `default_events_left_out`, the event names the
+    process does not write then; a level the settings name brings them back.
     """
 
     configure_logging(
         log_format=settings.log_format,
         level=settings.log_level or default_log_level,
+        events_left_out=(frozenset() if settings.log_level else default_events_left_out),
     )
 
     if settings.nltk_data is not None:

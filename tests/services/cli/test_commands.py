@@ -18,6 +18,9 @@ from collections.abc import (
     Coroutine,
     Sequence,
 )
+from collections.abc import (
+    Set as AbstractSet,
+)
 from contextlib import (
     asynccontextmanager,
 )
@@ -2357,6 +2360,7 @@ def listening(
         service_name: str,
         tracing: bool = True,
         default_log_level: str = "INFO",
+        default_events_left_out: AbstractSet[str] = frozenset(),
     ) -> None:
         return None
 

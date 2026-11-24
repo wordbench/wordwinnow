@@ -11,7 +11,11 @@ from spans.
 """
 
 import sys
+from collections.abc import (
+    Set as AbstractSet,
+)
 from logging import (
+    LogRecord,
     StreamHandler,
     getLogger,
 )
@@ -94,16 +98,55 @@ class _CurrentStandardError:
         sys.stderr.flush()
 
 
+@final
+class _LeavingOut:
+    """
+    A filter that passes every record but the ones whose message, as it was
+    logged and not formatted, is an event name it was given.
+    """
+
+    def __init__(
+        self,
+        *,
+        events: AbstractSet[str],
+    ) -> None:
+        self._events: Final = frozenset(
+            events,
+        )
+
+    # NOTE:
+    # `Filterer.filter` calls a filter that is a callable with the record alone, so the parameter is positional-only.
+    #
+    # The record's `msg` is compared as it is: formatting it here would run `msg % args` outside the handler's error
+    # handling, and a malformed record would raise into the code that logged it.
+    def __call__(
+        self,
+        record: LogRecord,
+        /,
+    ) -> bool:
+        return not (
+            isinstance(
+                record.msg,
+                str,
+            )
+            and record.msg in self._events
+        )
+
+
 def configure_logging(
     *,
     log_format: LogFormat,
     level: str,
+    events_left_out: AbstractSet[str] = frozenset(),
 ) -> None:
     """
     Install one handler on the root logger, replacing any earlier one.
 
     The CLI writes readable lines to stderr so stdout stays a report; a
     service writes JSON lines to stdout for whatever collects them.
+
+    The handler writes no record whose message is one of `events_left_out`, at
+    any level.
     """
 
     if log_format is LogFormat.JSON:
@@ -122,6 +165,13 @@ def configure_logging(
 
         handler.setFormatter(
             fmt=ConsoleFormatter(),
+        )
+
+    if events_left_out:
+        handler.addFilter(
+            filter=_LeavingOut(
+                events=events_left_out,
+            ),
         )
 
     root = getLogger()

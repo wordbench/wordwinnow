@@ -9,6 +9,9 @@ from io import (
 from logging import (
     getLogger,
 )
+from re import (
+    fullmatch,
+)
 from typing import (
     final,
 )
@@ -25,12 +28,20 @@ from httpx2 import (
 from pytest import (
     MonkeyPatch,
     fixture,
+    mark,
 )
 
+from wordwinnow.infrastructure import (
+    logging as project_logging,
+)
 from wordwinnow.infrastructure.composition import (
     configure_process,
 )
+from wordwinnow.infrastructure.dictionary.free_dictionary import (
+    CIRCUIT_OPENED,
+)
 from wordwinnow.infrastructure.logging import (
+    bind_correlation_id,
     configure_logging,
 )
 from wordwinnow.infrastructure.settings import (
@@ -73,6 +84,21 @@ def _capture_standard_error(
     )
 
     return stream
+
+
+def _as_the_command_line_does(
+    *,
+    service_name: str = "wordwinnow-cli",
+) -> None:
+    configure_process(
+        settings=Settings(),
+        service_name=service_name,
+        tracing=False,
+        default_log_level="WARNING",
+        default_events_left_out=frozenset(
+            (CIRCUIT_OPENED,),
+        ),
+    )
 
 
 @final
@@ -186,6 +212,196 @@ class TestConfigureLogging:
 
         assert "example.com" not in written
 
+    @mark.parametrize(
+        argnames="logger_name",
+        argvalues=(
+            "wordwinnow.dictionary",
+            "wordwinnow.composition",
+        ),
+    )
+    def test_the_handler_leaves_out_the_events_it_is_given_at_any_level_on_any_logger(
+        self,
+        *,
+        monkeypatch: MonkeyPatch,
+        logger_name: str,
+    ) -> None:
+        standard_error = _capture_standard_error(
+            monkeypatch,
+        )
+
+        configure_logging(
+            log_format=LogFormat.CONSOLE,
+            level="WARNING",
+            events_left_out=frozenset(
+                (CIRCUIT_OPENED,),
+            ),
+        )
+
+        logger = getLogger(
+            name=logger_name,
+        )
+
+        logger.warning(
+            msg=CIRCUIT_OPENED,
+        )
+
+        logger.error(
+            msg=CIRCUIT_OPENED,
+        )
+
+        assert standard_error.getvalue() == ""
+
+        logger.warning(
+            msg="dictionary.lookup.failed",
+        )
+
+        logger.error(
+            msg="dictionary.cache.invalid",
+        )
+
+        written = standard_error.getvalue()
+
+        assert "dictionary.lookup.failed" in written
+
+        assert "dictionary.cache.invalid" in written
+
+        assert CIRCUIT_OPENED not in written
+
+    def test_a_malformed_record_is_reported_by_the_handler_and_not_raised_into_the_caller(
+        self,
+        *,
+        monkeypatch: MonkeyPatch,
+    ) -> None:
+        standard_error = _capture_standard_error(
+            monkeypatch,
+        )
+
+        configure_logging(
+            log_format=LogFormat.CONSOLE,
+            level="WARNING",
+            events_left_out=frozenset(
+                (CIRCUIT_OPENED,),
+            ),
+        )
+
+        # WARN:
+        # `Logger.warning` takes the message's arguments positionally, so this call cannot go by keyword: `%d` given
+        # `"x"` makes the record unformattable, which the handler reports on standard error and never raises.
+        getLogger(
+            name="wordwinnow.dictionary",
+        ).warning(
+            "%d",
+            "x",
+        )
+
+        assert "--- Logging error ---" in standard_error.getvalue()
+
+    def test_a_record_whose_message_is_not_a_string_is_written_and_not_raised_into_the_caller(
+        self,
+        *,
+        monkeypatch: MonkeyPatch,
+    ) -> None:
+        standard_error = _capture_standard_error(
+            monkeypatch,
+        )
+
+        configure_logging(
+            log_format=LogFormat.CONSOLE,
+            level="WARNING",
+            events_left_out=frozenset(
+                (CIRCUIT_OPENED,),
+            ),
+        )
+
+        # NOTE:
+        # Other tests bind a correlation identifier and never unbind it, and a record carries the one bound in its
+        # context, so the line this test reads is written with none.
+        bind_correlation_id(
+            correlation_id=None,
+        )
+
+        # NOTE:
+        # `in` on a `frozenset` hashes its operand, and a `dict` is not hashable, so a filter that did not check the
+        # type of `msg` would raise into the code that logged it.
+        getLogger(
+            name="wordwinnow.dictionary",
+        ).warning(
+            msg={
+                "key": "value",
+            },
+        )
+
+        assert (
+            fullmatch(
+                pattern=r"\d\d:\d\d:\d\d\.\d{3} WARNING \{'key': 'value'\}\n",
+                string=standard_error.getvalue(),
+            )
+            is not None
+        )
+
+    def test_with_nothing_left_out_the_event_is_written(
+        self,
+        *,
+        monkeypatch: MonkeyPatch,
+    ) -> None:
+        standard_error = _capture_standard_error(
+            monkeypatch,
+        )
+
+        configure_logging(
+            log_format=LogFormat.CONSOLE,
+            level="WARNING",
+        )
+
+        getLogger(
+            name="wordwinnow.dictionary",
+        ).warning(
+            msg=CIRCUIT_OPENED,
+        )
+
+        assert CIRCUIT_OPENED in standard_error.getvalue()
+
+    def test_the_json_handler_leaves_the_event_out_of_standard_output_the_same_way(
+        self,
+        *,
+        monkeypatch: MonkeyPatch,
+    ) -> None:
+        standard_output = StringIO()
+
+        monkeypatch.setattr(
+            target=project_logging,
+            name="stdout",
+            value=standard_output,
+        )
+
+        configure_logging(
+            log_format=LogFormat.JSON,
+            level="WARNING",
+            events_left_out=frozenset(
+                (CIRCUIT_OPENED,),
+            ),
+        )
+
+        logger = getLogger(
+            name="wordwinnow.dictionary",
+        )
+
+        logger.warning(
+            msg=CIRCUIT_OPENED,
+        )
+
+        assert standard_output.getvalue() == ""
+
+        logger.warning(
+            msg="dictionary.lookup.failed",
+        )
+
+        written = standard_output.getvalue()
+
+        assert "dictionary.lookup.failed" in written
+
+        assert CIRCUIT_OPENED not in written
+
 
 @final
 class TestConfigureProcess:
@@ -265,3 +481,98 @@ class TestConfigureProcess:
         )
 
         assert "sources.configured" in standard_error.getvalue()
+
+    @mark.parametrize(
+        argnames=(
+            "named",
+            "written",
+        ),
+        argvalues=(
+            (
+                None,
+                False,
+            ),
+            (
+                "",
+                False,
+            ),
+            (
+                "WARNING",
+                True,
+            ),
+            (
+                "warning",
+                True,
+            ),
+        ),
+    )
+    def test_the_command_line_leaves_the_circuit_warning_out_only_at_its_default_level(
+        self,
+        *,
+        unset_logging: None,
+        monkeypatch: MonkeyPatch,
+        named: str | None,
+        written: bool,
+    ) -> None:
+        standard_error = _capture_standard_error(
+            monkeypatch,
+        )
+
+        if named is not None:
+            monkeypatch.setenv(
+                name="WORDWINNOW_LOG_LEVEL",
+                value=named,
+            )
+
+        _as_the_command_line_does()
+
+        logger = getLogger(
+            name="wordwinnow.dictionary",
+        )
+
+        logger.warning(
+            msg=CIRCUIT_OPENED,
+        )
+
+        logger.warning(
+            msg="dictionary.lookup.failed",
+        )
+
+        output = standard_error.getvalue()
+
+        assert "dictionary.lookup.failed" in output
+
+        assert output.count(
+            CIRCUIT_OPENED,
+        ) == int(
+            written,
+        )
+
+    def test_a_service_started_after_the_command_line_logs_the_circuit_warning(
+        self,
+        *,
+        unset_logging: None,
+        monkeypatch: MonkeyPatch,
+    ) -> None:
+        standard_error = _capture_standard_error(
+            monkeypatch,
+        )
+
+        _as_the_command_line_does()
+
+        # NOTE:
+        # `serve_enrichment` calls it with the service's name and nothing left out, and the handler it installs
+        # replaces the command line's; tracing is off here because a tracer provider installs once per process.
+        configure_process(
+            settings=Settings(),
+            service_name="wordwinnow-enrichment",
+            tracing=False,
+        )
+
+        getLogger(
+            name="wordwinnow.dictionary",
+        ).warning(
+            msg=CIRCUIT_OPENED,
+        )
+
+        assert CIRCUIT_OPENED in standard_error.getvalue()

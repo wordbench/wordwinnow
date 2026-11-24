@@ -31,6 +31,9 @@ from io import (
 from json import (
     loads,
 )
+from logging import (
+    getLogger,
+)
 from os import (
     strerror,
 )
@@ -139,6 +142,9 @@ from wordwinnow.infrastructure.composition import (
     FEED_SOURCE,
     storage_profile,
 )
+from wordwinnow.infrastructure.dictionary.free_dictionary import (
+    CIRCUIT_OPENED,
+)
 from wordwinnow.infrastructure.lexicon.reference_lists import (
     REFERENCE_FILES,
 )
@@ -148,6 +154,9 @@ from wordwinnow.infrastructure.lexicon.reference_sources import (
 from wordwinnow.infrastructure.linguistics.nltk_resources import (
     REQUIRED_RESOURCES,
     NltkResource,
+)
+from wordwinnow.infrastructure.logging import (
+    bind_correlation_id,
 )
 from wordwinnow.infrastructure.ml.model import (
     SklearnLevelEstimator,
@@ -1398,6 +1407,157 @@ class TestCli:
                     ),
                 ),
             )
+
+    @mark.parametrize(
+        argnames="view",
+        argvalues=(
+            "learner",
+            "operator",
+        ),
+    )
+    @mark.parametrize(
+        argnames=(
+            "named",
+            "lines",
+        ),
+        argvalues=(
+            (
+                None,
+                (r"WARNING dictionary\.lookup\.failed",),
+            ),
+            (
+                "WARNING",
+                (
+                    r"WARNING dictionary\.circuit\.opened failure_reason=transport_error recovery_seconds=8\.07$",
+                    r"WARNING dictionary\.lookup\.failed",
+                ),
+            ),
+        ),
+    )
+    def test_the_command_line_leaves_the_breakers_warning_out_unless_a_level_is_named(
+        self,
+        *,
+        workspace: Path,
+        monkeypatch: MonkeyPatch,
+        view: str,
+        named: str | None,
+        lines: tuple[str, ...],
+    ) -> None:
+        (workspace / "a-scandal-in-bohemia.txt").write_text(
+            data=_TEXT,
+            encoding="utf-8",
+        )
+
+        # NOTE:
+        # Other tests bind a correlation identifier and never unbind it, and a record carries the one bound in its
+        # context, so the line this test reads is written with none.
+        bind_correlation_id(
+            correlation_id=None,
+        )
+
+        monkeypatch.delenv(
+            name="WORDWINNOW_LOG_FORMAT",
+            raising=False,
+        )
+
+        if named is None:
+            monkeypatch.delenv(
+                name="WORDWINNOW_LOG_LEVEL",
+                raising=False,
+            )
+
+        else:
+            monkeypatch.setenv(
+                name="WORDWINNOW_LOG_LEVEL",
+                value=named,
+            )
+
+        analyzed = commands.analyze_locally
+
+        # TEST:
+        # A real breaker opens only after seconds of failed requests, so the double logs what the client logs when it
+        # does, inside the command, and then runs the analysis as the real function does.
+        async def analyze_locally(
+            *,
+            request: AnalysisRequest,
+            settings: Settings,
+            progress: AnalysisProgress = UNWATCHED,
+            watch: DictionaryWatch | None = None,
+        ) -> Analysis:
+            logger = getLogger(
+                name="wordwinnow.dictionary",
+            )
+
+            logger.warning(
+                msg=CIRCUIT_OPENED,
+                extra={
+                    "failure_reason": "transport_error",
+                    "recovery_seconds": 8.07,
+                },
+            )
+
+            logger.warning(
+                msg="dictionary.lookup.failed",
+            )
+
+            return await analyzed(
+                request=request,
+                settings=settings,
+                progress=progress,
+                watch=watch,
+            )
+
+        monkeypatch.setattr(
+            target=commands,
+            name="analyze_locally",
+            value=analyze_locally,
+        )
+
+        result = _runner.invoke(
+            app=app,
+            args=[
+                "analyze",
+                "a-scandal-in-bohemia.txt",
+                "--local",
+                "--no-dictionary",
+                "--level",
+                "B1",
+                "--view",
+                view,
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+
+        records = tuple(
+            line
+            for line in result.stderr.splitlines()
+            if match(
+                pattern=r"\d\d:\d\d:\d\d\.\d{3} (?:DEBUG|INFO|WARNING|ERROR) ",
+                string=line,
+            )
+        )
+
+        assert len(
+            records,
+        ) == len(
+            lines,
+        ), result.stderr
+
+        for (
+            record,
+            expected,
+        ) in zip(
+            records,
+            lines,
+            strict=True,
+        ):
+            assert match(
+                pattern=rf"\d\d:\d\d:\d\d\.\d{{3}} {expected}",
+                string=record,
+            )
+
+        assert (CIRCUIT_OPENED in result.stderr) is (named is not None)
 
     def test_the_help_of_analyze_says_what_every_source_takes(
         self,

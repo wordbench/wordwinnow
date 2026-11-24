@@ -28,6 +28,7 @@ from email.utils import (
 )
 from logging import (
     DEBUG,
+    WARNING,
 )
 from typing import (
     Final,
@@ -64,6 +65,7 @@ from wordwinnow.infrastructure.dictionary.cache import (
     InMemoryDictionaryCache,
 )
 from wordwinnow.infrastructure.dictionary.free_dictionary import (
+    CIRCUIT_OPENED,
     RETRYABLE_REASONS,
     FreeDictionaryClient,
     ProviderEntry,
@@ -1916,6 +1918,10 @@ class TestFreeDictionaryClient:
                 "dictionary.circuit.closed",
             ),
         )
+
+        # NOTE:
+        # The command line leaves this one warning out by the name the client holds, so the name it logs is that one.
+        assert tuple(record.msg for record in caplog.records if record.levelno == WARNING) == (CIRCUIT_OPENED,)
 
     async def test_a_refusal_says_when_to_ask_again_and_so_does_a_word_whose_failures_may_be_the_providers(
         self,

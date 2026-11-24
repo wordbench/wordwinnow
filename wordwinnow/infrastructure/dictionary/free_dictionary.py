@@ -219,6 +219,11 @@ _logger: Final = getLogger(
     name="wordwinnow.dictionary",
 )
 
+# NOTE:
+# The name of the one warning the client writes when the circuit opens, held once so that the command line, which
+# leaves it out at its default level, names the same event.
+CIRCUIT_OPENED: Final = "dictionary.circuit.opened"
+
 
 class ProviderDefinition(
     BaseModel,
@@ -1620,7 +1625,7 @@ class FreeDictionaryClient:
         # the next trial may start, and once the recovery period is over the state alone cannot tell it from a trial.
         if not trial and after is BreakerState.OPEN and before is BreakerState.CLOSED:
             _logger.warning(
-                msg="dictionary.circuit.opened",
+                msg=CIRCUIT_OPENED,
                 extra={
                     "failure_reason": failure_reason,
                     "recovery_seconds": self._breaker.retry_in_seconds,

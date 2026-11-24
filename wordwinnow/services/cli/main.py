@@ -94,6 +94,9 @@ from wordwinnow.domain.study import (
 from wordwinnow.infrastructure.composition import (
     configure_process,
 )
+from wordwinnow.infrastructure.dictionary.free_dictionary import (
+    CIRCUIT_OPENED,
+)
 from wordwinnow.infrastructure.distribution import (
     VERSION,
 )
@@ -336,11 +339,17 @@ def _settings() -> Settings:
     # NOTE:
     # A learner's terminal gets warnings and errors only; `WORDWINNOW_LOG_LEVEL=INFO` brings back the start-up events,
     # such as the sources configured, and `serve` and `work` raise their own process to INFO when they start.
+    #
+    # The dictionary client's `dictionary.circuit.opened` is left out at that default, because it is an operator's
+    # record and the learner's line already says that the dictionary is not answering; naming a level brings it back.
     configure_process(
         settings=settings,
         service_name="wordwinnow-cli",
         tracing=False,
         default_log_level="WARNING",
+        default_events_left_out=frozenset(
+            (CIRCUIT_OPENED,),
+        ),
     )
 
     return settings
