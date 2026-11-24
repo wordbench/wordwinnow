@@ -51,7 +51,8 @@ class RecordingWorkProgress:
     """
     Records each phase begun, followed by its steps when it named them, each
     later description of a phase as it was given, each finished step as
-    `step`, and each report of a worker as its stage and count.
+    `step`, each report of a worker as its stage and count, and the completion
+    of the analysis as `completed`.
     """
 
     def __init__(
@@ -94,6 +95,13 @@ class RecordingWorkProgress:
 
         self.events.append(
             f"{progress.stage}: {progress.done} of {progress.steps}, {progress.unavailable} unavailable{paused}",
+        )
+
+    def completed(
+        self,
+    ) -> None:
+        self.events.append(
+            "completed",
         )
 
 

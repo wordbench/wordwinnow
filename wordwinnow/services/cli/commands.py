@@ -529,6 +529,12 @@ async def _waited(
             analysis = watched.analysis
 
             if analysis.status in _FINISHED:
+                # NOTE:
+                # A finished analysis carries no progress, since a save forgets it, so the view's last count is the
+                # last stored report, up to a poll old, and is completed here.
+                if analysis.status is AnalysisStatus.COMPLETED:
+                    progress.completed()
+
                 return analysis
 
             # NOTE:

@@ -27,6 +27,9 @@ from io import (
     StringIO,
     TextIOWrapper,
 )
+from itertools import (
+    pairwise,
+)
 from math import (
     inf,
 )
@@ -90,6 +93,9 @@ from tests.fakes.dictionary_stage_scenarios import (
     PROVIDER_THAT_ANSWERS_SLOWLY,
     TWENTY_FOUR_LOOKUPS_AT_ONCE,
 )
+from tests.fakes.ports import (
+    EPOCH,
+)
 from tests.fakes.progress import (
     held_words,
 )
@@ -147,6 +153,8 @@ from wordwinnow.services.cli.operator_seen import (
 from wordwinnow.services.cli.operator_states import (
     RECOVERY_JITTER,
     State,
+    duration,
+    held_of,
     next_clause,
 )
 from wordwinnow.services.cli.terminal_text import (
@@ -486,6 +494,24 @@ class _Cell:
         self.background: Final = background
 
 
+@final
+class _WallClock:
+    """
+    A wall clock that moves only when a test moves it, and that starts at the
+    instant `_stored` reports at.
+    """
+
+    def __init__(
+        self,
+    ) -> None:
+        self.now = EPOCH
+
+    def __call__(
+        self,
+    ) -> datetime:
+        return self.now
+
+
 def _recorded(
     script: Script,
     /,
@@ -534,6 +560,7 @@ def _progress(
                 ascii_form=ascii_form,
             ),
             clock=clock,
+            wall_clock=_WallClock(),
         ),
         clock,
     )
@@ -1326,6 +1353,7 @@ def _stored(
     unavailable: int = 0,
     waiting: int | None = 0,
     next_in: float | None = None,
+    reported_at: datetime = EPOCH,
 ) -> ProcessingProgress:
     """
     What a worker last stored, as the command that waits for the analysis
@@ -1338,12 +1366,7 @@ def _stored(
         done=done,
         unavailable=unavailable,
         dictionary_paused=False,
-        reported_at=datetime(
-            year=1970,
-            month=1,
-            day=1,
-            tzinfo=UTC,
-        ),
+        reported_at=reported_at,
         dictionary_waiting_words=waiting,
         dictionary_next_in_seconds=next_in,
     )
@@ -3248,6 +3271,717 @@ class TestTheWordsToAsk:
                 progress,
             )
         )
+
+
+def _timed() -> tuple[OperatorProgress, FakeMonotonicClock, _WallClock]:
+    """
+    A view that has read a closed provider, with both of its clocks in the
+    test's hands.
+    """
+
+    clock = FakeMonotonicClock()
+
+    wall = _WallClock()
+
+    progress = OperatorProgress(
+        console=_asked_console(
+            columns=80,
+        ),
+        clock=clock,
+        wall_clock=wall,
+    )
+
+    _watched(
+        progress,
+        _CLOSED,
+    )
+
+    return (
+        progress,
+        clock,
+        wall,
+    )
+
+
+def _pass(
+    clock: FakeMonotonicClock,
+    wall: _WallClock,
+    seconds: float,
+    /,
+) -> None:
+    """
+    Let `seconds` go by on both clocks.
+    """
+
+    clock.advance(
+        seconds=seconds,
+    )
+
+    wall.now += timedelta(
+        seconds=seconds,
+    )
+
+
+def _wake(
+    progress: OperatorProgress,
+    clock: FakeMonotonicClock,
+    /,
+) -> float:
+    """
+    The wait the view holds for the words to ask again, as of now.
+    """
+
+    seen = progress._keeper.seen
+
+    assert seen is not None
+
+    wake = held_of(
+        seen=seen,
+        now=clock(),
+    ).wake_in
+
+    assert wake is not None
+
+    return wake
+
+
+def _drawn_wait(
+    progress: OperatorProgress,
+    /,
+) -> int:
+    """
+    The seconds the row of the words to ask again draws after `next in`.
+    """
+
+    found = search(
+        pattern=r"next in (\d+) s",
+        string=_row_starting(
+            progress,
+            "to ask again",
+        ),
+    )
+
+    assert found is not None
+
+    return int(
+        found.group(
+            1,
+        ),
+    )
+
+
+@final
+class TestAWorkersWaitCountsDownFromWhenItWasWritten:
+    def test_one_report_heard_at_every_poll_never_has_its_wait_rise_and_is_drawn_so(
+        self,
+    ) -> None:
+        (
+            progress,
+            clock,
+            wall,
+        ) = _timed()
+
+        report = _stored(
+            steps=40,
+            done=21,
+            waiting=19,
+            next_in=7.0,
+        )
+
+        # NOTE:
+        # The worker wrote the report 0.3 s before the command first heard it, and the command hears it again at every
+        # poll, once a second, because the worker writes only what changed.
+        _pass(
+            clock,
+            wall,
+            0.3,
+        )
+
+        waits: list[float] = []
+
+        drawn: list[int] = []
+
+        for poll in range(
+            5,
+        ):
+            # NOTE:
+            # The wait just before a hearing is read too, since a hearing that anchors the report anew shows as a rise
+            # between the read before it and the read after.
+            if poll:
+                before = _wake(
+                    progress,
+                    clock,
+                )
+
+                assert (
+                    abs(
+                        before - (7.0 - (0.3 + poll)),
+                    )
+                    < 0.01
+                ), (
+                    poll,
+                    before,
+                )
+
+                waits.append(
+                    before,
+                )
+
+            progress.processing(
+                progress=report,
+            )
+
+            for halfway in (
+                0.0,
+                0.5,
+            ):
+                if halfway:
+                    _pass(
+                        clock,
+                        wall,
+                        halfway,
+                    )
+
+                expected = 7.0 - (0.3 + poll + halfway)
+
+                wake = _wake(
+                    progress,
+                    clock,
+                )
+
+                assert (
+                    abs(
+                        wake - expected,
+                    )
+                    < 0.01
+                ), (
+                    poll,
+                    halfway,
+                    wake,
+                    expected,
+                )
+
+                assert (
+                    _row_starting(
+                        progress,
+                        "to ask again",
+                    )
+                    .rstrip(
+                        " │",
+                    )
+                    .endswith(
+                        f"next in {
+                            duration(
+                                seconds=expected,
+                            )
+                        }",
+                    )
+                ), (
+                    poll,
+                    halfway,
+                )
+
+                waits.append(
+                    wake,
+                )
+
+                drawn.append(
+                    _drawn_wait(
+                        progress,
+                    ),
+                )
+
+            _pass(
+                clock,
+                wall,
+                0.5,
+            )
+
+        assert (
+            len(
+                waits,
+            )
+            == 14
+        )
+
+        assert all(
+            later <= earlier
+            for (
+                earlier,
+                later,
+            ) in pairwise(
+                waits,
+            )
+        ), waits
+
+        assert all(
+            later <= earlier
+            for (
+                earlier,
+                later,
+            ) in pairwise(
+                drawn,
+            )
+        ), drawn
+
+    def test_a_newer_report_sets_its_own_wait_from_when_it_was_written_later_or_sooner(
+        self,
+    ) -> None:
+        (
+            progress,
+            clock,
+            wall,
+        ) = _timed()
+
+        _pass(
+            clock,
+            wall,
+            0.3,
+        )
+
+        progress.processing(
+            progress=_stored(
+                steps=40,
+                done=21,
+                waiting=19,
+                next_in=7.0,
+            ),
+        )
+
+        assert (
+            abs(
+                _wake(
+                    progress,
+                    clock,
+                )
+                - 6.7
+            )
+            < 0.01
+        )
+
+        _pass(
+            clock,
+            wall,
+            1.0,
+        )
+
+        # NOTE:
+        # The next held word may wake later than the one the report before named, so the wait rises, rightly.
+        progress.processing(
+            progress=_stored(
+                steps=40,
+                done=21,
+                waiting=19,
+                next_in=9.0,
+                reported_at=wall.now
+                - timedelta(
+                    seconds=0.2,
+                ),
+            ),
+        )
+
+        assert (
+            abs(
+                _wake(
+                    progress,
+                    clock,
+                )
+                - 8.8
+            )
+            < 0.01
+        )
+
+        _pass(
+            clock,
+            wall,
+            1.0,
+        )
+
+        progress.processing(
+            progress=_stored(
+                steps=40,
+                done=21,
+                waiting=19,
+                next_in=1.5,
+                reported_at=wall.now
+                - timedelta(
+                    seconds=0.2,
+                ),
+            ),
+        )
+
+        assert (
+            abs(
+                _wake(
+                    progress,
+                    clock,
+                )
+                - 1.3
+            )
+            < 0.01
+        )
+
+    def test_a_report_from_a_clock_ahead_of_the_commands_is_heard_at_age_nought(
+        self,
+    ) -> None:
+        (
+            progress,
+            clock,
+            wall,
+        ) = _timed()
+
+        report = _stored(
+            steps=40,
+            done=21,
+            waiting=19,
+            next_in=7.0,
+            reported_at=wall.now
+            + timedelta(
+                seconds=5.0,
+            ),
+        )
+
+        progress.processing(
+            progress=report,
+        )
+
+        assert (
+            abs(
+                _wake(
+                    progress,
+                    clock,
+                )
+                - 7.0
+            )
+            < 0.01
+        )
+
+    def test_a_report_dated_ahead_of_the_command_never_has_its_wait_rise_at_any_poll(
+        self,
+    ) -> None:
+        (
+            progress,
+            clock,
+            wall,
+        ) = _timed()
+
+        report = _stored(
+            steps=40,
+            done=21,
+            waiting=19,
+            next_in=7.0,
+            reported_at=wall.now
+            + timedelta(
+                seconds=2.5,
+            ),
+        )
+
+        waits: list[float] = []
+
+        for poll in range(
+            6,
+        ):
+            if poll:
+                waits.append(
+                    _wake(
+                        progress,
+                        clock,
+                    ),
+                )
+
+            progress.processing(
+                progress=report,
+            )
+
+            waits.append(
+                _wake(
+                    progress,
+                    clock,
+                ),
+            )
+
+            _pass(
+                clock,
+                wall,
+                1.0,
+            )
+
+        assert (
+            len(
+                waits,
+            )
+            == 11
+        )
+
+        assert (
+            abs(
+                waits[0] - 7.0,
+            )
+            < 0.01
+        )
+
+        assert all(
+            later <= earlier + 1e-9
+            for (
+                earlier,
+                later,
+            ) in pairwise(
+                waits,
+            )
+        ), waits
+
+    def test_a_wall_clock_stepped_back_between_two_hearings_does_not_raise_the_wait(
+        self,
+    ) -> None:
+        (
+            progress,
+            clock,
+            wall,
+        ) = _timed()
+
+        report = _stored(
+            steps=40,
+            done=21,
+            waiting=19,
+            next_in=7.0,
+        )
+
+        _pass(
+            clock,
+            wall,
+            0.3,
+        )
+
+        progress.processing(
+            progress=report,
+        )
+
+        waits = [
+            _wake(
+                progress,
+                clock,
+            ),
+        ]
+
+        # NOTE:
+        # A second goes by on the command's monotonic clock while its wall clock is set back half a second, so the
+        # report seems younger at the second hearing than at the first.
+        clock.advance(
+            seconds=1.0,
+        )
+
+        wall.now -= timedelta(
+            seconds=0.5,
+        )
+
+        waits.append(
+            _wake(
+                progress,
+                clock,
+            ),
+        )
+
+        progress.processing(
+            progress=report,
+        )
+
+        waits.append(
+            _wake(
+                progress,
+                clock,
+            ),
+        )
+
+        assert all(
+            later <= earlier + 1e-9
+            for (
+                earlier,
+                later,
+            ) in pairwise(
+                waits,
+            )
+        ), waits
+
+
+@final
+class TestACompletedAnalysisIsDrawnComplete:
+    def test_after_a_stale_report_the_tally_reads_every_word_resolved_and_none_to_ask(
+        self,
+    ) -> None:
+        (
+            progress,
+            _,
+            _,
+        ) = _timed()
+
+        progress.processing(
+            progress=_stored(
+                steps=40,
+                done=38,
+                waiting=2,
+                next_in=3.0,
+            ),
+        )
+
+        assert _row_starting(
+            progress,
+            "resolved",
+        ).startswith(
+            "│ resolved 38 of 40",
+        )
+
+        assert _row_starting(
+            progress,
+            "to ask again",
+        ).startswith(
+            "│ to ask again 2 ",
+        )
+
+        progress.completed()
+
+        rows = _plain(
+            progress,
+        )
+
+        assert _row_starting(
+            progress,
+            "resolved",
+        ).startswith(
+            "│ resolved 40 of 40",
+        )
+
+        assert any(
+            row.startswith(
+                "│ to ask 0 ",
+            )
+            for row in rows
+        ), rows
+
+        assert not any("to ask again" in row for row in rows), rows
+
+        assert any("idle: every word has its answer" in row for row in rows), rows
+
+    def test_a_view_on_a_terminal_draws_the_completed_state_once_before_it_stops(
+        self,
+    ) -> None:
+        stream = StringIO()
+
+        clock = FakeMonotonicClock()
+
+        with OperatorProgress(
+            console=Console(
+                force_terminal=True,
+                force_interactive=True,
+                file=stream,
+                width=110,
+                height=200,
+            ),
+            refresh_per_second=0.01,
+            clock=clock,
+            wall_clock=_WallClock(),
+        ) as progress:
+            _watched(
+                progress,
+                _CLOSED,
+            )
+
+            progress.processing(
+                progress=_stored(
+                    steps=40,
+                    done=38,
+                    waiting=2,
+                    next_in=3.0,
+                ),
+            )
+
+            progress.completed()
+
+            drawn = _drawn(
+                stream,
+            )
+
+        panels = drawn.split(
+            sep="╭",
+        )
+
+        assert (
+            drawn.count(
+                "resolved 40 of 40",
+            )
+            == 1
+        )
+
+        assert "resolved 40 of 40" in panels[-1]
+
+    def test_where_no_dictionary_stage_was_heard_completing_changes_nothing_the_view_draws(
+        self,
+    ) -> None:
+        (
+            progress,
+            _,
+            _,
+        ) = _timed()
+
+        before = (
+            _plain(
+                progress,
+            ),
+            _kept(
+                progress,
+            ),
+        )
+
+        progress.completed()
+
+        assert (
+            _plain(
+                progress,
+            ),
+            _kept(
+                progress,
+            ),
+        ) == before
+
+    def test_where_the_dictionary_report_names_no_steps_completing_changes_nothing_the_view_draws(
+        self,
+    ) -> None:
+        (
+            progress,
+            _,
+            _,
+        ) = _timed()
+
+        progress.processing(
+            progress=replace(
+                _stored(
+                    steps=40,
+                    done=5,
+                    waiting=2,
+                    next_in=3.0,
+                ),
+                steps=None,
+            ),
+        )
+
+        before = (
+            _plain(
+                progress,
+            ),
+            _kept(
+                progress,
+            ),
+        )
+
+        progress.completed()
+
+        assert (
+            _plain(
+                progress,
+            ),
+            _kept(
+                progress,
+            ),
+        ) == before
 
 
 def _unanswered() -> DictionaryLookup:

@@ -13,6 +13,7 @@ from io import (
 )
 from re import (
     findall,
+    search,
     split,
     sub,
 )
@@ -66,6 +67,74 @@ from wordwinnow.services.cli.progress import (
 _ANSWERED: Final = DictionaryLookup(
     outcome=LookupOutcome.NOT_FOUND,
 )
+
+
+def _rendered(
+    progress: TerminalProgress,
+    /,
+) -> str:
+    """
+    What the line says as it stands, as text.
+    """
+
+    stream = StringIO()
+
+    Console(
+        color_system=None,
+        force_terminal=False,
+        file=stream,
+        width=120,
+    ).print(
+        progress.line,
+    )
+
+    return stream.getvalue()
+
+
+def _task_of(
+    progress: TerminalProgress,
+    /,
+) -> tuple[object, ...]:
+    """
+    What the line's task holds: its count, its total, its description, and its
+    fields.
+    """
+
+    (task,) = progress._progress.tasks
+
+    return (
+        task.completed,
+        task.total,
+        task.description,
+        tuple(
+            sorted(
+                task.fields.items(),
+                key=lambda item: item[0],
+            ),
+        ),
+    )
+
+
+def _count_of(
+    progress: TerminalProgress,
+    /,
+) -> str:
+    """
+    The count of words the line says as it stands.
+    """
+
+    found = search(
+        pattern=r"\d+ of \d+",
+        string=_rendered(
+            progress,
+        ),
+    )
+
+    assert found is not None
+
+    return found.group(
+        0,
+    )
 
 
 @final
@@ -528,6 +597,82 @@ class TestTerminalProgress:
             )
 
         assert "waiting for the dictionary: next try in 20 s, WordNet within 2 min 50 s" in stream.getvalue()
+
+    def test_completing_the_analysis_draws_nothing_and_changes_nothing_the_line_draws_after(
+        self,
+    ) -> None:
+        # NOTE:
+        # Two lines hear the same report, and one is then told the analysis completed; the spinner moves with the
+        # time, so what is compared is each line's count of words.
+        counts: list[tuple[str, str]] = []
+
+        for completing in (
+            False,
+            True,
+        ):
+            stream = StringIO()
+
+            with TerminalProgress(
+                console=Console(
+                    force_terminal=True,
+                    force_interactive=True,
+                    file=stream,
+                    width=120,
+                ),
+                clock=lambda: EPOCH,
+            ) as progress:
+                progress.processing(
+                    progress=ProcessingProgress(
+                        stage=Stage.DICTIONARY_ENRICHMENT,
+                        steps=40,
+                        done=38,
+                        unavailable=0,
+                        dictionary_paused=False,
+                        reported_at=EPOCH,
+                    ),
+                )
+
+                before = stream.getvalue()
+
+                task = _task_of(
+                    progress,
+                )
+
+                if completing:
+                    progress.completed()
+
+                assert stream.getvalue() == before
+
+                # NOTE:
+                # The task is compared as it stands, because a comparison of what the line draws reads the clock.
+                assert (
+                    _task_of(
+                        progress,
+                    )
+                    == task
+                )
+
+                drawn = _count_of(
+                    progress,
+                )
+
+                progress.advance()
+
+                counts.append(
+                    (
+                        drawn,
+                        _count_of(
+                            progress,
+                        ),
+                    ),
+                )
+
+        assert counts[0] == counts[1]
+
+        assert counts[1] == (
+            "38 of 40",
+            "39 of 40",
+        )
 
     def test_every_stage_has_a_description(
         self,

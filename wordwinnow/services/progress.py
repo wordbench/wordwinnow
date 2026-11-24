@@ -170,6 +170,16 @@ class RemoteAnalysisProgress(
 
         ...
 
+    def completed(
+        self,
+    ) -> None:
+        """
+        The analysis completed, so every word of its dictionary stage has its
+        answer.
+        """
+
+        ...
+
 
 @final
 class ActivityUnreadableError(
@@ -491,6 +501,15 @@ class Unwatched:
         *,
         progress: ProcessingProgress,
     ) -> None:
+        return
+
+    def completed(
+        self,
+    ) -> None:
+        """
+        Nobody watches, so there is no count to complete.
+        """
+
         return
 
 

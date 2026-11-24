@@ -97,6 +97,7 @@ from wordwinnow.application.errors import (
     SourceRejectedError,
 )
 from wordwinnow.domain.analysis import (
+    Analysis,
     AnalysisStatus,
     Stage,
 )
@@ -531,6 +532,120 @@ async def intake() -> AsyncIterator[tuple[InMemoryStorage, ASGITransport]]:
 
     finally:
         await transport.aclose()
+
+
+async def _waited_until_it_ends(
+    *,
+    settings: Settings,
+    intake: tuple[InMemoryStorage, ASGITransport],
+    completes: bool,
+) -> tuple[Analysis, list[str]]:
+    """
+    Wait for an analysis whose worker stores one report, which says 38 of 40
+    words resolved, and then ends it, completed or failed, which a save of the
+    analysis forgets the report of.
+
+    Returns the analysis and what the progress heard.
+    """
+
+    (
+        storage,
+        transport,
+    ) = intake
+
+    progress = RecordingWorkProgress()
+
+    reported = "dictionary_enrichment: 38 of 40, 0 unavailable"
+
+    async def work() -> None:
+        while "waiting for a worker to take the analysis" not in progress.events:
+            await asyncio_sleep(
+                delay=0.01,
+            )
+
+        (analysis_id,) = storage.analyses
+
+        async with storage.new_unit_of_work() as uow:
+            analysis = await uow.analyses.get(
+                analysis_id=analysis_id,
+            )
+
+            assert analysis is not None
+
+            analysis.start(
+                at=EPOCH,
+            )
+
+            await uow.analyses.save(
+                analysis=analysis,
+            )
+
+            await uow.analyses.record_progress(
+                analysis_id=analysis_id,
+                progress=ProcessingProgress(
+                    stage=Stage.DICTIONARY_ENRICHMENT,
+                    steps=40,
+                    done=38,
+                    unavailable=0,
+                    dictionary_paused=False,
+                    reported_at=EPOCH,
+                ),
+            )
+
+            await uow.commit()
+
+        # NOTE:
+        # The command hears the report at its next poll, and the analysis ends only after that.
+        while reported not in progress.events:
+            await asyncio_sleep(
+                delay=0.01,
+            )
+
+        async with storage.new_unit_of_work() as uow:
+            analysis = await uow.analyses.get(
+                analysis_id=analysis_id,
+            )
+
+            assert analysis is not None
+
+            if completes:
+                analysis.complete(
+                    at=EPOCH,
+                    items=(),
+                    stage_timings=(),
+                )
+
+            else:
+                analysis.fail(
+                    at=EPOCH,
+                    reason="foo",
+                )
+
+            await uow.analyses.save(
+                analysis=analysis,
+            )
+
+            await uow.commit()
+
+    working = create_task(
+        coro=work(),
+    )
+
+    analysis = await analyze_remotely(
+        request=_request(),
+        settings=settings,
+        wait=True,
+        timeout_seconds=10,
+        transport=transport,
+        progress=progress,
+    )
+
+    await working
+
+    return (
+        analysis,
+        progress.events,
+    )
 
 
 async def _asked(
@@ -990,6 +1105,53 @@ class TestRemoteFlow:
             "handing the analysis to the intake service",
             "waiting for a worker to take the analysis",
             "dictionary_enrichment: 63 of 156, 20 unavailable",
+        ]
+
+    async def test_a_completed_analysis_is_told_to_the_progress_once_after_the_last_report_and_before_it_returns(
+        self,
+        *,
+        settings: Settings,
+        intake: tuple[InMemoryStorage, ASGITransport],
+    ) -> None:
+        (
+            analysis,
+            events,
+        ) = await _waited_until_it_ends(
+            settings=settings,
+            intake=intake,
+            completes=True,
+        )
+
+        assert analysis.status is AnalysisStatus.COMPLETED
+
+        assert events == [
+            "handing the analysis to the intake service",
+            "waiting for a worker to take the analysis",
+            "dictionary_enrichment: 38 of 40, 0 unavailable",
+            "completed",
+        ]
+
+    async def test_a_failed_analysis_is_never_told_to_the_progress_as_completed(
+        self,
+        *,
+        settings: Settings,
+        intake: tuple[InMemoryStorage, ASGITransport],
+    ) -> None:
+        (
+            analysis,
+            events,
+        ) = await _waited_until_it_ends(
+            settings=settings,
+            intake=intake,
+            completes=False,
+        )
+
+        assert analysis.status is AnalysisStatus.FAILED
+
+        assert events == [
+            "handing the analysis to the intake service",
+            "waiting for a worker to take the analysis",
+            "dictionary_enrichment: 38 of 40, 0 unavailable",
         ]
 
     async def test_a_watch_hears_what_the_enrichment_service_says_or_why_it_cannot(

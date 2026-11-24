@@ -22,7 +22,11 @@ interactive terminal, and disappears when the analysis ends.
 """
 
 from collections.abc import (
+    Callable,
     Sequence,
+)
+from datetime import (
+    datetime,
 )
 from time import (
     monotonic,
@@ -79,6 +83,7 @@ from wordwinnow.services.cli.operator_seen import (
 )
 from wordwinnow.services.cli.progress import (
     TerminalProgress,
+    local_now,
 )
 
 _READING: Final = "reading what the dictionary is doing"
@@ -107,6 +112,7 @@ class OperatorProgress:
         console: Console,
         refresh_per_second: float = 10,
         clock: MonotonicClock = monotonic,
+        wall_clock: Callable[[], datetime] = local_now,
     ) -> None:
         # NOTE:
         # The line is drawn without hue under this view, because over a panel in which green, yellow, red, and magenta
@@ -119,6 +125,8 @@ class OperatorProgress:
         self._console: Final = console
 
         self._clock: Final = clock
+
+        self._wall_clock: Final = wall_clock
 
         self._keeper: Final = Keeper()
 
@@ -245,10 +253,32 @@ class OperatorProgress:
             progress=progress,
         )
 
+        # NOTE:
+        # The worker writes its progress only when something changed, so one report is heard at every poll, and the
+        # wait it names runs from when it was written, as the learner's line counts it, never from when it was heard.
+        # A worker's clock ahead of the command's makes the age negative, and a report is no younger than its own
+        # moment.
+        age = max(
+            (self._wall_clock() - progress.reported_at).total_seconds(),
+            0.0,
+        )
+
         self._keeper.processing(
             progress=progress,
             now=self._clock(),
+            age=age,
         )
+
+    def completed(
+        self,
+    ) -> None:
+        self._keeper.completed()
+
+        # NOTE:
+        # The view stops when the command returns, which can be before the next tick draws what the analysis ended
+        # with, so the completed state is drawn once here.
+        if self.shown:
+            self._live.refresh()
 
     def watched(
         self,

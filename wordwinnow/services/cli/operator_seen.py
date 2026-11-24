@@ -8,6 +8,10 @@ from collections.abc import (
 )
 from dataclasses import (
     dataclass,
+    replace,
+)
+from datetime import (
+    datetime,
 )
 from types import (
     MappingProxyType,
@@ -222,6 +226,8 @@ class Keeper:
 
         self._stored: Stored | None = None
 
+        self._reported_at: datetime | None = None
+
         self._unavailable: int | None = None
 
         self._activity: DictionaryActivity | None = None
@@ -395,9 +401,11 @@ class Keeper:
         *,
         progress: ProcessingProgress,
         now: float,
+        age: float,
     ) -> None:
         """
-        A worker's stored progress arrived.
+        A worker's stored progress arrived at `now`, `age` seconds after the
+        worker wrote it.
 
         The words let go since the report before are the growth of its count
         of words the dictionary left unanswered; the first report only sets
@@ -421,8 +429,21 @@ class Keeper:
 
         self._unavailable = progress.unavailable
 
+        at = now - age
+
+        # NOTE:
+        # A report from a clock ahead of the command's is heard at age 0 until its own moment passes, and the same
+        # report is heard at every poll, so it keeps the earliest moment it was anchored at.
+        if self._stored is not None and progress.reported_at == self._reported_at:
+            at = min(
+                at,
+                self._stored.at,
+            )
+
+        self._reported_at = progress.reported_at
+
         self._stored = Stored(
-            at=now,
+            at=at,
             waiting_words=progress.dictionary_waiting_words or 0,
             next_in_seconds=progress.dictionary_next_in_seconds,
         )
@@ -430,6 +451,32 @@ class Keeper:
         self._prune(
             now=now,
         )
+
+        self._publish()
+
+    def completed(
+        self,
+    ) -> None:
+        """
+        The analysis completed, so every word of the dictionary stage has its
+        answer and none is held.
+
+        Nothing changes where the stage's count was never heard.
+        """
+
+        steps = self._steps
+
+        if steps is None:
+            return
+
+        self._done = steps
+
+        if self._stored is not None:
+            self._stored = replace(
+                self._stored,
+                waiting_words=0,
+                next_in_seconds=None,
+            )
 
         self._publish()
 

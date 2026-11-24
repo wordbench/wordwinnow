@@ -222,7 +222,7 @@ class _LineFields(
     quiet_after: timedelta
 
 
-def _local_now() -> datetime:
+def local_now() -> datetime:
     return datetime.now().astimezone()
 
 
@@ -675,7 +675,7 @@ class TerminalProgress:
         *,
         console: Console,
         refresh_per_second: float = 10,
-        clock: Callable[[], datetime] = _local_now,
+        clock: Callable[[], datetime] = local_now,
         hue: bool = True,
     ) -> None:
         # NOTE:
@@ -1063,6 +1063,16 @@ class TerminalProgress:
             refresh=True,
             **self._fields(),
         )
+
+    def completed(
+        self,
+    ) -> None:
+        """
+        Nothing changes: the line counts the words the worker reported, which
+        the command does not know after the analysis is stored as finished.
+        """
+
+        return
 
     def _answered(
         self,
