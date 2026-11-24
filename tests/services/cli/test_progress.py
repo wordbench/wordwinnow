@@ -7,11 +7,14 @@ from datetime import (
     timedelta,
 )
 from io import (
+    BytesIO,
     StringIO,
+    TextIOWrapper,
 )
 from re import (
     findall,
     split,
+    sub,
 )
 from typing import (
     Final,
@@ -1350,3 +1353,176 @@ class TestTheLineWithoutHue:
             )
             for color in pulsing
         )
+
+
+# TEST:
+# The frames of Rich's default spinner and of its `line` spinner, one cell each, written out here and not read from
+# Rich.
+_BRAILLE: Final = (
+    "\N{BRAILLE PATTERN DOTS-124}"
+    "\N{BRAILLE PATTERN DOTS-145}"
+    "\N{BRAILLE PATTERN DOTS-1456}"
+    "\N{BRAILLE PATTERN DOTS-456}"
+    "\N{BRAILLE PATTERN DOTS-3456}"
+    "\N{BRAILLE PATTERN DOTS-356}"
+    "\N{BRAILLE PATTERN DOTS-236}"
+    "\N{BRAILLE PATTERN DOTS-1236}"
+    "\N{BRAILLE PATTERN DOTS-123}"
+    "\N{BRAILLE PATTERN DOTS-1234}"
+)
+
+_LINE_FRAMES: Final = "-\\|/"
+
+
+def _first_cells(
+    encoding: str,
+    errors: str,
+    /,
+    *,
+    hue: bool,
+) -> tuple[tuple[str, ...], bytes]:
+    """
+    The first cell of each line a progress line writes on a terminal whose
+    stream has `encoding` and `errors`, over several refreshes, and every byte
+    it wrote.
+    """
+
+    stream = TextIOWrapper(
+        buffer=BytesIO(),
+        encoding=encoding,
+        errors=errors,
+    )
+
+    with TerminalProgress(
+        console=Console(
+            force_terminal=True,
+            force_interactive=True,
+            file=stream,
+            width=160,
+        ),
+        hue=hue,
+    ) as progress:
+        progress.begin(
+            description="looking the words up in the dictionary",
+            steps=100,
+        )
+
+        for _ in range(
+            6,
+        ):
+            progress.advance()
+
+            progress.line.refresh()
+
+    stream.flush()
+
+    assert isinstance(
+        stream.buffer,
+        BytesIO,
+    )
+
+    written = stream.buffer.getvalue()
+
+    lines = tuple(
+        line
+        for line in split(
+            pattern=r"[\r\n]",
+            string=sub(
+                pattern=r"\x1b\[[0-9;?]*[A-Za-z]",
+                repl="",
+                string=written.decode(
+                    encoding=encoding,
+                    errors="replace",
+                ),
+            ),
+        )
+        if "looking the words up" in line
+    )
+
+    return (
+        tuple(line[0] for line in lines),
+        written,
+    )
+
+
+@final
+class TestTheLineOnATerminalThatIsNotUtf8:
+    @mark.parametrize(
+        argnames="hue",
+        argvalues=(
+            True,
+            False,
+        ),
+    )
+    @mark.parametrize(
+        argnames="encoding",
+        argvalues=(
+            "ascii",
+            "iso8859-1",
+        ),
+    )
+    def test_it_spins_in_ascii_and_writes_nothing_that_a_stream_would_spell_out(
+        self,
+        *,
+        encoding: str,
+        hue: bool,
+    ) -> None:
+        (
+            cells,
+            written,
+        ) = _first_cells(
+            encoding,
+            "backslashreplace",
+            hue=hue,
+        )
+
+        assert (
+            len(
+                cells,
+            )
+            >= 6
+        )
+
+        assert frozenset(
+            cells,
+        ) <= frozenset(
+            _LINE_FRAMES,
+        ), cells
+
+        assert b"\\u" not in written
+
+        assert b"\\x" not in written
+
+    @mark.parametrize(
+        argnames="hue",
+        argvalues=(
+            True,
+            False,
+        ),
+    )
+    def test_it_draws_the_braille_frames_where_the_console_writes_utf_8_as_it_always_has(
+        self,
+        *,
+        hue: bool,
+    ) -> None:
+        (
+            cells,
+            _,
+        ) = _first_cells(
+            "utf-8",
+            "strict",
+            hue=hue,
+        )
+
+        assert (
+            len(
+                cells,
+            )
+            >= 6
+        )
+
+        assert frozenset(
+            cells,
+        ) <= frozenset(
+            _BRAILLE,
+        ), cells

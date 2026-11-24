@@ -38,9 +38,11 @@ from pathlib import (
     Path,
 )
 from re import (
+    Match,
     escape,
     match,
     search,
+    sub,
 )
 from tomllib import (
     loads as load_toml,
@@ -195,6 +197,33 @@ _PAGE_REFUSAL: Final = (
 )
 
 _runner: Final = CliRunner()
+
+# TEST:
+# A terminal whose standard output is not UTF-8, as a locale such as `en_US.US-ASCII` or `en_US.ISO8859-1` makes it:
+# the runner gives the command a standard output of that encoding, which fails on a character it cannot encode.
+_ASCII_RUNNER: Final = CliRunner(
+    charset="ascii",
+)
+
+_LATIN_1_RUNNER: Final = CliRunner(
+    charset="iso8859-1",
+)
+
+_UTF_8_RUNNER: Final = CliRunner(
+    charset="utf-8",
+)
+
+# TEST:
+# A text with curly quotes, an em dash, an emoji, which JSON escapes as a surrogate pair, two words with a diacritic
+# that the report lists, and a newline, a quotation mark, and a backslash, which JSON escapes in ASCII too, written by
+# name where the linter would read a character as another.
+_UNENCODABLE_TEXT: Final = (
+    "\N{LEFT DOUBLE QUOTATION MARK}The King wanted the na\N{LATIN SMALL LETTER I WITH DIAERESIS}ve photograph back,"
+    "\N{RIGHT DOUBLE QUOTATION MARK} said Irene \N{EM DASH} it\N{RIGHT SINGLE QUOTATION MARK}s a "
+    "caf\N{LATIN SMALL LETTER E WITH ACUTE} \N{LEFT SINGLE QUOTATION MARK}scandal"
+    "\N{RIGHT SINGLE QUOTATION MARK}. The groom looked very drunken, but Irene Adler kept the photograph "
+    '\N{GRINNING FACE}.\nIrene wrote "foo" in a note and signed it C:\\bar.'
+)
 
 
 def _standard_input(
@@ -5846,3 +5875,383 @@ class TestAnExportThatCannotBeWritten:
         )
 
         assert all(character.isprintable() or character == "\n" for character in result.output)
+
+
+def _unescaped(
+    document: str,
+    /,
+) -> str:
+    """
+    The JSON text with each escape of a character at or above U+0080 written
+    as the character, a surrogate pair as one character, and every other
+    escape left as it is.
+    """
+
+    def decode(
+        found: Match[str],
+        /,
+    ) -> str:
+        code = found.group(
+            1,
+        )
+
+        if not code.startswith(
+            "u",
+        ) or (
+            int(
+                code[1:],
+                base=16,
+            )
+            < 0x80
+        ):
+            return found.group(
+                0,
+            )
+
+        return chr(
+            int(
+                code[1:],
+                base=16,
+            ),
+        )
+
+    return (
+        sub(
+            pattern=r"\\(u[0-9a-fA-F]{4}|.)",
+            repl=decode,
+            string=document,
+        )
+        .encode(
+            encoding="utf-16",
+            errors="surrogatepass",
+        )
+        .decode(
+            encoding="utf-16",
+        )
+    )
+
+
+@final
+class TestATerminalThatIsNotUtf8:
+    def test_the_report_under_us_ascii_exits_0_and_writes_ascii_alone_with_its_note_and_its_rows(
+        self,
+        *,
+        workspace: Path,
+    ) -> None:
+        (workspace / "t.txt").write_text(
+            data=_UNENCODABLE_TEXT,
+            encoding="utf-8",
+        )
+
+        result = _ASCII_RUNNER.invoke(
+            app=app,
+            args=[
+                "analyze",
+                "t.txt",
+                "--local",
+                "--no-dictionary",
+                "--level",
+                "A1",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+
+        # NOTE:
+        # A traceback is exit 1 with no output under the runner, so the lines are asserted and the exit alone is not;
+        # decoding as ASCII, strictly, shows that nothing but ASCII was written.
+        lines = result.stdout_bytes.decode(
+            encoding="ascii",
+        ).splitlines()
+
+        assert "xn is how often the text uses the word; each level is the word's CEFR level." in lines
+
+        assert any(
+            search(
+                pattern=r"^ cafe +noun +A1 +x1 ",
+                string=line,
+            )
+            for line in lines
+        ), lines
+
+        assert any(
+            search(
+                pattern=r"^ naive +adjective +\S+ +x1 ",
+                string=line,
+            )
+            for line in lines
+        ), lines
+
+        assert not any("\\x" in line or "\\u" in line for line in lines)
+
+    def test_the_report_under_iso_8859_1_exits_0_and_writes_latin_1_with_its_note_its_rows_and_its_title(
+        self,
+        *,
+        workspace: Path,
+        monkeypatch: MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            target=main,
+            name="stdin",
+            value=_standard_input(
+                _UNENCODABLE_TEXT.encode(),
+            ),
+        )
+
+        result = _LATIN_1_RUNNER.invoke(
+            app=app,
+            args=[
+                "analyze",
+                "-",
+                "--local",
+                "--no-dictionary",
+                "--level",
+                "A1",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+
+        written = result.stdout_bytes
+
+        # NOTE:
+        # Latin-1 has the multiplication sign and the letters with an acute and a diaeresis, so they are written as
+        # themselves, in the one byte Latin-1 gives each.
+        assert b"\xd7n is how often the text uses the word; each level is the word's CEFR level." in written
+
+        assert search(
+            pattern=rb"(?m)^ caf\xe9 +noun +A1 +\xd71 ",
+            string=written,
+        )
+
+        assert search(
+            pattern=rb"(?m)^ na\xefve +adjective +\S+ +\xd71 ",
+            string=written,
+        )
+
+        assert b'beginning ""The King wanted the na\xefve photograph back," said Irene"' in b" ".join(
+            written.split(),
+        ), written
+
+        assert not any(character in written for character in b"\x93\x94\x91\x92")
+
+    def test_the_title_of_a_text_read_from_standard_input_quotes_it_with_the_plain_quotation_marks(
+        self,
+        *,
+        workspace: Path,
+        monkeypatch: MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            target=main,
+            name="stdin",
+            value=_standard_input(
+                _UNENCODABLE_TEXT.encode(),
+            ),
+        )
+
+        result = _ASCII_RUNNER.invoke(
+            app=app,
+            args=[
+                "analyze",
+                "-",
+                "--local",
+                "--no-dictionary",
+                "--level",
+                "A1",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+
+        assert (
+            'read from standard input, beginning ""The King wanted the naive photograph back," said Irene"'
+            in _words(
+                result.stdout_bytes.decode(
+                    encoding="ascii",
+                ),
+            )
+        )
+
+    @mark.parametrize(
+        argnames="runner",
+        argvalues=(
+            _ASCII_RUNNER,
+            _LATIN_1_RUNNER,
+        ),
+        ids=(
+            "us-ascii",
+            "iso-8859-1",
+        ),
+    )
+    def test_json_under_a_terminal_that_is_not_utf_8_is_ascii_alone_and_parses_to_what_utf_8_parses_to(
+        self,
+        *,
+        workspace: Path,
+        runner: CliRunner,
+    ) -> None:
+        (workspace / "t.txt").write_text(
+            data=_UNENCODABLE_TEXT,
+            encoding="utf-8",
+        )
+
+        analyzed = _UTF_8_RUNNER.invoke(
+            app=app,
+            args=[
+                "analyze",
+                "t.txt",
+                "--local",
+                "--no-dictionary",
+                "--level",
+                "A1",
+                "--json",
+            ],
+        )
+
+        assert analyzed.exit_code == 0, analyzed.output
+
+        analysis_id = loads(
+            s=analyzed.stdout,
+        )["analysis_id"]
+
+        # NOTE:
+        # The same stored analysis is shown under each terminal, since two analyses of one text differ in their
+        # identifiers and their times.
+        shown = {
+            name: shower.invoke(
+                app=app,
+                args=[
+                    "show",
+                    analysis_id,
+                    "--local",
+                    "--json",
+                ],
+            )
+            for (
+                name,
+                shower,
+            ) in (
+                (
+                    "utf-8",
+                    _UTF_8_RUNNER,
+                ),
+                (
+                    "other",
+                    runner,
+                ),
+            )
+        }
+
+        assert all(result.exit_code == 0 for result in shown.values())
+
+        other = shown["other"].stdout_bytes
+
+        assert all(byte < 0x80 for byte in other)
+
+        assert b"\\ud83d\\ude00" in other, "an emoji must be escaped as a surrogate pair"
+
+        assert all(
+            escape in other
+            for escape in (
+                b"\\n",
+                b'\\"foo\\"',
+                b"C:\\\\bar",
+            )
+        ), "the text must put the escapes of a newline, a quotation mark, and a backslash in the JSON"
+
+        utf_8 = shown["utf-8"].stdout_bytes.decode(
+            encoding="utf-8",
+        )
+
+        assert any(
+            ord(
+                character,
+            )
+            >= 0x80
+            for character in utf_8
+        ), "the text under test must put a character outside ASCII in the JSON"
+
+        assert loads(
+            s=other.decode(
+                encoding="ascii",
+            ),
+        ) == loads(
+            s=utf_8,
+        )
+
+        assert (
+            _unescaped(
+                other.decode(
+                    encoding="ascii",
+                ),
+            )
+            == utf_8
+        )
+
+    def test_json_from_an_analysis_under_a_terminal_that_is_not_utf_8_is_ascii_alone(
+        self,
+        *,
+        workspace: Path,
+    ) -> None:
+        (workspace / "t.txt").write_text(
+            data=_UNENCODABLE_TEXT,
+            encoding="utf-8",
+        )
+
+        for runner in (
+            _ASCII_RUNNER,
+            _LATIN_1_RUNNER,
+        ):
+            result = runner.invoke(
+                app=app,
+                args=[
+                    "analyze",
+                    "t.txt",
+                    "--local",
+                    "--no-dictionary",
+                    "--level",
+                    "A1",
+                    "--json",
+                ],
+            )
+
+            assert result.exit_code == 0, result.output
+
+            assert all(byte < 0x80 for byte in result.stdout_bytes)
+
+            assert (
+                loads(
+                    s=result.stdout_bytes.decode(
+                        encoding="ascii",
+                    ),
+                )["status"]
+                == "completed"
+            )
+
+    def test_json_under_utf_8_holds_the_characters_themselves(
+        self,
+        *,
+        workspace: Path,
+    ) -> None:
+        (workspace / "t.txt").write_text(
+            data=_UNENCODABLE_TEXT,
+            encoding="utf-8",
+        )
+
+        analyzed = _UTF_8_RUNNER.invoke(
+            app=app,
+            args=[
+                "analyze",
+                "t.txt",
+                "--local",
+                "--no-dictionary",
+                "--level",
+                "A1",
+                "--json",
+            ],
+        )
+
+        assert analyzed.exit_code == 0, analyzed.output
+
+        assert "\N{LATIN SMALL LETTER I WITH DIAERESIS}".encode() in analyzed.stdout_bytes
+
+        assert b"\\u00ef" not in analyzed.stdout_bytes.lower()

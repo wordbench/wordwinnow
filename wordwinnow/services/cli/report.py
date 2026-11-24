@@ -418,10 +418,12 @@ def _related_of(
     /,
     *,
     broader: bool = True,
+    ascii_only: bool = False,
 ) -> str:
     """
     The relations of one sense, as one line: synonyms, broader concepts when
-    `broader` asks for them, and opposites.
+    `broader` asks for them, and opposites, which an ASCII-only console marks
+    with `!=` where another console has `≠`.
     """
 
     if sense is None:
@@ -447,7 +449,7 @@ def _related_of(
 
     if sense.antonyms:
         parts.append(
-            "≠ "
+            ("!= " if ascii_only else "≠ ")
             + ", ".join(
                 sense.antonyms[:2],
             ),
@@ -461,6 +463,8 @@ def _related_of(
 def _other_meanings(
     study_item: StudyItem,
     /,
+    *,
+    ascii_only: bool = False,
 ) -> tuple[str, ...]:
     """
     The meanings a card lists after the one shown, one line each with its
@@ -484,6 +488,7 @@ def _other_meanings(
         related = _related_of(
             sense,
             broader=False,
+            ascii_only=ascii_only,
         )
 
         lines.append(
@@ -1345,6 +1350,7 @@ def render_cards(
 
         related = _related_of(
             leading,
+            ascii_only=console.options.ascii_only,
         )
 
         if related:
@@ -1377,6 +1383,7 @@ def render_cards(
 
         others = _other_meanings(
             study_item,
+            ascii_only=console.options.ascii_only,
         )
 
         if others:
@@ -1661,10 +1668,12 @@ def render_vocabulary_summary(
 def to_json(
     *,
     analysis: Analysis,
+    ensure_ascii: bool = False,
 ) -> str:
     """
     The whole analysis as JSON, in the same shape the intake service serves
-    it.
+    it, with every character outside ASCII escaped as `\\uXXXX` when
+    `ensure_ascii` says the stream it is written to needs that.
 
     The text and the sentences of a document that may be kept only for a while
     are left out, so the file holds the learner's words, levels, and tiers
@@ -1696,6 +1705,7 @@ def to_json(
 
     return payload.model_dump_json(
         indent=2,
+        ensure_ascii=ensure_ascii,
     )
 
 

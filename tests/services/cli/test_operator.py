@@ -23,7 +23,9 @@ from datetime import (
     timedelta,
 )
 from io import (
+    BytesIO,
     StringIO,
+    TextIOWrapper,
 )
 from math import (
     inf,
@@ -146,6 +148,9 @@ from wordwinnow.services.cli.operator_states import (
     RECOVERY_JITTER,
     State,
     next_clause,
+)
+from wordwinnow.services.cli.terminal_text import (
+    keep_cells_on,
 )
 
 _FIXTURES: Final = (
@@ -4929,6 +4934,159 @@ class TestEachWordHasARow:
         )
 
         assert any("✓ " in row.plain and "…" in row.plain for row in rows)
+
+    @mark.parametrize(
+        argnames="color",
+        argvalues=(
+            False,
+            True,
+        ),
+    )
+    @mark.parametrize(
+        argnames="lemma",
+        argvalues=(
+            "漢字漢字漢字漢字漢字漢字",
+            "e\N{COMBINING ACUTE ACCENT}" * 13,
+            "na\N{LATIN SMALL LETTER I WITH DIAERESIS}ve" * 3,
+            (
+                "\N{LATIN CAPITAL LETTER C WITH CEDILLA}a"
+                "\N{LATIN SMALL LETTER SHARP S}\N{LATIN SMALL LETTER O WITH STROKE}"
+            ),
+        ),
+    )
+    def test_a_lemma_a_stream_cannot_encode_leaves_every_row_its_width_in_characters_where_the_rule_is_set(
+        self,
+        *,
+        lemma: str,
+        color: bool,
+    ) -> None:
+        (
+            progress,
+            clock,
+        ) = _progress(
+            ascii_form=True,
+        )
+
+        progress.stage_started(
+            stage=Stage.DICTIONARY_ENRICHMENT,
+            steps=30,
+        )
+
+        _watched(
+            progress,
+            replace(
+                _CLOSED,
+                lookups=(
+                    _asking(
+                        lemma,
+                        0.5,
+                    ),
+                    LookupActivity(
+                        lemma=lemma + "s",
+                        waiting_for=WaitCause.BUDGET,
+                        attempt=1,
+                        seconds=0.1,
+                    ),
+                ),
+            ),
+        )
+
+        clock.now = 0.25
+
+        _watched(
+            progress,
+            replace(
+                _CLOSED,
+                lookups=(
+                    LookupActivity(
+                        lemma=lemma + "s",
+                        waiting_for=WaitCause.BUDGET,
+                        attempt=1,
+                        seconds=0.35,
+                    ),
+                ),
+            ),
+            LookupCounts(
+                cached=0,
+                found=1,
+                not_found=0,
+                unavailable=MappingProxyType(
+                    mapping={},
+                ),
+            ),
+        )
+
+        # NOTE:
+        # Standard error as Python makes it under US-ASCII, except that its error handler is the one the command sets:
+        # strict, so that a character the rule left unwritten would raise here, and a row that is a character too wide
+        # fails the width below.
+        stream = TextIOWrapper(
+            buffer=BytesIO(),
+            encoding="ascii",
+        )
+
+        keep_cells_on(
+            streams=(stream,),
+        )
+
+        Console(
+            color_system="standard" if color else None,
+            force_terminal=color,
+            file=stream,
+            width=80,
+            height=200,
+            highlight=False,
+        ).print(
+            progress.panel(),
+        )
+
+        stream.flush()
+
+        assert isinstance(
+            stream.buffer,
+            BytesIO,
+        )
+
+        written = stream.buffer.getvalue().decode(
+            encoding="ascii",
+        )
+
+        assert ("\x1b[" in written) is color
+
+        rows = sub(
+            pattern=r"\x1b\[[0-9;]*m",
+            repl="",
+            string=written,
+        ).splitlines()
+
+        widths = frozenset(
+            len(
+                row,
+            )
+            for row in rows
+        )
+
+        assert (
+            len(
+                rows,
+            )
+            > 5
+        )
+
+        assert widths == frozenset(
+            (
+                len(
+                    rows[0],
+                ),
+            ),
+        ), rows
+
+        assert (
+            max(
+                widths,
+            )
+            <= 80
+        )
 
 
 @final

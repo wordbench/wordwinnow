@@ -1026,8 +1026,16 @@ In ASCII, where the terminal cannot show the glyphs, the marks take their
 second column and the frame's corners are `+`, its sides `|` and `-`; Rich chooses
 it from the terminal's encoding, and there is no option of its own.
 
+A name that holds a character the encoding cannot write, such as the `ï` of
+`naïve`, is written as the nearest plain character where there is one, else as
+its base letter, else as a `?` for each cell the character takes, so a row keeps
+its width.
+
 The learner's line above the panel keeps its words and figures, and is drawn
 without hue, so the four hues are the panel's alone.
+
+The learner's line spins as `-`, `\`, `|`, and `/` in ASCII, one cell each, so what
+the terminal receives is what Rich counted.
 
 ### What a word goes through, and the terms
 

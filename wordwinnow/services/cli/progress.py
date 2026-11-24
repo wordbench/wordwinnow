@@ -665,6 +665,9 @@ class TerminalProgress:
 
     Its spinner, bar, and elapsed time keep Rich's own hues, unless `hue` is
     false, as under a view that gives each hue a meaning of its own.
+
+    Its spinner is one ASCII character a cell wide where the console is ASCII
+    only, so that what a stream writes is what Rich counted.
     """
 
     def __init__(
@@ -682,6 +685,7 @@ class TerminalProgress:
         # so its recent pace says when it may finish.
         self._progress: Final = Progress(
             SpinnerColumn(
+                spinner_name="line" if console.options.ascii_only else "dots",
                 style="progress.spinner" if hue else "none",
             ),
             ClockColumn(

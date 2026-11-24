@@ -144,6 +144,10 @@ from wordwinnow.services.cli.report import (
     to_json,
     visible,
 )
+from wordwinnow.services.cli.terminal_text import (
+    keep_cells_on_standard_streams,
+    writes_utf8,
+)
 from wordwinnow.services.intake.schemas import (
     AnalysisRequest,
 )
@@ -551,9 +555,15 @@ def _render(
     if as_json:
         # NOTE:
         # JSON is for another program, so it is written without the wrapping a terminal reader would get.
+        #
+        # Where standard output is not UTF-8 every character outside ASCII is escaped, so the JSON is ASCII alone and
+        # parses to what it parses to under UTF-8, which the rule that writes the report's characters never touches.
         _console.print(
             to_json(
                 analysis=analysis,
+                ensure_ascii=not writes_utf8(
+                    stream=_console.file,
+                ),
             ),
             markup=False,
             highlight=False,
@@ -911,6 +921,11 @@ def root(
     """
     The root command, which holds the option that names the installed version.
     """
+
+    # NOTE:
+    # The root callback runs before every command, so no command writes a character its stream cannot encode before
+    # the rule of `terminal_text` is set on it.
+    keep_cells_on_standard_streams()
 
 
 @app.command(

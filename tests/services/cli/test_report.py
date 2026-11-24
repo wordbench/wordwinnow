@@ -19,6 +19,10 @@ from datetime import (
 from functools import (
     partial,
 )
+from io import (
+    BytesIO,
+    TextIOWrapper,
+)
 from json import (
     loads,
 )
@@ -3857,3 +3861,97 @@ class TestTheOperatorsFiguresThroughTheCommands:
         assert "requested analysis" in result.stdout
 
         assert "Analysis " not in result.stderr
+
+
+# TEST:
+# A sense with synonyms, a broader concept, and an opposite, and a second with an opposite alone.
+_WITH_AN_OPPOSITE: Final = replace(
+    _PERFIDY,
+    antonyms=(
+        "foo",
+        "bar",
+        "baz",
+    ),
+)
+
+_WITH_AN_OPPOSITE_ALONE: Final = replace(
+    _sense(
+        "a gloss of another sense",
+    ),
+    antonyms=("qux",),
+)
+
+
+def _cards_on(
+    encoding: str,
+    /,
+) -> str:
+    console = Console(
+        file=TextIOWrapper(
+            buffer=BytesIO(),
+            encoding=encoding,
+        ),
+        width=300,
+        record=True,
+    )
+
+    render_cards(
+        items=(
+            _item(
+                "mask",
+                StudyTier.FOCUS,
+                CefrLevel.B2,
+                example_sentence="The King wore a black mask.",
+                senses=(
+                    _WITH_AN_OPPOSITE,
+                    _WITH_AN_OPPOSITE_ALONE,
+                ),
+            ),
+        ),
+        console=console,
+    )
+
+    return console.export_text()
+
+
+@final
+class TestTheMarkOfAnOpposite:
+    @mark.parametrize(
+        argnames="encoding",
+        argvalues=(
+            "ascii",
+            "iso8859-1",
+        ),
+    )
+    def test_an_ascii_console_marks_the_opposites_of_a_sense_with_two_characters_and_never_with_the_mark_of_a_synonym(
+        self,
+        *,
+        encoding: str,
+    ) -> None:
+        text = _cards_on(
+            encoding,
+        )
+
+        assert "= perfidy, perfidiousness; < disloyalty; != foo, bar" in text
+
+        assert "(WordNet)  != qux" in text
+
+        assert "\N{NOT EQUAL TO}" not in text
+
+        assert "= foo" not in text.replace(
+            "!= foo",
+            "",
+        )
+
+    def test_a_console_that_writes_utf_8_marks_them_as_it_always_has(
+        self,
+    ) -> None:
+        text = _cards_on(
+            "utf-8",
+        )
+
+        assert "= perfidy, perfidiousness; < disloyalty; \N{NOT EQUAL TO} foo, bar" in text
+
+        assert "(WordNet)  \N{NOT EQUAL TO} qux" in text
+
+        assert "!=" not in text
