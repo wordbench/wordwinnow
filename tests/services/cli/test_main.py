@@ -234,6 +234,14 @@ _UNENCODABLE_TEXT: Final = (
     '\N{GRINNING FACE}.\nIrene wrote "foo" in a note and signed it C:\\bar.'
 )
 
+# TEST:
+# A text holding two of Rich's emoji codes, which Rich 15.0.0 replaces with an emoji unless it is told to leave them,
+# in a sentence the analysis keeps as an item's example; written as ASCII, so that the source holds the codes and not
+# the emoji.
+_TEXT_WITH_EMOJI_CODES: Final = (
+    "The committee approved the proposal :thumbs_up: and the treasurer smiled :smile: at the generous donation.\n"
+)
+
 
 def _standard_input(
     content: bytes,
@@ -6415,3 +6423,164 @@ class TestATerminalThatIsNotUtf8:
         assert "\N{LATIN SMALL LETTER I WITH DIAERESIS}".encode() in analyzed.stdout_bytes
 
         assert b"\\u00ef" not in analyzed.stdout_bytes.lower()
+
+    @mark.parametrize(
+        argnames="runner",
+        argvalues=(
+            _UTF_8_RUNNER,
+            _ASCII_RUNNER,
+            _LATIN_1_RUNNER,
+        ),
+        ids=(
+            "utf-8",
+            "us-ascii",
+            "iso-8859-1",
+        ),
+    )
+    def test_json_from_an_analysis_keeps_the_emoji_codes_the_text_holds_under_each_encoding(
+        self,
+        *,
+        workspace: Path,
+        runner: CliRunner,
+    ) -> None:
+        (workspace / "t.txt").write_text(
+            data=_TEXT_WITH_EMOJI_CODES,
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(
+            app=app,
+            args=[
+                "analyze",
+                "t.txt",
+                "--local",
+                "--no-dictionary",
+                "--level",
+                "A1",
+                "--json",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+
+        written = result.stdout_bytes
+
+        assert b":thumbs_up:" in written
+
+        assert b":smile:" in written
+
+        text = loads(
+            s=written.decode(
+                encoding="utf-8",
+            ),
+        )["document"]["text"]
+
+        assert ":thumbs_up:" in text
+
+        assert ":smile:" in text
+
+        assert "??" not in text
+
+        if runner is _UTF_8_RUNNER:
+            assert "\N{THUMBS UP SIGN}".encode() not in written
+
+            assert "\N{SMILING FACE WITH OPEN MOUTH AND SMILING EYES}".encode() not in written
+
+        else:
+            assert all(byte < 0x80 for byte in written)
+
+    def test_json_from_a_stored_analysis_holding_emoji_codes_parses_to_one_value_under_each_encoding(
+        self,
+        *,
+        workspace: Path,
+    ) -> None:
+        (workspace / "t.txt").write_text(
+            data=_TEXT_WITH_EMOJI_CODES,
+            encoding="utf-8",
+        )
+
+        analyzed = _UTF_8_RUNNER.invoke(
+            app=app,
+            args=[
+                "analyze",
+                "t.txt",
+                "--local",
+                "--no-dictionary",
+                "--level",
+                "A1",
+                "--json",
+            ],
+        )
+
+        assert analyzed.exit_code == 0, analyzed.output
+
+        analysis_id = loads(
+            s=analyzed.stdout,
+        )["analysis_id"]
+
+        shown = {
+            name: shower.invoke(
+                app=app,
+                args=[
+                    "show",
+                    analysis_id,
+                    "--local",
+                    "--json",
+                ],
+            )
+            for (
+                name,
+                shower,
+            ) in (
+                (
+                    "utf-8",
+                    _UTF_8_RUNNER,
+                ),
+                (
+                    "us-ascii",
+                    _ASCII_RUNNER,
+                ),
+                (
+                    "iso-8859-1",
+                    _LATIN_1_RUNNER,
+                ),
+            )
+        }
+
+        assert all(result.exit_code == 0 for result in shown.values())
+
+        parsed = {
+            name: loads(
+                s=result.stdout_bytes.decode(
+                    encoding="utf-8",
+                ),
+            )
+            for (
+                name,
+                result,
+            ) in shown.items()
+        }
+
+        assert parsed["us-ascii"] == parsed["utf-8"]
+
+        assert parsed["iso-8859-1"] == parsed["utf-8"]
+
+        document = parsed["utf-8"]
+
+        assert ":thumbs_up:" in document["document"]["text"]
+
+        assert ":smile:" in document["document"]["text"]
+
+        assert any(
+            ":thumbs_up:" in item["example_sentence"] and ":smile:" in item["example_sentence"]
+            for item in document["items"]
+        )
+
+        assert all(
+            byte < 0x80
+            for name in (
+                "us-ascii",
+                "iso-8859-1",
+            )
+            for byte in shown[name].stdout_bytes
+        )

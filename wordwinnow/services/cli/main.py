@@ -567,6 +567,8 @@ def _render(
         #
         # Where standard output is not UTF-8 every character outside ASCII is escaped, so the JSON is ASCII alone and
         # parses to what it parses to under UTF-8, which the rule that writes the report's characters never touches.
+        #
+        # Rich's emoji codes are left as the text has them, so the JSON holds the learner's text.
         _console.print(
             to_json(
                 analysis=analysis,
@@ -574,6 +576,7 @@ def _render(
                     stream=_console.file,
                 ),
             ),
+            emoji=False,
             markup=False,
             highlight=False,
             soft_wrap=True,
