@@ -18,6 +18,9 @@ from collections.abc import (
 from dataclasses import (
     dataclass,
 )
+from math import (
+    ceil,
+)
 from types import (
     MappingProxyType,
 )
@@ -91,6 +94,7 @@ from wordwinnow.services.cli.operator_seen import (
 from wordwinnow.services.cli.operator_states import (
     SLOW_AFTER,
     State,
+    asking,
     cause,
     closed_lately,
     duration,
@@ -328,6 +332,8 @@ class _Frame:
     canvas: Canvas
 
     pause: float | None
+
+    settled: bool
 
 
 def _put(
@@ -642,7 +648,7 @@ def _header(
             _ROLES[circuit],
         )
 
-    if queued(
+    if not frame.settled and queued(
         provider=provider,
     ):
         said_at = (
@@ -840,7 +846,7 @@ def _out(
     """
     On the wire past the provider, the word that last left found, not found,
     or let go: bright for a second after the read it left at, dim until ten,
-    then gone.
+    then gone, and never in a settled frame.
     """
 
     seen = frame.seen
@@ -851,7 +857,7 @@ def _out(
 
     room = at.right - at.provider_at - 3
 
-    if out is None or out.left_at is None or room < 8:
+    if frame.settled or out is None or out.left_at is None or room < 8:
         return
 
     if not within(
@@ -972,8 +978,11 @@ def _notice(
 ) -> None:
     """
     For three seconds after words are let go, how many of them have no row of
-    their own, and what stands in for them.
+    their own, and what stands in for them, and never in a settled frame.
     """
+
+    if frame.settled:
+        return
 
     words = (
         sum(
@@ -1033,8 +1042,11 @@ def _queue_row(
 ) -> None:
     """
     The whole line at the bucket in one row: how many, and their names in the
-    order the bucket serves them.
+    order the bucket serves them, and never in a settled frame.
     """
+
+    if frame.settled:
+        return
 
     queue = tuple(
         lookup.lemma
@@ -1186,8 +1198,12 @@ def _behind_row(
     /,
 ) -> None:
     """
-    The words waiting for the trial's outcome in one row, before the switch.
+    The words waiting for the trial's outcome in one row, before the switch,
+    and never in a settled frame.
     """
+
+    if frame.settled:
+        return
 
     behind = tuple(lookup.lemma for lookup in frame.provider.lookups if lookup.waiting_for is WaitCause.TRIAL)
 
@@ -1832,8 +1848,12 @@ def _body(
     """
     A row for each lookup that has one, a free row between them drawn as the
     panel's edge alone so that the rows beneath it do not move, and a row that
-    counts the lookups at the client that have none.
+    counts the lookups at the client that have none, and nothing in a settled
+    frame.
     """
+
+    if frame.settled:
+        return
 
     said = False
 
@@ -2296,6 +2316,7 @@ def _sentence(
             cause(
                 seen=seen,
                 now=frame.now,
+                settled=frame.settled,
             ),
             frame.at.inner,
             glyphs.ellipsis,
@@ -2311,9 +2332,10 @@ def _sentence(
 
     # NOTE:
     # The breaker's ordinary wait is at the switch, and the pause is at the bucket, and the first word to ask again is
-    # on its own row; what is left for this row is the time-out of a request that hangs, and a breaker held open for
-    # longer than its own wait, which no part explains.
-    if frame.state is State.NO_ANSWER or long_wait(
+    # on its own row; what is left for this row is the time-out of a request that hangs, which a settled frame does
+    # not say, for it has no word to hang, and a breaker held open for longer than its own wait, which no part
+    # explains.
+    if (frame.state is State.NO_ANSWER and not frame.settled) or long_wait(
         seen=seen,
         now=frame.now,
     ):
@@ -2468,6 +2490,7 @@ def _frame(
     now: float,
     inner: int,
     glyphs: Glyphs,
+    settled: bool,
 ) -> _Frame:
     provider = seen.activity.provider
 
@@ -2506,6 +2529,7 @@ def _frame(
                 0.0,
             )
         ),
+        settled=settled,
     )
 
 
@@ -2515,6 +2539,7 @@ def _loop(
     now: float,
     inner: int,
     glyphs: Glyphs,
+    settled: bool,
     folded: int | None,
 ) -> tuple[Text, ...]:
     """
@@ -2522,6 +2547,8 @@ def _loop(
     at the loop's own budget, or, with `folded` the budget of the rows the
     folded body keeps, the line at the bucket and the words behind the trial
     in one row each.
+
+    A `settled` loop has no word in it.
     """
 
     frame = _frame(
@@ -2529,6 +2556,7 @@ def _loop(
         now=now,
         inner=inner,
         glyphs=glyphs,
+        settled=settled,
     )
 
     rows = seen.rows.loop if folded is None else seen.rows.folded[folded]
@@ -2576,16 +2604,51 @@ def _loop(
     return frame.canvas.lines()
 
 
+def _times_out(
+    seen: Seen,
+    /,
+) -> bool:
+    """
+    Whether what is next is the time-out of the oldest request that hangs.
+    """
+
+    provider = seen.activity.provider
+
+    if (
+        state_of(
+            seen=seen,
+        )
+        is not State.NO_ANSWER
+    ):
+        return False
+
+    return (
+        ceil(
+            provider.timeout_seconds
+            - max(
+                lookup.seconds
+                for lookup in asking(
+                    provider=provider,
+                )
+            ),
+        )
+        > 0
+    )
+
+
 def _narrow(
     *,
     seen: Seen,
     now: float,
     inner: int,
     glyphs: Glyphs,
+    settled: bool,
 ) -> tuple[Text, ...]:
     """
     The panel where the loop has no room: its state's sentence, what is next,
     the count, and the columns the loop needs.
+
+    A `settled` panel does not say when a request that hangs times out.
     """
 
     frame = _frame(
@@ -2593,6 +2656,7 @@ def _narrow(
         now=now,
         inner=inner,
         glyphs=glyphs,
+        settled=settled,
     )
 
     canvas = frame.canvas
@@ -2605,6 +2669,7 @@ def _narrow(
             cause(
                 seen=seen,
                 now=now,
+                settled=settled,
             ),
             inner,
             glyphs.ellipsis,
@@ -2612,10 +2677,20 @@ def _narrow(
         Role.TEXT,
     )
 
-    due = next_clause(
-        seen=seen,
-        now=now,
-        width=inner - 6,
+    # NOTE:
+    # The time-out is what the clause names while a request hangs, and no word is left in a settled panel to hang;
+    # where the clause names something else, such as the first word turned away asking again, it stays.
+    due = (
+        None
+        if settled
+        and _times_out(
+            seen,
+        )
+        else next_clause(
+            seen=seen,
+            now=now,
+            width=inner - 6,
+        )
     )
 
     if due:
@@ -2693,6 +2768,7 @@ def _fold(
     now: float,
     inner: int,
     glyphs: Glyphs,
+    settled: bool,
     room: int,
 ) -> tuple[Text, ...]:
     """
@@ -2700,6 +2776,8 @@ def _fold(
     `room` rows: first the line at the bucket and the words behind the trial
     into one row each, then fewer rows for the words asking or backing off,
     the oldest kept, and one row that counts the rest.
+
+    A `settled` loop has no word to fold, so it is drawn whole.
     """
 
     lines = _loop(
@@ -2707,8 +2785,12 @@ def _fold(
         now=now,
         inner=inner,
         glyphs=glyphs,
+        settled=settled,
         folded=None,
     )
+
+    if settled:
+        return lines
 
     if (
         len(
@@ -2724,6 +2806,7 @@ def _fold(
         now=now,
         inner=inner,
         glyphs=glyphs,
+        settled=settled,
         folded=WORD_ROWS,
     )
 
@@ -2759,6 +2842,7 @@ def _fold(
         now=now,
         inner=inner,
         glyphs=glyphs,
+        settled=settled,
         folded=max(
             rows - over - 1,
             1,
@@ -2774,6 +2858,7 @@ def loop_panel(
     rows: int,
     line_rows: int,
     ascii_only: bool,
+    settled: bool = False,
 ) -> RenderableType:
     """
     The panel for the view as `seen` has it at `now`, in a terminal of
@@ -2782,6 +2867,10 @@ def loop_panel(
 
     `rows` is what the terminal has altogether, and `line_rows` how many of
     them the learner's line above the panel takes as it is drawn now.
+
+    A `settled` panel keeps the client's state and its history and draws none
+    of the words: no row of a word, no notice of words let go, no last word
+    out, and no time-out of a request that hangs.
     """
 
     glyphs = ASCII if ascii_only else UNICODE
@@ -2802,6 +2891,7 @@ def loop_panel(
             now=now,
             inner=inner,
             glyphs=glyphs,
+            settled=settled,
         )
 
     else:
@@ -2812,6 +2902,7 @@ def loop_panel(
             now=now,
             inner=inner,
             glyphs=glyphs,
+            settled=settled,
             room=room,
         )
 

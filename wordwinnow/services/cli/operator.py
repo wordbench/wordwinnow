@@ -21,8 +21,9 @@ Like the learner's line, the view is drawn on standard error and only at an
 interactive terminal.
 
 When the analysis ends, the learner's line disappears, and the view leaves the
-panel's last drawing above what the command prints next, unless the command
-ends by an exception, when it leaves nothing.
+panel settled above what the command prints next, with the client's state, the
+last minute, the sentence, and the tally, and without the words, unless the
+command ends by an exception, when it leaves nothing.
 """
 
 from collections.abc import (
@@ -173,10 +174,9 @@ class OperatorProgress:
         /,
     ) -> None:
         # NOTE:
-        # A command that returns leaves the panel's last drawing, the completed count among it, drawn for the
-        # terminal's rows without the line, whose last report can be a word short of the count, while one that ends by
-        # an exception, the interrupt included, erases it all, so that no panel stands above a traceback or an error's
-        # line.
+        # A command that returns leaves the panel settled, the completed count among it, drawn whole without the line,
+        # whose last report can be a word short of the count, while one that ends by an exception, the interrupt
+        # included, erases it all, so that no panel stands above a traceback or an error's line.
         if exc_type is None:
             # NOTE:
             # The state the command ends with is drawn once as it stands before the line goes, as the display draws it
@@ -327,7 +327,8 @@ class OperatorProgress:
         self,
     ) -> RenderableType:
         """
-        The panel under the line as it stands now.
+        The panel under the line as it stands now, or, once the command has
+        returned, settled.
 
         Drawing reads what the view keeps and never changes it.
         """
@@ -370,6 +371,7 @@ class OperatorProgress:
             rows=self._console.height,
             line_rows=line_rows,
             ascii_only=self._console.options.ascii_only,
+            settled=self._ended,
         )
 
     def _render(

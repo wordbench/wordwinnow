@@ -235,6 +235,11 @@ async def watching(
 
     A read that fails tells `watch` why and is tried again at the next
     interval; it never reaches the work inside the block.
+
+    A block that ends without an exception is followed by one more read, so
+    that what `watch` hears last is the client as the work ended, unless the
+    task that reads has died, and when that read fails `watch` hears nothing
+    of it and the block still returns.
     """
 
     async def keep() -> None:
@@ -274,6 +279,24 @@ async def watching(
         await wait(
             fs=(keeping,),
         )
+
+    # NOTE:
+    # Only a block that returns gets here, and it reads once more after the task that reads has ended, because the
+    # read the work ended with can be an interval old and a read still in flight could otherwise finish after this one
+    # and replace it; a task that died by its own exception is not read for again, and a read that fails with an
+    # exception tells the watch nothing and never reaches the work, as the task's reads never do, so that a view keeps
+    # what it last heard rather than drawing the reason in its place.
+    if keeping.cancelled():
+        try:
+            ended = await read()
+
+        except Exception:
+            pass
+
+        else:
+            watch.watched(
+                activity=ended,
+            )
 
 
 def paused_after(

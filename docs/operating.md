@@ -688,10 +688,11 @@ The activity names the words at the client, as each lookup a worker sends
 does, and like every port the stack publishes, the enrichment service's
 listens on 127.0.0.1 alone.
 
-When the command returns, the view leaves the panel's last drawing on standard
-error above the report, the completed count in it, and clears the learner's
-line, and when the command ends by an exception it erases the drawing
-altogether.
+When the command returns, the view leaves the panel settled on standard error
+above the report, with the client's state, the last minute, the sentence, and
+the tally, the completed count in it, and without the words, and clears the
+learner's line, and when the command ends by an exception it erases the
+drawing altogether.
 
 After the report, on standard error, the view prints the analysis's figures
 under a line that names it: a failed analysis's whole reason first, then the
@@ -913,6 +914,9 @@ least as many as left, and anything else is `ended`.
 In the distributed mode the lookups are the service's, for every analysis it
 serves, and the command hears no word let go, so an ending is `ended` unless the
 counts say found or not found, and no row says `turned away`, `let go`, or `again`.
+
+The panel left at the end of the command keeps no row for a word, not even for
+a word that has just left.
 
 Past the provider stands the last word out, the word that last left found, not
 found, or let go, as `✓` and its name, or `W` and its name where it was let go.

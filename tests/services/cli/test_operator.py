@@ -7,10 +7,14 @@ against a scripted provider, replayed into the view with a clock that moves
 only as the recording does.
 """
 
+from asyncio import (
+    sleep as asyncio_sleep,
+)
 from collections import (
     Counter,
 )
 from collections.abc import (
+    Callable,
     Mapping,
 )
 from dataclasses import (
@@ -159,9 +163,13 @@ from wordwinnow.services.cli.operator_states import (
     duration,
     held_of,
     next_clause,
+    state_of,
 )
 from wordwinnow.services.cli.terminal_text import (
     keep_cells_on,
+)
+from wordwinnow.services.progress import (
+    watching,
 )
 
 _FIXTURES: Final = (
@@ -6212,10 +6220,13 @@ class TestTheLastDrawingStays:
 
 
 @final
-class TestTheLastPanelTakesTheRowsTheLineGaveUp:
-    def test_in_a_terminal_that_folds_the_panel_it_is_drawn_for_the_rows_with_no_line(
+class TestTheLastPanelIsTheSettledPanelDrawnWhole:
+    def test_in_a_terminal_that_folds_the_panel_while_it_runs_the_panel_left_is_the_settled_panel_drawn_whole(
         self,
     ) -> None:
+        # NOTE:
+        # A settled panel draws no word's row, so it never folds, and the rows the line gave up change nothing in it:
+        # the panel left is the settled panel drawn whole, which is no taller than the terminal.
         stream = StringIO()
 
         clock = FakeMonotonicClock()
@@ -6289,28 +6300,14 @@ class TestTheLastPanelTakesTheRowsTheLineGaveUp:
                     rows=14,
                     line_rows=0,
                     ascii_only=False,
+                    settled=True,
                 ),
                 options=console.options,
                 pad=False,
             ),
         )
 
-        with_line = len(
-            console.render_lines(
-                renderable=loop_panel(
-                    seen=seen,
-                    now=clock(),
-                    columns=110,
-                    rows=14,
-                    line_rows=2,
-                    ascii_only=False,
-                ),
-                options=console.options,
-                pad=False,
-            ),
-        )
-
-        assert expected > with_line
+        assert expected <= 14
 
         assert (
             len(
@@ -6318,6 +6315,907 @@ class TestTheLastPanelTakesTheRowsTheLineGaveUp:
             )
             == expected
         ), final
+
+
+@final
+class _Finds:
+    """
+    A read of the dictionary's activity that finds one activity at each read,
+    the last of them at every read after it.
+    """
+
+    def __init__(
+        self,
+        *found: DictionaryActivity,
+    ) -> None:
+        self._found: Final = found
+
+        self._count = 0
+
+    async def __call__(
+        self,
+    ) -> DictionaryActivity:
+        found = self._found[
+            min(
+                self._count,
+                len(
+                    self._found,
+                )
+                - 1,
+            )
+        ]
+
+        self._count += 1
+
+        return found
+
+
+async def _left(
+    *,
+    columns: int,
+    rows: int,
+    play: Callable[[OperatorProgress, FakeMonotonicClock], None],
+    first: DictionaryActivity,
+    last: DictionaryActivity,
+) -> tuple[tuple[str, ...], str, OperatorProgress]:
+    """
+    A view on a terminal of `columns` by `rows` that hears `first` at the
+    start of the block `watching` runs, then what `play` gives it, and `last`
+    at the end of the block, before the command returns.
+
+    The result is the panel as it stood just before the block ended, as a
+    person reads it, what the terminal was left showing, and the view.
+    """
+
+    stream = StringIO()
+
+    clock = FakeMonotonicClock()
+
+    with OperatorProgress(
+        console=Console(
+            force_terminal=True,
+            force_interactive=True,
+            file=stream,
+            width=columns,
+            height=rows,
+        ),
+        refresh_per_second=0.01,
+        clock=clock,
+        wall_clock=_WallClock(),
+    ) as progress:
+        async with watching(
+            read=_Finds(
+                first,
+                last,
+            ),
+            watch=progress,
+            interval_seconds=3600.0,
+        ):
+            await asyncio_sleep(
+                delay=0,
+            )
+
+            play(
+                progress,
+                clock,
+            )
+
+            before = _plain(
+                progress,
+                columns=columns,
+            )
+
+    written = stream.getvalue()
+
+    return (
+        before,
+        _drawn_text(
+            written[
+                written.rindex(
+                    "\x1b[2K",
+                ) :
+            ],
+        ),
+        progress,
+    )
+
+
+def _activity(
+    provider: ProviderActivity,
+    counts: LookupCounts = _NOTHING,
+    /,
+) -> DictionaryActivity:
+    return DictionaryActivity(
+        counts=counts,
+        provider=provider,
+    )
+
+
+_TWO_NOT_FOUND: Final = LookupCounts(
+    cached=0,
+    found=0,
+    not_found=2,
+    unavailable=MappingProxyType(
+        mapping={},
+    ),
+)
+
+
+def _in_the_local_mode(
+    progress: OperatorProgress,
+    clock: FakeMonotonicClock,
+    /,
+) -> None:
+    """
+    A stage of ten words at the client in which `foo` is still asking when
+    `bar` has just left, one word was let go, and every word is resolved.
+    """
+
+    progress.stage_started(
+        stage=Stage.DICTIONARY_ENRICHMENT,
+        steps=10,
+    )
+
+    _watched(
+        progress,
+        replace(
+            _CLOSED,
+            lookups=(
+                _asking(
+                    "foo",
+                    0.5,
+                ),
+                _asking(
+                    "bar",
+                    0.5,
+                ),
+            ),
+        ),
+    )
+
+    clock.now = 1.0
+
+    progress.looked_up(
+        lookup=DictionaryLookup(
+            outcome=LookupOutcome.UNAVAILABLE,
+            failure_reason=FailureReason.TIMED_OUT,
+        ),
+    )
+
+    for _ in range(
+        9,
+    ):
+        progress.looked_up(
+            lookup=_unanswered(),
+        )
+
+    _watched(
+        progress,
+        replace(
+            _CLOSED,
+            lookups=(
+                _asking(
+                    "foo",
+                    1.5,
+                ),
+            ),
+        ),
+        LookupCounts(
+            cached=0,
+            found=0,
+            not_found=1,
+            unavailable=MappingProxyType(
+                mapping={},
+            ),
+        ),
+    )
+
+    clock.now = 1.25
+
+
+def _crowded(
+    *,
+    waiting: int,
+    crowd: ProviderActivity,
+) -> Callable[[OperatorProgress, FakeMonotonicClock], None]:
+    """
+    What a worker's analysis heard: its report a word short of the count and
+    the words of `crowd` at the service, `waiting` of the analysis's own to
+    ask again, and, with a count of none, the analysis completed.
+    """
+
+    def play(
+        progress: OperatorProgress,
+        clock: FakeMonotonicClock,
+        /,
+    ) -> None:
+        progress.processing(
+            progress=_stored(
+                steps=40,
+                done=39,
+                waiting=waiting,
+                next_in=3.0,
+            ),
+        )
+
+        if not waiting:
+            progress.completed()
+
+        _watched(
+            progress,
+            crowd,
+        )
+
+    return play
+
+
+_TWELVE_ASKING: Final = replace(
+    _CLOSED,
+    lookups=tuple(
+        _asking(
+            f"foo{number}",
+            1.0 + number,
+        )
+        for number in range(
+            12,
+        )
+    ),
+)
+
+
+# NOTE:
+# The twelve words asking, and two more in line for a token.
+_CROWD: Final = replace(
+    _TWELVE_ASKING,
+    lookups=(
+        *_TWELVE_ASKING.lookups,
+        LookupActivity(
+            lemma="baz",
+            waiting_for=WaitCause.BUDGET,
+            attempt=1,
+            seconds=0.4,
+        ),
+        LookupActivity(
+            lemma="qux",
+            waiting_for=WaitCause.BUDGET,
+            attempt=1,
+            seconds=0.2,
+        ),
+    ),
+)
+
+
+# NOTE:
+# A trial in flight with two words behind it and two more in line for a token.
+_ON_TRIAL: Final = replace(
+    _CLOSED,
+    circuit=BreakerState.HALF_OPEN,
+    lookups=(
+        LookupActivity(
+            lemma="foo",
+            waiting_for=WaitCause.PROVIDER,
+            attempt=1,
+            seconds=2.0,
+            trial=True,
+        ),
+        LookupActivity(
+            lemma="bar",
+            waiting_for=WaitCause.TRIAL,
+            attempt=1,
+            seconds=1.5,
+        ),
+        LookupActivity(
+            lemma="baz",
+            waiting_for=WaitCause.TRIAL,
+            attempt=1,
+            seconds=1.0,
+        ),
+        LookupActivity(
+            lemma="qux",
+            waiting_for=WaitCause.BUDGET,
+            attempt=1,
+            seconds=0.4,
+        ),
+        LookupActivity(
+            lemma="quux",
+            waiting_for=WaitCause.BUDGET,
+            attempt=1,
+            seconds=0.2,
+        ),
+    ),
+)
+
+_TRIAL_WORDS: Final = (
+    "foo",
+    "bar",
+    "baz",
+    "qux",
+)
+
+
+@final
+class TestTheLastPanelIsSettled:
+    async def test_in_the_local_mode_the_panel_left_is_idle_with_the_lane_the_sentence_and_the_tally_and_no_word(
+        self,
+    ) -> None:
+        (
+            before,
+            after,
+            _,
+        ) = await _left(
+            columns=110,
+            rows=40,
+            play=_in_the_local_mode,
+            first=_activity(
+                _CLOSED,
+            ),
+            last=_activity(
+                _CLOSED,
+                _TWO_NOT_FOUND,
+            ),
+        )
+
+        assert any(
+            row.startswith(
+                "│ foo ",
+            )
+            and "● 1.8 s" in row
+            for row in before
+        )
+
+        assert any(
+            row.startswith(
+                "│ bar ",
+            )
+            and "✓ not found" in row
+            for row in before
+        )
+
+        assert any("◎─ ✓ bar " in row for row in before)
+
+        assert any("1 let go: W WordNet's meaning stands in where it has one" in row for row in before)
+
+        assert any("ANSWERING" in row for row in before)
+
+        shown = after.splitlines()
+
+        assert after.startswith(
+            "╭",
+        ), after
+
+        assert "IDLE" in shown[0], after
+
+        assert not any("foo" in row or "bar" in row for row in shown), after
+
+        assert not any("let go:" in row or "stands in where it has one" in row for row in shown), after
+
+        assert not any("◎─ ✓" in row for row in shown), after
+
+        assert any(
+            row.startswith(
+                "│ to ask 0 ",
+            )
+            for row in shown
+        ), after
+
+        assert any(
+            row.startswith(
+                "│ last 60 s ",
+            )
+            and "─W──╯" in row
+            for row in shown
+        ), after
+
+        assert any(
+            row.startswith(
+                "│ idle: every word has its answer",
+            )
+            for row in shown
+        ), after
+
+        assert any(
+            row.startswith(
+                "│ resolved 10 of 10:  0 cache  ✓ 0 found  2 not found  W 1 let go",
+            )
+            for row in shown
+        ), after
+
+        assert shown[-1].startswith(
+            "╰",
+        ), after
+
+    async def test_in_the_distributed_mode_the_panel_left_keeps_the_services_badge_and_draws_none_of_its_words(
+        self,
+    ) -> None:
+        (
+            before,
+            after,
+            progress,
+        ) = await _left(
+            columns=110,
+            rows=40,
+            play=_crowded(
+                waiting=0,
+                crowd=_CROWD,
+            ),
+            first=_activity(
+                _CLOSED,
+            ),
+            last=_activity(
+                _CROWD,
+            ),
+        )
+
+        seen = progress._keeper.seen
+
+        assert seen is not None
+
+        state = state_of(
+            seen=seen,
+        )
+
+        assert state is not State.IDLE
+
+        assert any(
+            row.startswith(
+                "│ foo0 ",
+            )
+            for row in before
+        )
+
+        assert any("more asking" in row for row in before)
+
+        assert any(
+            row.startswith(
+                "│                                             in line ╷",
+            )
+            for row in before
+        )
+
+        shown = after.splitlines()
+
+        assert f" {WORDS[state].upper()} " in shown[0], after
+
+        assert "IDLE" not in shown[0], after
+
+        assert not any("foo" in row or "baz" in row or "qux" in row or "more asking" in row for row in shown), after
+
+        assert not any("in line" in row for row in shown), after
+
+        assert any("times out in 18 s at the earliest" in row for row in before)
+
+        assert not any(
+            "times out" in row
+            or row.startswith(
+                "│ next",
+            )
+            for row in shown
+        ), after
+
+        assert any(
+            row.startswith(
+                "│ resolved 40 of 40",
+            )
+            for row in shown
+        ), after
+
+    async def test_the_words_that_ask_again_stay_where_the_analysis_holds_words(
+        self,
+    ) -> None:
+        (
+            before,
+            after,
+            _,
+        ) = await _left(
+            columns=110,
+            rows=40,
+            play=_crowded(
+                waiting=3,
+                crowd=_TWELVE_ASKING,
+            ),
+            first=_activity(
+                _CLOSED,
+            ),
+            last=_activity(
+                _TWELVE_ASKING,
+            ),
+        )
+
+        assert any(
+            row.startswith(
+                "│ to ask again 3 ",
+            )
+            for row in before
+        )
+
+        assert any(
+            row.startswith(
+                "│ to ask again 3 ",
+            )
+            for row in after.splitlines()
+        ), after
+
+        assert not any("foo" in row for row in after.splitlines()), after
+
+    @mark.parametrize(
+        argnames="columns",
+        argvalues=(
+            110,
+            72,
+        ),
+    )
+    async def test_a_breaker_held_open_longer_than_its_own_wait_keeps_its_next_row(
+        self,
+        *,
+        columns: int,
+    ) -> None:
+        held_open = replace(
+            _CLOSED,
+            circuit=BreakerState.OPEN,
+            retry_in_seconds=112.0,
+            failed_trials=0,
+            opened_by=FailureReason.PROVIDER_ERROR,
+        )
+
+        def play(
+            progress: OperatorProgress,
+            clock: FakeMonotonicClock,
+            /,
+        ) -> None:
+            progress.stage_started(
+                stage=Stage.DICTIONARY_ENRICHMENT,
+                steps=100,
+            )
+
+            _watched(
+                progress,
+                _CLOSED,
+            )
+
+            clock.now = 1.0
+
+            _watched(
+                progress,
+                held_open,
+            )
+
+        (
+            _,
+            after,
+            _,
+        ) = await _left(
+            columns=columns,
+            rows=40,
+            play=play,
+            first=_activity(
+                _CLOSED,
+            ),
+            last=_activity(
+                held_open,
+            ),
+        )
+
+        assert any(
+            row.startswith(
+                "│ next  trial 1 in 1 min 52 s: as long as the provider asked",
+            )
+            for row in after.splitlines()
+        ), after
+
+    async def test_the_narrow_form_left_has_no_time_out_for_a_request_that_hangs_and_keeps_its_title_and_count(
+        self,
+    ) -> None:
+        hanging = replace(
+            _CLOSED,
+            lookups=(
+                _asking(
+                    "foo",
+                    10.0,
+                ),
+            ),
+        )
+
+        def play(
+            progress: OperatorProgress,
+            clock: FakeMonotonicClock,
+            /,
+        ) -> None:
+            progress.stage_started(
+                stage=Stage.DICTIONARY_ENRICHMENT,
+                steps=40,
+            )
+
+            _watched(
+                progress,
+                hanging,
+            )
+
+        (
+            before,
+            after,
+            progress,
+        ) = await _left(
+            columns=72,
+            rows=40,
+            play=play,
+            first=_activity(
+                _CLOSED,
+            ),
+            last=_activity(
+                hanging,
+            ),
+        )
+
+        seen = progress._keeper.seen
+
+        assert seen is not None
+
+        assert state_of(
+            seen=seen,
+        ) is (State.NO_ANSWER)
+
+        assert any("times out in 20 s at the earliest" in row for row in before)
+
+        shown = after.splitlines()
+
+        assert "dictionary  NO ANSWER" in shown[0], after
+
+        assert not any(
+            "times out" in row
+            or row.startswith(
+                "│ next",
+            )
+            for row in shown
+        ), after
+
+        assert any(
+            row.startswith(
+                "│ resolved 0 of 40",
+            )
+            for row in shown
+        ), after
+
+        assert any(
+            row.startswith(
+                "│ the oldest request has asked 10 s",
+            )
+            for row in shown
+        ), after
+
+    async def test_a_half_open_breaker_with_a_trial_out_says_so_in_the_panel_left_and_names_no_word(
+        self,
+    ) -> None:
+        (
+            before,
+            after,
+            progress,
+        ) = await _left(
+            columns=110,
+            rows=40,
+            play=_crowded(
+                waiting=0,
+                crowd=_ON_TRIAL,
+            ),
+            first=_activity(
+                _CLOSED,
+            ),
+            last=_activity(
+                _ON_TRIAL,
+            ),
+        )
+
+        seen = progress._keeper.seen
+
+        assert seen is not None
+
+        assert (
+            state_of(
+                seen=seen,
+            )
+            is State.ON_TRIAL
+        )
+
+        assert any(
+            row.startswith(
+                "│ breaker half-open: trial 1, foo, decides; the rest wait for it",
+            )
+            for row in before
+        )
+
+        shown = after.splitlines()
+
+        assert any(
+            row.startswith(
+                "│ breaker half-open: trial 1 decides; the rest wait for it",
+            )
+            for row in shown
+        ), after
+
+        assert not any(word in row for row in shown for word in _TRIAL_WORDS), after
+
+    async def test_in_a_terminal_too_short_for_the_loop_the_panel_left_names_no_word_in_line_or_behind_the_trial(
+        self,
+    ) -> None:
+        (
+            before,
+            after,
+            _,
+        ) = await _left(
+            columns=110,
+            rows=6,
+            play=_crowded(
+                waiting=0,
+                crowd=_ON_TRIAL,
+            ),
+            first=_activity(
+                _CLOSED,
+            ),
+            last=_activity(
+                _ON_TRIAL,
+            ),
+        )
+
+        assert any(
+            row.startswith(
+                "│ in line 2 ",
+            )
+            and "qux" in row
+            for row in before
+        )
+
+        assert any(
+            row.startswith(
+                "│ behind 2 ",
+            )
+            and "bar" in row
+            for row in before
+        )
+
+        assert not any(word in row for row in after.splitlines() for word in _TRIAL_WORDS), after
+
+        assert not any(
+            row.startswith(
+                (
+                    "│ in line",
+                    "│ behind",
+                ),
+            )
+            for row in after.splitlines()
+        ), after
+
+    async def test_the_narrow_form_left_keeps_a_next_row_that_is_not_the_time_out_of_a_request_that_hangs(
+        self,
+    ) -> None:
+        hanging = replace(
+            _CLOSED,
+            lookups=(
+                _asking(
+                    "foo",
+                    31.0,
+                ),
+            ),
+        )
+
+        def play(
+            progress: OperatorProgress,
+            clock: FakeMonotonicClock,
+            /,
+        ) -> None:
+            progress.processing(
+                progress=_stored(
+                    steps=40,
+                    done=39,
+                    waiting=3,
+                    next_in=3.0,
+                ),
+            )
+
+            _watched(
+                progress,
+                hanging,
+            )
+
+        (
+            before,
+            after,
+            progress,
+        ) = await _left(
+            columns=72,
+            rows=40,
+            play=play,
+            first=_activity(
+                _CLOSED,
+            ),
+            last=_activity(
+                hanging,
+            ),
+        )
+
+        seen = progress._keeper.seen
+
+        assert seen is not None
+
+        assert (
+            state_of(
+                seen=seen,
+            )
+            is State.NO_ANSWER
+        )
+
+        assert any(
+            row.startswith(
+                "│ next  the first word turned away asks again in 3 s",
+            )
+            for row in before
+        )
+
+        shown = after.splitlines()
+
+        assert any(
+            row.startswith(
+                "│ next  the first word turned away asks again in 3 s",
+            )
+            for row in shown
+        ), after
+
+        assert not any("times out" in row for row in shown), after
+
+    async def test_in_a_short_terminal_the_panel_left_is_drawn_whole_and_no_taller_than_the_terminal(
+        self,
+    ) -> None:
+        (
+            _,
+            short,
+            _,
+        ) = await _left(
+            columns=110,
+            rows=14,
+            play=_crowded(
+                waiting=0,
+                crowd=_TWELVE_ASKING,
+            ),
+            first=_activity(
+                _CLOSED,
+            ),
+            last=_activity(
+                _TWELVE_ASKING,
+            ),
+        )
+
+        (
+            _,
+            tall,
+            _,
+        ) = await _left(
+            columns=110,
+            rows=40,
+            play=_crowded(
+                waiting=0,
+                crowd=_TWELVE_ASKING,
+            ),
+            first=_activity(
+                _CLOSED,
+            ),
+            last=_activity(
+                _TWELVE_ASKING,
+            ),
+        )
+
+        assert short == tall, short
+
+        assert (
+            len(
+                short.splitlines(),
+            )
+            <= 14
+        ), short
+
+        assert any(
+            row.startswith(
+                "│ resolved 40 of 40",
+            )
+            for row in short.splitlines()
+        ), short
 
 
 def _drawn_text(

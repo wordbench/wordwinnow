@@ -5,10 +5,18 @@ dictionary hears what it is doing.
 """
 
 from asyncio import (
+    CancelledError,
+    Event,
+    create_task,
+)
+from asyncio import (
     sleep as asyncio_sleep,
 )
 from collections.abc import (
     Sequence,
+)
+from dataclasses import (
+    replace,
 )
 from datetime import (
     datetime,
@@ -27,6 +35,7 @@ from typing import (
 
 from pytest import (
     LogCaptureFixture,
+    raises,
 )
 
 from tests.fakes.ports import (
@@ -553,6 +562,315 @@ class TestWatching:
             )
             == heard
         )
+
+
+_OPEN: Final = replace(
+    _IDLE,
+    provider=replace(
+        _IDLE.provider,
+        circuit=BreakerState.OPEN,
+    ),
+)
+
+
+@final
+class _Reads:
+    """
+    What a read finds, one outcome at each read, the last one for every read
+    after it.
+    """
+
+    def __init__(
+        self,
+        *outcomes: DictionaryActivity | Exception,
+    ) -> None:
+        self._outcomes: Final = outcomes
+
+        self.count = 0
+
+    async def __call__(
+        self,
+    ) -> DictionaryActivity:
+        outcome = self._outcomes[
+            min(
+                self.count,
+                len(
+                    self._outcomes,
+                )
+                - 1,
+            )
+        ]
+
+        self.count += 1
+
+        if isinstance(
+            outcome,
+            Exception,
+        ):
+            raise outcome
+
+        return outcome
+
+
+class _StoppedError(
+    Exception,
+):
+    """
+    The end the work inside a block meets other than by returning.
+    """
+
+
+@final
+class TestWatchingReadsOnceMoreAtTheEnd:
+    async def test_a_block_that_returns_has_the_watch_hear_one_more_read_after_its_own_last_interval(
+        self,
+    ) -> None:
+        reads = _Reads(
+            _IDLE,
+            _OPEN,
+        )
+
+        watch = RecordingWatch()
+
+        async with watching(
+            read=reads,
+            watch=watch,
+            interval_seconds=3600.0,
+        ):
+            await asyncio_sleep(
+                delay=0,
+            )
+
+            assert watch.heard == [
+                "circuit closed",
+            ]
+
+        assert watch.heard == [
+            "circuit closed",
+            "circuit open",
+        ]
+
+        await asyncio_sleep(
+            delay=0.01,
+        )
+
+        assert reads.count == 2
+
+    async def test_no_read_is_in_flight_when_the_last_read_begins_and_one_the_block_left_unfinished_tells_nothing(
+        self,
+    ) -> None:
+        release = Event()
+
+        in_flight = [
+            False,
+        ]
+
+        seen_at_last: list[bool] = []
+
+        calls = [
+            0,
+        ]
+
+        async def read() -> DictionaryActivity:
+            calls[0] += 1
+
+            if calls[0] == 1:
+                in_flight[0] = True
+
+                try:
+                    await release.wait()
+
+                finally:
+                    in_flight[0] = False
+
+                return _IDLE
+
+            seen_at_last.append(
+                in_flight[0],
+            )
+
+            return _OPEN
+
+        watch = RecordingWatch()
+
+        async with watching(
+            read=read,
+            watch=watch,
+            interval_seconds=3600.0,
+        ):
+            await asyncio_sleep(
+                delay=0,
+            )
+
+            assert in_flight == [
+                True,
+            ]
+
+        release.set()
+
+        await asyncio_sleep(
+            delay=0.01,
+        )
+
+        assert seen_at_last == [
+            False,
+        ]
+
+        assert watch.heard == [
+            "circuit open",
+        ]
+
+    async def test_a_block_that_raises_has_the_watch_hear_no_read_after_it(
+        self,
+    ) -> None:
+        reads = _Reads(
+            _IDLE,
+            _OPEN,
+        )
+
+        watch = RecordingWatch()
+
+        with raises(
+            expected_exception=_StoppedError,
+        ):
+            async with watching(
+                read=reads,
+                watch=watch,
+                interval_seconds=3600.0,
+            ):
+                await asyncio_sleep(
+                    delay=0,
+                )
+
+                raise _StoppedError
+
+        assert watch.heard == [
+            "circuit closed",
+        ]
+
+        assert reads.count == 1
+
+    async def test_a_block_that_is_canceled_has_the_watch_hear_no_read_after_it(
+        self,
+    ) -> None:
+        reads = _Reads(
+            _IDLE,
+            _OPEN,
+        )
+
+        watch = RecordingWatch()
+
+        inside = Event()
+
+        async def work() -> None:
+            async with watching(
+                read=reads,
+                watch=watch,
+                interval_seconds=3600.0,
+            ):
+                inside.set()
+
+                await asyncio_sleep(
+                    delay=3600.0,
+                )
+
+        task = create_task(
+            coro=work(),
+        )
+
+        await inside.wait()
+
+        await asyncio_sleep(
+            delay=0,
+        )
+
+        task.cancel()
+
+        with raises(
+            expected_exception=CancelledError,
+        ):
+            await task
+
+        assert watch.heard == [
+            "circuit closed",
+        ]
+
+        assert reads.count == 1
+
+    async def test_a_last_read_that_fails_tells_the_watch_nothing_and_the_block_still_returns(
+        self,
+    ) -> None:
+        reads = _Reads(
+            _IDLE,
+            ActivityUnreadableError(
+                "the enrichment service does not answer at http://enrichment.invalid",
+            ),
+        )
+
+        watch = RecordingWatch()
+
+        async with watching(
+            read=reads,
+            watch=watch,
+            interval_seconds=3600.0,
+        ):
+            await asyncio_sleep(
+                delay=0,
+            )
+
+        assert watch.heard == [
+            "circuit closed",
+        ]
+
+        assert reads.count == 2
+
+    async def test_a_last_read_that_fails_in_any_other_way_tells_the_watch_nothing_and_the_block_still_returns(
+        self,
+    ) -> None:
+        reads = _Reads(
+            _IDLE,
+            _StoppedError(),
+        )
+
+        watch = RecordingWatch()
+
+        async with watching(
+            read=reads,
+            watch=watch,
+            interval_seconds=3600.0,
+        ):
+            await asyncio_sleep(
+                delay=0,
+            )
+
+        assert watch.heard == [
+            "circuit closed",
+        ]
+
+        assert reads.count == 2
+
+    async def test_a_reading_task_that_died_by_its_own_exception_is_not_read_for_again(
+        self,
+    ) -> None:
+        reads = _Reads(
+            _StoppedError(),
+            _OPEN,
+        )
+
+        watch = RecordingWatch()
+
+        async with watching(
+            read=reads,
+            watch=watch,
+            interval_seconds=3600.0,
+        ):
+            await asyncio_sleep(
+                delay=0,
+            )
+
+        assert watch.heard == []
+
+        assert reads.count == 1
 
 
 def _state_of(

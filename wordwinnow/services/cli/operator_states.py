@@ -571,9 +571,12 @@ def cause(
     *,
     seen: Seen,
     now: float,
+    settled: bool = False,
 ) -> str:
     """
     One sentence: why the state is what it is.
+
+    A `settled` sentence names no word.
     """
 
     provider = seen.activity.provider
@@ -617,6 +620,9 @@ def cause(
 
             if trial is None:
                 return f"breaker half-open: the next word to ask is {name}"
+
+            if settled:
+                return f"breaker half-open: {name} decides; the rest wait for it"
 
             return f"breaker half-open: {name}, {trial.lemma}, decides; the rest wait for it"
 
