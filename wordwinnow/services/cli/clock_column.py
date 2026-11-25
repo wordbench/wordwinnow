@@ -22,6 +22,9 @@ from rich.progress import (
     ProgressColumn,
     Task,
 )
+from rich.table import (
+    Column,
+)
 
 
 @final
@@ -38,8 +41,11 @@ class ClockColumn(
         *,
         clock: Callable[[], datetime],
         draw: Callable[[Task, datetime], RenderableType],
+        table_column: Column | None = None,
     ) -> None:
-        super().__init__()
+        super().__init__(
+            table_column=table_column,
+        )
 
         self._clock: Final = clock
 

@@ -91,6 +91,7 @@ from rich.console import (
 )
 from rich.progress import (
     BarColumn,
+    Progress,
 )
 
 from tests.application.test_process_an_analysis import (
@@ -160,6 +161,9 @@ from wordwinnow.infrastructure.dictionary.wire import (
 )
 from wordwinnow.infrastructure.observability.metrics import (
     build_metrics,
+)
+from wordwinnow.services.cli.clock_column import (
+    ClockColumn,
 )
 from wordwinnow.services.cli.progress import (
     TerminalProgress,
@@ -3273,8 +3277,49 @@ _BAR_GLYPHS: Final = (
 _TIME: Final = 179.0
 
 
+def _in_one_row(
+    part: str,
+    rows: list[str],
+    /,
+) -> bool:
+    """
+    Whether some row holds `part` whole.
+    """
+
+    return any(part in row for row in rows)
+
+
+def _bar_in(
+    rows: list[str],
+    /,
+) -> bool:
+    """
+    Whether the rows draw a bar.
+    """
+
+    drawn = "".join(
+        rows,
+    )
+
+    return any(glyph in drawn for glyph in _BAR_GLYPHS)
+
+
+@final
+class _Drawn:
+    """
+    A progress of Rich's own, drawn as `_rows` draws a learner's line.
+    """
+
+    def __init__(
+        self,
+        *,
+        line: Progress,
+    ) -> None:
+        self.line: Final = line
+
+
 def _rows(
-    line: TerminalProgress,
+    line: TerminalProgress | _Drawn,
     width: int,
     /,
 ) -> list[str]:
@@ -3577,24 +3622,79 @@ class TestWidth:
         assert (
             len(
                 rows[80],
-            ),
+            )
+            <= 2
+        ), rows[80]
+
+        assert (
             len(
                 rows[100],
-            ),
+            )
+            <= 2
+        ), rows[100]
+
+        assert (
             len(
                 rows[120],
-            ),
-        ) <= (
-            2,
-            2,
-            1,
+            )
+            <= 1
+        ), rows[120]
+
+        line = _stage_of_1144(
+            case,
+            80,
         )
 
-        drawn = "".join(
+        task = line.line.tasks[-1]
+
+        parts = (
+            _description(
+                task,
+                _FixedClock()(),
+            ).plain,
+            _count_and_time(
+                task,
+                _FixedClock()(),
+            ).plain,
+        )
+
+        for (
+            width,
+            drawn_rows,
+        ) in rows.items():
+            for part in parts:
+                assert _in_one_row(
+                    part,
+                    drawn_rows,
+                ), (
+                    width,
+                    part,
+                    drawn_rows,
+                )
+
+        # NOTE:
+        # The bar is drawn at 120 columns exactly where the case draws one, and at 80 only where, with the other parts
+        # on one row, at least ten cells are left for it.
+        #
+        # The line at 120 columns holds the bar of 24 cells and the four gaps between the five parts, so the line
+        # without its bar is 24 cells shorter than the row drawn there.
+        assert (
+            _bar_in(
+                rows[120],
+            )
+            is case.bar
+        )
+
+        without_bar = (
+            len(
+                rows[120][0].rstrip(),
+            )
+            - 24
+        )
+
+        assert _bar_in(
             rows[80],
-        )
-
-        assert any(glyph in drawn for glyph in _BAR_GLYPHS) is case.bar
+        ) is (case.bar and without_bar + 10 <= 80)
 
     def test_the_widest_words_with_the_bar_drawn_would_fail_the_width_and_so_the_measure_can_fail(
         self,
@@ -3608,21 +3708,53 @@ class TestWidth:
                 80,
             )
 
+            # NOTE:
+            # The line as Rich draws a progress of such columns: a 24-cell bar, and columns that wrap, as the line was
+            # drawn before it measured its parts.
+            clock = _FixedClock()
+
             columns = line.line.columns
 
             line.line.columns = (
                 columns[0],
-                columns[1],
+                ClockColumn(
+                    clock=clock,
+                    draw=_description,
+                ),
                 BarColumn(
                     bar_width=24,
                 ),
-                *columns[3:],
+                ClockColumn(
+                    clock=clock,
+                    draw=_count_and_time,
+                ),
+                columns[4],
+            )
+
+            (task,) = line.line.tasks
+
+            plain = Progress(
+                *line.line.columns,
+                console=Console(
+                    file=StringIO(),
+                ),
+            )
+
+            plain.add_task(
+                description=task.description,
+                total=task.total,
+                completed=int(
+                    task.completed,
+                ),
+                **task.fields,
             )
 
             assert (
                 len(
                     _rows(
-                        line,
+                        _Drawn(
+                            line=plain,
+                        ),
                         80,
                     ),
                 )

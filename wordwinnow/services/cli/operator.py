@@ -17,8 +17,12 @@ state is what it is.
 Every part is what the client saw of its own requests or what it decided; none
 says what the provider did otherwise, which the client cannot see.
 
-Like the learner's line, the view is drawn on standard error, only at an
-interactive terminal, and disappears when the analysis ends.
+Like the learner's line, the view is drawn on standard error and only at an
+interactive terminal.
+
+When the analysis ends, the learner's line disappears, and the view leaves the
+panel's last drawing above what the command prints next, unless the command
+ends by an exception, when it leaves nothing.
 """
 
 from collections.abc import (
@@ -132,6 +136,8 @@ class OperatorProgress:
 
         self._unwatched: str | None = None
 
+        self._ended = False
+
         # NOTE:
         # The display draws the view once as it is built, so everything the view reads is set before it.
         self._live: Final = Live(
@@ -166,6 +172,22 @@ class OperatorProgress:
         traceback: TracebackType | None,
         /,
     ) -> None:
+        # NOTE:
+        # A command that returns leaves the panel's last drawing, the completed count among it, drawn for the
+        # terminal's rows without the line, whose last report can be a word short of the count, while one that ends by
+        # an exception, the interrupt included, erases it all, so that no panel stands above a traceback or an error's
+        # line.
+        if exc_type is None:
+            # NOTE:
+            # The state the command ends with is drawn once as it stands before the line goes, as the display draws it
+            # once more as it stops, so that a view stopped between two ticks has still drawn the line it ends with.
+            if self.shown:
+                self._live.refresh()
+
+            self._ended = True
+
+            self._live.transient = False
+
         self._live.stop()
 
     def begin(
@@ -325,14 +347,20 @@ class OperatorProgress:
             )
 
         # NOTE:
-        # The learner's line takes one row from 120 columns and two or three below, by what it says, so the rows it
-        # takes are measured as it is drawn, and the loop folds to what the terminal leaves.
-        line_rows = len(
-            self._console.render_lines(
-                renderable=self._line.line,
-                options=self._console.options,
-                pad=False,
-            ),
+        # The learner's line takes one row where its parts fit, two where they do not, three where the counts and the
+        # time spent do not fit side by side, and more only where a part is wider than its row, so the rows it takes
+        # are measured as it is drawn, and the loop folds to what the terminal leaves; once the command has returned
+        # the line is gone and takes none.
+        line_rows = (
+            0
+            if self._ended
+            else len(
+                self._console.render_lines(
+                    renderable=self._line.line,
+                    options=self._console.options,
+                    pad=False,
+                ),
+            )
         )
 
         return loop_panel(
@@ -347,6 +375,9 @@ class OperatorProgress:
     def _render(
         self,
     ) -> RenderableType:
+        if self._ended:
+            return self.panel()
+
         return Group(
             self._line.line,
             self.panel(),

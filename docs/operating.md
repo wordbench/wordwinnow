@@ -688,6 +688,11 @@ The activity names the words at the client, as each lookup a worker sends
 does, and like every port the stack publishes, the enrichment service's
 listens on 127.0.0.1 alone.
 
+When the command returns, the view leaves the panel's last drawing on standard
+error above the report, the completed count in it, and clears the learner's
+line, and when the command ends by an exception it erases the drawing
+altogether.
+
 After the report, on standard error, the view prints the analysis's figures
 under a line that names it: a failed analysis's whole reason first, then the
 origin and reference of its text and its status, and, once it has completed,
@@ -971,7 +976,11 @@ The same row counts the service's lookups in the distributed mode, where they
 can be several analyses'.
 
 A terminal too short for the frame folds it, and counts the rows the learner's
-line takes as it is drawn, which is two or three at 80 columns.
+line takes as it is drawn, which is one or two at 80 columns, since the line
+keeps each part whole where it fits a row of its own: where the parts do not
+fit on one row, the bar shortens or is left out, and then the counts and the
+time spent go under the description, side by side where they fit and on rows
+of their own where they do not.
 
 First the line at the bucket goes into one row and the words behind the trial
 into another, as in this frame for a terminal of 16 rows, and then the words

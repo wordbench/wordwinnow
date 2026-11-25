@@ -2,6 +2,9 @@
 The progress line the command line shows on standard error.
 """
 
+from collections.abc import (
+    Mapping,
+)
 from datetime import (
     datetime,
     timedelta,
@@ -17,7 +20,11 @@ from re import (
     split,
     sub,
 )
+from types import (
+    MappingProxyType,
+)
 from typing import (
+    Any,
     Final,
     final,
 )
@@ -43,6 +50,7 @@ from tests.fakes.progress import (
     held_words,
 )
 from wordwinnow.application.dto import (
+    DictionaryWait,
     ProcessingProgress,
 )
 from wordwinnow.domain.analysis import (
@@ -60,6 +68,9 @@ from wordwinnow.services.cli.progress import (
     PAUSED_DICTIONARY,
     STAGE_DESCRIPTIONS,
     TerminalProgress,
+    _count_and_time,
+    _description,
+    _DictionaryLine,
 )
 
 # NOTE:
@@ -1671,3 +1682,616 @@ class TestTheLineOnATerminalThatIsNotUtf8:
         ) <= frozenset(
             _BRAILLE,
         ), cells
+
+
+@final
+class TestTheLineIsErasedWhenTheCommandReturns:
+    def test_the_learners_line_alone_leaves_nothing_standing_when_the_command_returns(
+        self,
+    ) -> None:
+        stream = StringIO()
+
+        with TerminalProgress(
+            console=Console(
+                force_terminal=True,
+                force_interactive=True,
+                file=stream,
+                width=110,
+            ),
+            refresh_per_second=0.01,
+        ) as progress:
+            progress.begin(
+                description="counting",
+                steps=10,
+            )
+
+            progress.advance()
+
+        assert "1 of 10" in stream.getvalue()
+
+        assert stream.getvalue().endswith(
+            "\r\x1b[1A\x1b[2K",
+        )
+
+
+_NOW: Final = EPOCH
+
+_BAR_CELLS: Final = 24
+
+_BAR_LEAST: Final = 10
+
+_DESCRIPTION: Final = "looking the words up in the dictionary"
+
+# NOTE:
+# The counts the dictionary stage draws beside its bar: with the time left, with the time since the last answer, and
+# with the time left said as no figure.
+_COUNTS: Final = (
+    "27 of 67, 1 unavailable, about 25 s left",
+    "27 of 67, no answer for 5 s",
+    "27 of 67, a few seconds left",
+)
+
+# NOTE:
+# Each form drawn at 120 columns by the line as it was before it measured its parts.
+_WHOLE: Final = tuple(f"⠋ {_DESCRIPTION} ━━━━━━━━━╸               {counts} 0:00:00" for counts in _COUNTS)
+
+_FORMS: Final = range(
+    len(
+        _COUNTS,
+    ),
+)
+
+_ELAPSED: Final = r"\d:\d\d:\d\d$"
+
+
+def _stage_line(
+    *,
+    form: int,
+    width: int,
+    hue: bool = True,
+    bar: bool = True,
+) -> list[str]:
+    """
+    The rows the learner's line draws at `width` in the dictionary stage, in
+    one of the three forms of `_COUNTS`.
+    """
+
+    stream = StringIO()
+
+    console = Console(
+        color_system=None,
+        force_terminal=False,
+        file=stream,
+        width=width,
+    )
+
+    progress = TerminalProgress(
+        console=console,
+        clock=lambda: _NOW,
+        hue=hue,
+    )
+
+    progress.stage_started(
+        stage=Stage.DICTIONARY_ENRICHMENT,
+        steps=67,
+    )
+
+    task = progress._task
+
+    assert task is not None
+
+    progress.line.update(
+        task_id=task,
+        bar=bar,
+    )
+
+    if form == 0:
+        progress.line.update(
+            task_id=task,
+            completed=27,
+            count="27 of 67, 1 unavailable",
+            finish=_NOW
+            + timedelta(
+                seconds=25,
+            ),
+        )
+
+    elif form == 1:
+        progress.line.update(
+            task_id=task,
+            completed=27,
+            count="27 of 67",
+            finish=None,
+            quiet_since=_NOW
+            - timedelta(
+                seconds=5,
+            ),
+            quiet_after=timedelta(
+                seconds=1,
+            ),
+        )
+
+    else:
+        progress.line.update(
+            task_id=task,
+            completed=27,
+            count="27 of 67",
+            finish=_NOW
+            + timedelta(
+                seconds=8,
+            ),
+        )
+
+    console.print(
+        progress.line,
+    )
+
+    return (
+        stream.getvalue()
+        .rstrip(
+            "\n",
+        )
+        .splitlines()
+    )
+
+
+def _bar_cells(
+    row: str,
+    /,
+) -> int:
+    """
+    The cells the bar takes on a one-row line: what stands between the
+    description and the count, less the two blanks that part them from it.
+    """
+
+    return (
+        row.index(
+            "27 of 67",
+        )
+        - row.index(
+            _DESCRIPTION,
+        )
+        - len(
+            _DESCRIPTION,
+        )
+        - 2
+    )
+
+
+def _bar_in(
+    rows: list[str],
+    /,
+) -> bool:
+    drawn = "".join(
+        rows,
+    )
+
+    return any(glyph in drawn for glyph in "━╸╺")
+
+
+@final
+class TestTheLineKeepsItsPartsWhole:
+    @mark.parametrize(
+        argnames="form",
+        argvalues=_FORMS,
+    )
+    @mark.parametrize(
+        argnames="width",
+        argvalues=range(
+            80,
+            121,
+        ),
+    )
+    def test_no_part_breaks_across_rows_and_the_bar_gives_way_first(
+        self,
+        *,
+        form: int,
+        width: int,
+    ) -> None:
+        rows = _stage_line(
+            form=form,
+            width=width,
+        )
+
+        text = "\n".join(
+            rows,
+        )
+
+        assert (
+            len(
+                rows,
+            )
+            <= 2
+        ), rows
+
+        assert (
+            max(
+                len(
+                    row,
+                )
+                for row in rows
+            )
+            <= width
+        ), rows
+
+        assert _DESCRIPTION in text
+
+        assert _COUNTS[form] in rows[-1]
+
+        assert (
+            search(
+                pattern=_ELAPSED,
+                string=rows[-1],
+            )
+            is not None
+        )
+
+        without_bar = (
+            len(
+                _stage_line(
+                    form=form,
+                    width=200,
+                )[0].rstrip(),
+            )
+            - _BAR_CELLS
+        )
+
+        bar = _bar_in(
+            rows,
+        )
+
+        folded = (
+            len(
+                rows,
+            )
+            == 2
+        )
+
+        if folded:
+            assert not bar, rows
+
+            assert without_bar + _BAR_LEAST > width, rows
+
+        elif without_bar + _BAR_CELLS <= width:
+            assert bar, rows
+
+            assert (
+                _bar_cells(
+                    rows[0],
+                )
+                == _BAR_CELLS
+            ), rows
+
+        elif without_bar + _BAR_LEAST <= width:
+            assert bar, rows
+
+            assert (
+                _bar_cells(
+                    rows[0],
+                )
+                == width - without_bar
+            ), rows
+
+        else:
+            assert not bar, rows
+
+    def test_at_80_columns_the_description_stands_whole_on_a_row_and_the_counts_and_time_on_the_next(
+        self,
+    ) -> None:
+        rows = _stage_line(
+            form=0,
+            width=80,
+        )
+
+        assert (
+            len(
+                rows,
+            )
+            == 2
+        )
+
+        assert rows[0].endswith(
+            _DESCRIPTION,
+        )
+
+        assert (
+            rows[1]
+            .lstrip()
+            .startswith(
+                _COUNTS[0],
+            )
+        )
+
+        assert (
+            search(
+                pattern=_ELAPSED,
+                string=rows[1],
+            )
+            is not None
+        )
+
+    @mark.parametrize(
+        argnames="hue",
+        argvalues=(
+            True,
+            False,
+        ),
+    )
+    @mark.parametrize(
+        argnames="form",
+        argvalues=_FORMS,
+    )
+    def test_at_120_columns_each_form_is_drawn_as_it_was_before_the_line_measured_its_parts(
+        self,
+        *,
+        form: int,
+        hue: bool,
+    ) -> None:
+        (row,) = _stage_line(
+            form=form,
+            width=120,
+            hue=hue,
+        )
+
+        assert (
+            _bar_cells(
+                row,
+            )
+            == _BAR_CELLS
+        )
+
+        assert row == _WHOLE[form]
+
+
+@final
+class TestTheWaitsFormKeepsItsRow:
+    @mark.parametrize(
+        argnames="width",
+        argvalues=range(
+            90,
+            121,
+        ),
+    )
+    def test_the_form_that_draws_no_bar_is_drawn_as_it_was_wherever_it_fits(
+        self,
+        *,
+        width: int,
+    ) -> None:
+        assert _stage_line(
+            form=0,
+            width=width,
+            bar=False,
+        ) == [
+            f"⠋ {_DESCRIPTION}  {_COUNTS[0]} 0:00:00",
+        ]
+
+
+_SECONDS: Final = MappingProxyType(
+    mapping={
+        seconds: timedelta(
+            seconds=seconds,
+        )
+        for seconds in (
+            1,
+            5,
+            6,
+            8,
+            25,
+            30,
+            60,
+            125,
+        )
+    },
+)
+
+
+# NOTE:
+# The forms the line draws in the dictionary stage and others, as the fields its columns read: with the time left,
+# with the time since the last answer, with the time left said as no figure, with some words waiting, while the
+# dictionary does not answer, and at a stage that is not the dictionary's.
+_NARROW_FORMS: Final[Mapping[str, Mapping[str, Any]]] = MappingProxyType(
+    mapping={
+        "about": {
+            "count": "27 of 67, 1 unavailable",
+            "finish": _NOW + _SECONDS[25],
+        },
+        "quiet 5": {
+            "count": "27 of 67, 1 unavailable",
+            "finish": None,
+            "quiet_since": _NOW - _SECONDS[5],
+            "quiet_after": _SECONDS[1],
+        },
+        "quiet 30": {
+            "count": "27 of 67, 1 unavailable",
+            "finish": None,
+            "quiet_since": _NOW - _SECONDS[30],
+            "quiet_after": _SECONDS[1],
+        },
+        "few": {
+            "count": "27 of 67, 1 unavailable",
+            "finish": _NOW + _SECONDS[8],
+        },
+        "some words": {
+            "count": "27 of 67, 1 unavailable",
+            "finish": None,
+            "dictionary": _DictionaryLine(
+                wait=DictionaryWait.SOME_WORDS,
+                words=3,
+                next_at=None,
+                within_at=_NOW + _SECONDS[60],
+            ),
+        },
+        "waits": {
+            "count": "31 of 67",
+            "finish": None,
+            "bar": False,
+            "dictionary": _DictionaryLine(
+                wait=DictionaryWait.NOT_ANSWERING,
+                words=31,
+                next_at=_NOW + _SECONDS[6],
+                within_at=_NOW + _SECONDS[125],
+            ),
+        },
+        "plain": {
+            "count": "27 of 67",
+            "finish": None,
+        },
+    },
+)
+
+
+def _narrow_line(
+    *,
+    form: str,
+    width: int,
+) -> tuple[list[str], str, str]:
+    """
+    The rows the line draws at `width` in one of `_NARROW_FORMS`, and the
+    description and the counts it says in them.
+    """
+
+    stream = StringIO()
+
+    console = Console(
+        color_system=None,
+        force_terminal=False,
+        file=stream,
+        width=width,
+    )
+
+    progress = TerminalProgress(
+        console=console,
+        clock=lambda: _NOW,
+    )
+
+    progress.stage_started(
+        stage=Stage.DICTIONARY_ENRICHMENT,
+        steps=67,
+    )
+
+    task = progress._task
+
+    assert task is not None
+
+    progress.line.update(
+        task_id=task,
+        completed=27,
+        **_NARROW_FORMS[form],
+    )
+
+    console.print(
+        progress.line,
+    )
+
+    (said,) = progress.line.tasks
+
+    return (
+        stream.getvalue()
+        .rstrip(
+            "\n",
+        )
+        .splitlines(),
+        _description(
+            said,
+            _NOW,
+        ).plain,
+        _count_and_time(
+            said,
+            _NOW,
+        ).plain,
+    )
+
+
+_NO_BAR: Final = str.maketrans(
+    "",
+    "",
+    "━╸╺",
+)
+
+
+def _held_whole(
+    part: str,
+    rows: list[str],
+    /,
+) -> bool:
+    """
+    Whether one row holds `part` whole.
+    """
+
+    return any(part in row for row in rows)
+
+
+@final
+class TestTheLineIsNeverCropped:
+    @mark.parametrize(
+        argnames="form",
+        argvalues=tuple(
+            _NARROW_FORMS,
+        ),
+    )
+    @mark.parametrize(
+        argnames="width",
+        argvalues=range(
+            40,
+            80,
+        ),
+    )
+    def test_no_row_is_cropped_no_figure_is_missing_and_each_part_is_whole_where_it_fits_a_row(
+        self,
+        *,
+        form: str,
+        width: int,
+    ) -> None:
+        (
+            rows,
+            description,
+            counts,
+        ) = _narrow_line(
+            form=form,
+            width=width,
+        )
+
+        text = "\n".join(
+            rows,
+        )
+
+        assert "…" not in text, rows
+
+        (
+            _,
+            *words,
+        ) = text.translate(
+            _NO_BAR,
+        ).split()
+
+        assert words == [
+            *description.split(),
+            *counts.split(),
+            "0:00:00",
+        ], rows
+
+        for row in rows:
+            assert (
+                len(
+                    row,
+                )
+                <= width
+            ), rows
+
+        # NOTE:
+        # A part stands beside the spinner or a blank of two cells, so it fits a row of its own where it is two cells
+        # narrower than the terminal.
+        for part in (
+            description,
+            counts,
+        ):
+            if (
+                len(
+                    part,
+                )
+                <= width - 2
+            ):
+                assert _held_whole(
+                    part,
+                    rows,
+                ), rows

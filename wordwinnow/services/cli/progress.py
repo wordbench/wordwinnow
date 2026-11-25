@@ -20,8 +20,12 @@ from collections import (
 )
 from collections.abc import (
     Callable,
+    Iterable,
     Mapping,
     Sequence,
+)
+from copy import (
+    copy,
 )
 from dataclasses import (
     dataclass,
@@ -42,19 +46,30 @@ from typing import (
     Self,
     TypedDict,
     final,
+    override,
 )
 
 from rich.console import (
     Console,
+    ConsoleOptions,
     RenderableType,
+    RenderResult,
+)
+from rich.measure import (
+    Measurement,
 )
 from rich.progress import (
     Progress,
     ProgressBar,
+    ProgressColumn,
     SpinnerColumn,
     Task,
     TaskID,
     TimeElapsedColumn,
+)
+from rich.table import (
+    Column,
+    Table,
 )
 from rich.text import (
     Text,
@@ -146,6 +161,55 @@ _LEAST_QUIET: Final = timedelta(
 )
 
 _BAR_WIDTH: Final = 24
+
+# NOTE:
+# The least a bar is drawn at: where the other parts leave it fewer cells it is left out, as it is while the line
+# names what words wait for.
+_BAR_LEAST: Final = 10
+
+# NOTE:
+# The places of the line's five parts, left to right, and the width a part is measured at to learn how wide it wants
+# to be.
+_SPINNER_AT: Final = 0
+
+_DESCRIPTION_AT: Final = 1
+
+_BAR_AT: Final = 2
+
+_COUNT_AT: Final = 3
+
+_ELAPSED_AT: Final = 4
+
+_UNBOUNDED: Final = 10_000
+
+_ALL: Final = (
+    _SPINNER_AT,
+    _DESCRIPTION_AT,
+    _BAR_AT,
+    _COUNT_AT,
+    _ELAPSED_AT,
+)
+
+_ABOVE: Final = (
+    _SPINNER_AT,
+    _DESCRIPTION_AT,
+)
+
+_BELOW: Final = (
+    _SPINNER_AT,
+    _COUNT_AT,
+    _ELAPSED_AT,
+)
+
+_COUNT_ROW: Final = (
+    _SPINNER_AT,
+    _COUNT_AT,
+)
+
+_ELAPSED_ROW: Final = (
+    _SPINNER_AT,
+    _ELAPSED_AT,
+)
 
 # NOTE:
 # The styles of the stage's bar: Rich's own, and, for a line drawn without hue, none, with the part that is left dim
@@ -656,6 +720,293 @@ def _bounded(
 
 
 @final
+class _LineOfParts:
+    """
+    The learner's line of one task as it fits the width it is drawn at, with
+    no part cropped and no part broken across rows where it fits a row of its
+    own.
+
+    One row where the parts fit, the bar giving way first: shortened to the
+    room left, and left out where it would take fewer than ten cells.
+
+    Where they still do not fit, the spinner and the description take the
+    first row, and under the description the count with the time left and the
+    time spent take the second, or, where they do not fit side by side, the
+    count the second and the time spent a third.
+
+    A part wraps only where it is wider than the row it stands on by itself.
+    """
+
+    def __init__(
+        self,
+        *,
+        columns: Sequence[ProgressColumn],
+        cells: Sequence[RenderableType],
+        expand: bool,
+    ) -> None:
+        self._columns: Final = tuple(
+            columns,
+        )
+
+        self._cells: Final = tuple(
+            cells,
+        )
+
+        self._expand: Final = expand
+
+    def __rich_console__(
+        self,
+        console: Console,
+        options: ConsoleOptions,
+        /,
+    ) -> RenderResult:
+        cells = list(
+            self._cells,
+        )
+
+        whole = self._table(
+            console=console,
+            options=options,
+            places=_ALL,
+            cells=cells,
+            wrapping=None,
+        )
+
+        bar = cells[_BAR_AT]
+
+        over = (
+            _wanted(
+                console=console,
+                options=options,
+                renderable=whole,
+            )
+            - options.max_width
+        )
+
+        drawn = isinstance(
+            bar,
+            ProgressBar,
+        )
+
+        if over > 0 and drawn and bar.width is not None:
+            room = bar.width - over
+
+            if room >= _BAR_LEAST:
+                narrowed = copy(
+                    x=bar,
+                )
+
+                narrowed.width = room
+
+                cells[_BAR_AT] = narrowed
+
+            else:
+                cells[_BAR_AT] = Text(
+                    text="",
+                )
+
+            whole = self._table(
+                console=console,
+                options=options,
+                places=_ALL,
+                cells=cells,
+                wrapping=None,
+            )
+
+        fit = _wanted(
+            console=console,
+            options=options,
+            renderable=whole,
+        )
+
+        if fit <= options.max_width:
+            yield whole
+
+            return
+
+        # NOTE:
+        # The second row stands under the description: a blank the width of the spinner, and a gap.
+        indent = _wanted(
+            console=console,
+            options=options,
+            renderable=cells[_SPINNER_AT],
+        )
+
+        yield self._table(
+            console=console,
+            options=options,
+            places=_ABOVE,
+            cells=(
+                cells[_SPINNER_AT],
+                cells[_DESCRIPTION_AT],
+            ),
+            wrapping=_DESCRIPTION_AT,
+        )
+
+        blank = Text(
+            text=" " * indent,
+        )
+
+        beside = self._table(
+            console=console,
+            options=options,
+            places=_BELOW,
+            cells=(
+                blank,
+                cells[_COUNT_AT],
+                cells[_ELAPSED_AT],
+            ),
+            wrapping=None,
+        )
+
+        side_by_side = _wanted(
+            console=console,
+            options=options,
+            renderable=beside,
+        )
+
+        if side_by_side <= options.max_width:
+            yield beside
+
+            return
+
+        yield self._table(
+            console=console,
+            options=options,
+            places=_COUNT_ROW,
+            cells=(
+                blank,
+                cells[_COUNT_AT],
+            ),
+            wrapping=_COUNT_AT,
+        )
+
+        yield self._table(
+            console=console,
+            options=options,
+            places=_ELAPSED_ROW,
+            cells=(
+                blank,
+                cells[_ELAPSED_AT],
+            ),
+            wrapping=_ELAPSED_AT,
+        )
+
+    def _table(
+        self,
+        *,
+        console: Console,
+        options: ConsoleOptions,
+        places: Sequence[int],
+        cells: Sequence[RenderableType],
+        wrapping: int | None,
+    ) -> Table:
+        # NOTE:
+        # Built as Rich builds the table of a progress, from the table column of each column, so a line that fits is
+        # drawn as Rich drew it.
+        #
+        # The one column in `wrapping` is the part that stands on a row of its own beside the spinner or the blank,
+        # and it may wrap where it is wider than that row; every other column keeps its width, so that nothing is
+        # cropped behind an ellipsis, which would hide figures.
+        columns: list[Column] = []
+
+        for place in places:
+            column = self._columns[place].get_table_column().copy()
+
+            if place == wrapping:
+                column.no_wrap = False
+
+                column.overflow = "fold"
+
+            columns.append(
+                column,
+            )
+
+        table = Table.grid(
+            *columns,
+            padding=(
+                0,
+                1,
+            ),
+            expand=self._expand,
+        )
+
+        table.add_row(
+            *cells,
+        )
+
+        return table
+
+
+def _unwrapped() -> Column:
+    return Column(
+        no_wrap=True,
+    )
+
+
+def _wanted(
+    *,
+    console: Console,
+    options: ConsoleOptions,
+    renderable: RenderableType,
+) -> int:
+    """
+    How many cells the renderable takes where nothing bounds it.
+    """
+
+    return Measurement.get(
+        console=console,
+        options=options.update_width(
+            width=_UNBOUNDED,
+        ),
+        renderable=renderable,
+    ).maximum
+
+
+@final
+class _Line(
+    Progress,
+):
+    """
+    Rich's progress, drawing each task's row as `_LineOfParts` fits it to the
+    terminal, for a line of exactly the five parts `TerminalProgress` gives
+    it.
+    """
+
+    @override
+    def get_renderables(
+        self,
+    ) -> Iterable[RenderableType]:
+        tasks = [task for task in self.tasks if task.visible]
+
+        if not tasks:
+            yield from super().get_renderables()
+
+            return
+
+        columns = [
+            column
+            for column in self.columns
+            if not isinstance(
+                column,
+                str,
+            )
+        ]
+
+        for task in tasks:
+            yield _LineOfParts(
+                columns=columns,
+                cells=[
+                    column(
+                        task=task,
+                    )
+                    for column in columns
+                ],
+                expand=self.expand,
+            )
+
+
+@final
 class TerminalProgress:
     """
     One line on standard error saying what a command is doing.
@@ -683,29 +1034,36 @@ class TerminalProgress:
         # hundredfold in length, as the level experiment's candidates do, so a count and the time spent are the only
         # figures always true there, while the dictionary stage keeps a pace the provider's budget and the cache set,
         # so its recent pace says when it may finish.
-        self._progress: Final = Progress(
+        self._progress: Final = _Line(
             SpinnerColumn(
                 spinner_name="line" if console.options.ascii_only else "dots",
                 style="progress.spinner" if hue else "none",
+                table_column=_unwrapped(),
             ),
             ClockColumn(
                 clock=clock,
                 draw=_description,
+                table_column=_unwrapped(),
             ),
             ClockColumn(
                 clock=clock,
                 draw=_bar if hue else _bare_bar,
+                table_column=_unwrapped(),
             ),
             ClockColumn(
                 clock=clock,
                 draw=_count_and_time,
+                table_column=_unwrapped(),
             ),
             (
-                TimeElapsedColumn()
+                TimeElapsedColumn(
+                    table_column=_unwrapped(),
+                )
                 if hue
                 else ClockColumn(
                     clock=clock,
                     draw=_bare_elapsed,
+                    table_column=_unwrapped(),
                 )
             ),
             console=console,

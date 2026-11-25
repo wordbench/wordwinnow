@@ -138,6 +138,9 @@ from wordwinnow.services.cli.operator import (
 from wordwinnow.services.cli.operator_canvas import (
     Canvas,
 )
+from wordwinnow.services.cli.operator_frame import (
+    loop_panel,
+)
 from wordwinnow.services.cli.operator_look import (
     WORDS,
 )
@@ -4150,13 +4153,17 @@ class TestACountThatFallsAfterTheServiceRestarts:
 
 
 @final
-class TestALineOfThreeRows:
-    def test_a_frame_with_a_line_of_three_rows_is_no_taller_than_the_terminal(
+class TestALineOfTwoRows:
+    def test_a_frame_with_a_line_of_two_rows_is_no_taller_than_the_terminal(
         self,
     ) -> None:
         # NOTE:
         # Under a worker's report of an analysis that has had no answer for half a minute, the learner's line says why
-        # in a column that wraps, and takes three rows at 80 columns where it takes two without.
+        # in its count, and takes two rows at 80 columns.
+        #
+        # It takes three or more only below 54 columns, where its count and the time spent do not fit side by side
+        # under the description, and the loop is drawn from 73, so no frame holding the loop stands under a line of
+        # three rows.
         (
             progress,
             _,
@@ -4220,7 +4227,7 @@ class TestALineOfThreeRows:
                 progress,
             )
             - panel_rows
-            == 3
+            == 2
         )
 
         assert (
@@ -6064,3 +6071,261 @@ class TestDrawingChangesNothingTheViewKeeps:
             compared += 1
 
         assert compared > 400
+
+
+def _ended(
+    *,
+    raising: bool,
+    done: int = 38,
+) -> str:
+    """
+    What a view on a terminal of 110 by 40 writes from its start to its end,
+    after a story's stage and the completed count, when the command returns
+    or, with `raising`, ends by an exception.
+    """
+
+    stream = StringIO()
+
+    try:
+        with OperatorProgress(
+            console=Console(
+                force_terminal=True,
+                force_interactive=True,
+                file=stream,
+                width=110,
+                height=40,
+            ),
+            refresh_per_second=0.01,
+            clock=FakeMonotonicClock(),
+            wall_clock=_WallClock(),
+        ) as progress:
+            _watched(
+                progress,
+                _CLOSED,
+            )
+
+            progress.processing(
+                progress=_stored(
+                    steps=40,
+                    done=done,
+                    waiting=40 - done,
+                    next_in=3.0,
+                ),
+            )
+
+            progress.completed()
+
+            if raising:
+                raise _InterruptedError
+    except _InterruptedError:
+        pass
+
+    return stream.getvalue()
+
+
+class _InterruptedError(
+    Exception,
+):
+    """
+    The end a command meets other than by returning.
+    """
+
+
+# NOTE:
+# What erases the rows a display drew: the cursor moved up a row, and the row cleared.
+_ERASE: Final = "\x1b[1A\x1b[2K"
+
+
+@final
+class TestTheLastDrawingStays:
+    @mark.parametrize(
+        argnames="done",
+        argvalues=(
+            38,
+            39,
+        ),
+    )
+    def test_a_command_that_returns_leaves_the_panel_with_the_completed_count_and_no_line_above_it(
+        self,
+        *,
+        done: int,
+    ) -> None:
+        # NOTE:
+        # The stored report a word short of the count is what the distributed mode ends with, so the line's last
+        # report, which the line never learns the completion of, must not stand above a panel that says resolved.
+        written = _ended(
+            raising=False,
+            done=done,
+        )
+
+        final = _drawn_text(
+            written[
+                written.rindex(
+                    "\x1b[2K",
+                ) :
+            ],
+        )
+
+        assert final.startswith(
+            "╭",
+        ), final
+
+        assert "resolved 40 of 40" in final
+
+        assert final.rstrip().endswith(
+            "╯",
+        )
+
+        assert "looking the words up" not in final
+
+        assert f"{done} of 40" not in final
+
+        assert (
+            _ERASE
+            not in written[
+                written.rindex(
+                    "╭",
+                ) :
+            ]
+        )
+
+    def test_a_command_that_ends_by_an_exception_erases_the_drawing(
+        self,
+    ) -> None:
+        written = _ended(
+            raising=True,
+        )
+
+        last = written[
+            written.rindex(
+                "╭",
+            ) :
+        ]
+
+        assert "resolved 40 of 40" in _drawn_text(
+            last,
+        )
+
+        assert written.endswith(
+            _ERASE,
+        )
+
+
+@final
+class TestTheLastPanelTakesTheRowsTheLineGaveUp:
+    def test_in_a_terminal_that_folds_the_panel_it_is_drawn_for_the_rows_with_no_line(
+        self,
+    ) -> None:
+        stream = StringIO()
+
+        clock = FakeMonotonicClock()
+
+        with OperatorProgress(
+            console=Console(
+                force_terminal=True,
+                force_interactive=True,
+                file=stream,
+                width=110,
+                height=14,
+            ),
+            refresh_per_second=0.01,
+            clock=clock,
+            wall_clock=_WallClock(),
+        ) as progress:
+            _watched(
+                progress,
+                replace(
+                    _CLOSED,
+                    lookups=tuple(
+                        _asking(
+                            f"foo{number}",
+                            1.0 + number,
+                        )
+                        for number in range(
+                            12,
+                        )
+                    ),
+                ),
+            )
+
+            progress.processing(
+                progress=_stored(
+                    steps=40,
+                    done=39,
+                    waiting=1,
+                    next_in=3.0,
+                ),
+            )
+
+            progress.completed()
+
+            seen = progress._keeper.seen
+
+        assert seen is not None
+
+        written = stream.getvalue()
+
+        final = _drawn_text(
+            written[
+                written.rindex(
+                    "\x1b[2K",
+                ) :
+            ],
+        )
+
+        console = Console(
+            force_terminal=False,
+            file=StringIO(),
+            width=110,
+            height=14,
+        )
+
+        expected = len(
+            console.render_lines(
+                renderable=loop_panel(
+                    seen=seen,
+                    now=clock(),
+                    columns=110,
+                    rows=14,
+                    line_rows=0,
+                    ascii_only=False,
+                ),
+                options=console.options,
+                pad=False,
+            ),
+        )
+
+        with_line = len(
+            console.render_lines(
+                renderable=loop_panel(
+                    seen=seen,
+                    now=clock(),
+                    columns=110,
+                    rows=14,
+                    line_rows=2,
+                    ascii_only=False,
+                ),
+                options=console.options,
+                pad=False,
+            ),
+        )
+
+        assert expected > with_line
+
+        assert (
+            len(
+                final.splitlines(),
+            )
+            == expected
+        ), final
+
+
+def _drawn_text(
+    written: str,
+    /,
+) -> str:
+    return sub(
+        pattern=r"\x1b\[[0-9;?]*[A-Za-z]",
+        repl="",
+        string=written,
+    )
