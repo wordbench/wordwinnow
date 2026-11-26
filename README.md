@@ -99,13 +99,17 @@ user: its services listen on that host alone, and reaching them from another
 machine is not supported.
 
 While it works, `analyze` says on standard error what it is doing, and
-`--view operator` adds under that line what the dictionary is doing: whether the
-provider is answering, rate-limited, or failing, and why, the last minute of
-the client's requests, and the lookups in flight; [the operating guide](https://github.com/wordbench/wordwinnow/blob/v2.3.0/docs/operating.md#the-operator-view) names
-every row.
+`--view operator` draws under that line the dictionary client as one loop: a
+title that says how the provider has been answering, such as rate-limited or
+failing, the breaker, the bucket that paces the requests, the provider, up to
+eight words at the client on rows of their own, the last minute of the
+client's requests, and a sentence that says why; [the operating guide](https://github.com/wordbench/wordwinnow/blob/v2.3.0/docs/operating.md#the-operator-view) names
+every part.
 
-After the report, `--view operator` prints the analysis's figures too, on
-standard error.
+When the command returns, the panel stays above the report, settled: it keeps
+the client's state, the last minute, the sentence, and the tally of the words
+that have their answer, and leaves out the words' rows; after the report,
+`--view operator` prints the analysis's figures too, on standard error.
 
 ![The operator's view of failures, a request limit, an outage, and a recovery](docs/images/operator.gif)
 

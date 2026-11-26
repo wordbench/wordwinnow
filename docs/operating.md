@@ -672,13 +672,14 @@ Compose stack publishes.
 There the title, the switch, the bucket, the words at the client, the last
 minute, the sentence under it, and `next` show the enrichment service, for every
 analysis it serves, so a second analysis running beside this one shows in
-them.
+them, but the last minute's `W` cells are this analysis's.
 
 What the panel counts for this analysis alone comes from the progress the
-worker stores, about once a second: `to ask` counts this analysis's words not
-yet answered and not waiting to ask again, its words at the service included,
-and `to ask again`, the notice of words let go, and `resolved N of M` are this
-analysis's as well.
+worker stores, about once a second: `to ask` counts this analysis's words that
+are not yet answered and that the worker does not count as waiting, its words
+at the service among them, `to ask again` the words the worker counts as
+waiting, which can include words back at the service, and the notice of words
+let go and `resolved N of M` are this analysis's as well.
 
 The service's own counts of how lookups were answered are for every analysis
 it serves, so the distributed mode does not draw them: its last row is
@@ -687,6 +688,17 @@ it serves, so the distributed mode does not draw them: its last row is
 The activity names the words at the client, as each lookup a worker sends
 does, and like every port the stack publishes, the enrichment service's
 listens on 127.0.0.1 alone.
+
+So the distributed panel differs from the local one in four ways:
+
+- the title, the switch, the bucket, the words at the client, the last minute,
+  the sentence, `next`, and the row that counts the rest show the service, for
+  every analysis it serves, but the last minute's `W` cells are this analysis's;
+- `to ask` and `to ask again` come from the progress the worker stores, about once
+  a second, and `to ask again` can include words back at the service;
+- the tally is `resolved N of M` alone;
+- a word that leaves unanswered ends as `ended`, and no row says `turned away`,
+  `let go`, or `again`.
 
 When the command returns, the view leaves the panel settled on standard error
 above the report, with the client's state, the last minute, the sentence, and
@@ -734,6 +746,10 @@ switch.
 | `half-open` | The wait is over, and the next word asked is the trial, whose answer decides |
 | `open` | The client sends nothing for about ten seconds, or for as long as the provider asked, and then tries one word |
 
+An open breaker turns new requests away and lets the ones already out run to
+their end: one that comes back found or not found resolves its word, and only
+the trial's answer closes the breaker.
+
 Before the first read, and when the dictionary cannot be read, the panel is
 the title `dictionary` alone, dim, over what it is waiting for or the reason.
 
@@ -748,8 +764,8 @@ shape, or a place, and no hue is drawn on bold text.
 
 | Part | What it says |
 | --- | --- |
-| `to ask` | The words not yet asked: the stage's words, less those that have their answer, those to ask again, and those at the client, so that a held word that has woken and is at the client again is counted once, among those at the client |
-| `to ask again` | The words the analysis holds, which the dictionary turned away with a time to ask again, less those at the client again; at the right, `next in 8 s` when the first asks again, or `as places free` once none sleeps |
+| `to ask` | The words not yet asked: the stage's words, less those that have their answer, those to ask again, and those at the client, so that a held word that has woken and is at the client again is counted once, among those at the client, or, in the distributed mode, the stage's words less those that have their answer and those the worker counts as waiting, its words at the service among them |
+| `to ask again` | The words the analysis holds, which the dictionary turned away with a time to ask again, less those at the client again, or, in the distributed mode, the words the worker counts as waiting, which can include words back at the service; at the right, `next in 8 s` when the first asks again, or `as places free` once none sleeps |
 | `in line` | In a terminal too short for a row to each word, the words at the client that wait for a token, in the order the bucket serves them, in one row: how many, the first nearest the bucket, then the first names and how many more |
 | `behind the trial` | The words that wait for the trial's answer: beside the topmost of their rows, and in a terminal too short for a row to each word, in one row of their own with how many and the first names |
 | `2nd try` | A word asking again after a failure, and then `3rd try`: its row says `0.5 s, 2nd try` while the request asks, and `2nd try in 0.1 s` while the word waits to ask it |
@@ -776,6 +792,15 @@ it.
 
 Half-open, the same place says `trial 2 decides` while the trial is out and
 `trial 2 is next` before a word asks.
+
+A trial whose whole course, from the end of the breaker's wait to its failure,
+falls between two of the view's reads, which come four times a second, decides
+as any trial does, but is never drawn while it runs: no `on trial`, no magenta
+switch, and no row of its own.
+
+The next read shows its outcome: the sentence says that the breaker opened
+again after it, the switch names the next trial, and the lane places its
+failure in the second it came back.
 
 The bucket holds four tokens: a `●` for each whole one, then, while it is
 refilling, a single `○` for the token that is forming, and `·` for the rest.
@@ -828,8 +853,13 @@ breaker is open for longer than its own wait, as long as the provider asked.
 The last row is the tally,
 `resolved 54 of 116:  17 cache  ✓ 33 found  2 not found  W 2 let go`.
 
-Its parts count from the first read and never fall below nought, and they can
-lead the number before them by the words the progress has not yet counted.
+Its parts, which the local mode alone draws, count from the first read and
+never fall below nought.
+
+The number before them grows as each word has its answer, and `let go` with it,
+while `cache`, `found`, and `not found` change only when the view reads the
+dictionary, so they can trail the number by the words answered since the last
+read.
 
 ### A row for each word
 

@@ -230,15 +230,18 @@ once the worker is back, `show` finds the analysis looking its words up, and
 
 ![A request that waits for a worker, outlives its command, then is followed](images/distributed-queue.gif)
 
-`--view operator` shows, under the progress line, what the enrichment service's
-dictionary is doing meanwhile: whether the provider is answering,
-rate-limited, or failing, the last minute of the client's requests, and the
-lookups in flight, and after the report it prints the analysis's figures, on
-standard error as well.
+`--view operator` draws, under the progress line, what the enrichment service's
+dictionary client is doing meanwhile: the breaker, the bucket, the words at
+the client, the last minute of the client's requests, and how the provider has
+been answering, such as rate-limited or failing, and why; when the command
+returns, the panel stays above the report, settled, and after the report the
+command prints the analysis's figures, on standard error as well.
 
-Its counts are of lookups, not words: a word the dictionary turns away and
-asks again counts each time, so `turned away` can pass the number of words;
-[the operating guide](https://github.com/wordbench/wordwinnow/blob/v2.3.0/docs/operating.md#the-terms-and-what-each-row-counts) says what each row counts.
+That panel differs from the local mode's, because the service looks words up
+for every analysis it serves: what it draws of the client can come from other
+analyses too, while `to ask`, `to ask again`, and `resolved N of M` are this
+analysis's, from the progress its worker stores, and the tally is that count
+alone; [the operating guide](https://github.com/wordbench/wordwinnow/blob/v2.3.0/docs/operating.md#the-operator-view) says what each part shows in either mode.
 
 `WORDWINNOW_DICTIONARY=wordnet` in `.env` before `make up-full` answers from WordNet
 instead, and the same analysis then took about five seconds, observed once on
