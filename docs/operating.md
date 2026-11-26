@@ -618,6 +618,15 @@ that pace them, and the provider answers them.
 Everything else in the panel is a word waiting somewhere along that wire, or a
 count of how the words ended.
 
+The recording below, which the README shows too, follows one analysis in the
+local mode against a stand-in for the provider that fails, refuses, and holds
+requests on cue, through retries, a word let go, an outage in which a request
+already out is answered while the breaker is open, two trials, a 429, and
+eight requests that hang, to the panel left settled above the report; the
+distributed mode's panel differs, as this section says.
+
+![The operator's view of retries, a word let go, an outage, a recovery, a 429](images/operator.gif)
+
 Here is a frame, drawn while the provider fails three or four requests in a
 row:
 

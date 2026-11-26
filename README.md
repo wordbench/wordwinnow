@@ -111,13 +111,15 @@ the client's state, the last minute, the sentence, and the tally of the words
 that have their answer, and leaves out the words' rows; after the report,
 `--view operator` prints the analysis's figures too, on standard error.
 
-![The operator's view of failures, a request limit, an outage, and a recovery](docs/images/operator.gif)
+![The operator's view of retries, a word let go, an outage, a recovery, a 429](docs/images/operator.gif)
 
-The recording runs the distributed mode, the installed command sending every
-analysis with `--remote`, and asks a stand-in for the dictionary provider,
-which, when it is told to, fails requests, refuses those over a limit of its
-own, stops answering, and answers again, so that the failures, the limit, the
-outage, and the recovery come on cue.
+The recording follows one analysis in the local mode, of three lines of the
+story, against a stand-in for the dictionary provider that fails, refuses, and
+holds requests on cue: retries that end in an answer, a word that fails all
+three tries and is let go to WordNet's meaning, an outage in which a request
+already out is answered while the breaker stays open, a failed trial and an
+answered one, one 429, and eight requests that hang and are then answered
+slowly, until the panel stays, settled, above the report.
 
 Every meaning and related word the two recordings show is WordNet's, the
 stand-in's definitions included, under Princeton University's WordNet 3.0
