@@ -12,10 +12,10 @@ NLTK data, and the reference lists.
 ## Installing it
 
 ```sh
-uv tool install --python 3.14 https://github.com/wordbench/wordwinnow/releases/download/v2.3.0/wordwinnow-2.3.0-py3-none-any.whl
+uv tool install --python 3.14 https://github.com/wordbench/wordwinnow/releases/download/v2.4.0/wordwinnow-2.4.0-py3-none-any.whl
 ```
 
-That installs the `wordwinnow` command from the wheel attached to the 2.3.0
+That installs the `wordwinnow` command from the wheel attached to the 2.4.0
 release, in an environment of its own, with the packages it needs.
 
 `--python 3.14` names the Python version Wordwinnow is tested on, which uv
@@ -46,7 +46,7 @@ cache live in your user directories, not in the directory you run a command
 from: `~/Library/Application Support/wordwinnow` and `~/Library/Caches/wordwinnow`
 on macOS, `~/.local/share/wordwinnow` and `~/.cache/wordwinnow` on Linux, or
 `$XDG_DATA_HOME/wordwinnow` and `$XDG_CACHE_HOME/wordwinnow` on either system when
-those variables are set; [the configuration](https://github.com/wordbench/wordwinnow/blob/v2.3.0/docs/operating.md#configuration) can move each of them.
+those variables are set; [the configuration](https://github.com/wordbench/wordwinnow/blob/v2.4.0/docs/operating.md#configuration) can move each of them.
 
 `setup`, `analyze`, `show`, `list`, and `doctor` write nothing in the directory you run
 them from, except a file you name, such as `--csv`'s.
@@ -66,7 +66,7 @@ in place of a URL, then sets it up.
 ## The first analysis
 
 ```sh
-curl -sSfL https://raw.githubusercontent.com/wordbench/wordwinnow/v2.3.0/data/corpus/a-scandal-in-bohemia.txt | wordwinnow analyze - --level A2 --target B1 --no-dictionary
+curl -sSfL https://raw.githubusercontent.com/wordbench/wordwinnow/v2.4.0/data/corpus/a-scandal-in-bohemia.txt | wordwinnow analyze - --level A2 --target B1 --no-dictionary
 ```
 
 The `-` makes `analyze` read the text from standard input, which here is the story
@@ -76,7 +76,7 @@ Standard input is read as plain text, or as subtitles when it holds SRT or
 WebVTT cues; a whole web page, piped in or given as a file, is refused in one
 line, because its markup, menus, and links would fill the list with words the
 article does not use; extract the article's text first, as
-[the operating guide](https://github.com/wordbench/wordwinnow/blob/v2.3.0/docs/operating.md#the-learners-commands) shows.
+[the operating guide](https://github.com/wordbench/wordwinnow/blob/v2.4.0/docs/operating.md#the-learners-commands) shows.
 
 The report names the text and the learner, counts the words to study, and
 lists them in study order, FOCUS first, up to 40 rows by default, each with
@@ -131,7 +131,7 @@ nobody can read the analysis after a day, because the text is theirs.
 With a developer key in `WORDWINNOW_NYT_API_KEY`, the API sources appear as
 well; `wordwinnow doctor` lists the sources the configuration enables,
 `wordwinnow analyze --help` lists what each source expects as a topic, and
-[`operating.md`](https://github.com/wordbench/wordwinnow/blob/v2.3.0/docs/operating.md) says where to keep the key, with or without direnv.
+[`operating.md`](https://github.com/wordbench/wordwinnow/blob/v2.4.0/docs/operating.md) says where to keep the key, with or without direnv.
 
 ## Removing it
 
@@ -184,7 +184,7 @@ The environment I develop Wordwinnow in, these tools included, is set up by my
 
 The distributed mode runs from the clone, on one host, for that host's own
 user, and its services listen on that host alone; the Security section of
-[the operating guide](https://github.com/wordbench/wordwinnow/blob/v2.3.0/docs/operating.md#security) says what that boundary covers.
+[the operating guide](https://github.com/wordbench/wordwinnow/blob/v2.4.0/docs/operating.md#security) says what that boundary covers.
 
 ```sh
 make up-full
@@ -241,7 +241,7 @@ That panel differs from the local mode's, because the service looks words up
 for every analysis it serves: what it draws of the client can come from other
 analyses too, while `to ask`, `to ask again`, and `resolved N of M` are this
 analysis's, from the progress its worker stores, and the tally is that count
-alone; [the operating guide](https://github.com/wordbench/wordwinnow/blob/v2.3.0/docs/operating.md#the-operator-view) says what each part shows in either mode.
+alone; [the operating guide](https://github.com/wordbench/wordwinnow/blob/v2.4.0/docs/operating.md#the-operator-view) says what each part shows in either mode.
 
 `WORDWINNOW_DICTIONARY=wordnet` in `.env` before `make up-full` answers from WordNet
 instead, and the same analysis then took about five seconds, observed once on
@@ -280,11 +280,11 @@ the `commit-msg` hook checks each message, and the `pre-push` hook runs
 
 ## Where to go next
 
-[`product.md`](https://github.com/wordbench/wordwinnow/blob/v2.3.0/docs/product.md) says what the tool is for and what it will not do.
+[`product.md`](https://github.com/wordbench/wordwinnow/blob/v2.4.0/docs/product.md) says what the tool is for and what it will not do.
 
-[`operating.md`](https://github.com/wordbench/wordwinnow/blob/v2.3.0/docs/operating.md) covers every command, the configuration, and recovery.
+[`operating.md`](https://github.com/wordbench/wordwinnow/blob/v2.4.0/docs/operating.md) covers every command, the configuration, and recovery.
 
-[`domain.md`](https://github.com/wordbench/wordwinnow/blob/v2.3.0/docs/domain.md) defines the terms and says how a word gets its level.
+[`domain.md`](https://github.com/wordbench/wordwinnow/blob/v2.4.0/docs/domain.md) defines the terms and says how a word gets its level.
 
 If a command fails, `wordwinnow doctor` says what is present and what is
 missing; [an issue](https://github.com/wordbench/wordwinnow/issues) with its output, the command, and your system is the way to
